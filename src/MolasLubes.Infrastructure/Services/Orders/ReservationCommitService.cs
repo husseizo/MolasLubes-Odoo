@@ -25,7 +25,8 @@ public class ReservationCommitService
 
     public async Task<(int DocEntry, int DocNum)> CommitAsync(
      string customerCode,
-     IEnumerable<long> reservationIds)
+     IEnumerable<long> reservationIds,
+     string? externalOrderId = null)
     {
         using var tx = await _db.Database.BeginTransactionAsync();
 
@@ -39,10 +40,26 @@ public class ReservationCommitService
         if (reservations.Any(r => r.IsCommitted || r.ReleasedAt != null))
             throw new InvalidOperationException("One or more reservations already used");
 
-        // 🔹 Determine ExternalOrderId (if exists)
-        string? externalOrderId = reservations
+        // 🔹 Determine ExternalOrderId:
+        //    Priority 1 – explicit caller-provided value (e.g. from Odoo SO ID on the request)
+        //    Priority 2 – value already stored on the reservations
+        if (string.IsNullOrWhiteSpace(externalOrderId))
+        {
+            externalOrderId = reservations
+                .Select(r => r.OdooSalesOrderId)
+                .FirstOrDefault(x => !string.IsNullOrWhiteSpace(x));
+        }
+
+        var distinctOdooIds = reservations
             .Select(r => r.OdooSalesOrderId)
-            .FirstOrDefault(x => !string.IsNullOrWhiteSpace(x));
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct()
+            .ToList();
+
+        if (distinctOdooIds.Count > 1)
+            throw new InvalidOperationException(
+                $"Reservations belong to multiple Odoo Sales Orders: {string.Join(", ", distinctOdooIds)}. " +
+                "Commit one Odoo order at a time.");
 
         _logger.LogInformation(
             "Committing reservations → Creating SO | Customer={Customer} | ExternalOrderId={ExternalId}",

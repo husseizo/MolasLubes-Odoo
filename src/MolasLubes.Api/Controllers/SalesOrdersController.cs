@@ -67,7 +67,8 @@ public class SalesOrdersController : ControllerBase
         // 2️⃣ COMMIT RESERVATIONS → SAP
         var result = await commitSvc.CommitAsync(
             dto.CustomerCode,
-            reservationIds);
+            reservationIds,
+            dto.ExternalOrderId);
 
         return Ok(new
         {
@@ -88,7 +89,8 @@ public class SalesOrdersController : ControllerBase
 
         var result = await commitSvc.CommitAsync(
             req.CardCode,
-            req.ReservationIds);
+            req.ReservationIds,
+            req.ExternalOrderId);
 
         return Ok(new
         {
