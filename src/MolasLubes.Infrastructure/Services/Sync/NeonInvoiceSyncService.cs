@@ -48,7 +48,7 @@ public class NeonInvoiceSyncService
                 lastSync = DateTime.MinValue;
 
             // -------------------------------------------------
-            // 2️⃣ READ FROM CACHE
+            // 2️⃣ READ FROM CACHE (HEADERS)
             // -------------------------------------------------
             var invoices = await _cacheDb.CacheInvoices
                 .AsNoTracking()
@@ -84,7 +84,7 @@ public class NeonInvoiceSyncService
             }
 
             // -------------------------------------------------
-            // 3️⃣ UPSERT
+            // 3️⃣ UPSERT HEADERS
             // -------------------------------------------------
             var keys = invoices
                 .Select(i => i.SapDocEntry)
@@ -120,12 +120,41 @@ public class NeonInvoiceSyncService
                 }
             }
 
+            // -------------------------------------------------
+            // 4️⃣ SYNC LINES (INV1)
+            // -------------------------------------------------
+            var cacheLines = await _cacheDb.CacheInvoiceLines
+                .AsNoTracking()
+                .Where(l => keys.Contains(l.SapDocEntry))
+                .Select(l => new NeonInvoiceLine
+                {
+                    InvoiceEntry = l.SapDocEntry,
+                    ItemCode = l.ItemCode,
+                    Quantity = l.Quantity,
+                    LineTotal = l.LineTotal,
+                    BaseEntry = l.BaseEntry,
+                    BaseLine = l.BaseLine,
+                    OdooInvoiceLineId = l.OdooInvoiceLineId
+                })
+                .ToListAsync();
+
+            // DELETE existing lines for affected invoices
+            var existingLines = await _neonDb.InvoiceLines
+                .Where(l => keys.Contains(l.InvoiceEntry))
+                .ToListAsync();
+
+            _neonDb.InvoiceLines.RemoveRange(existingLines);
+
+            // INSERT new lines
+            _neonDb.InvoiceLines.AddRange(cacheLines);
+
             await _neonDb.SaveChangesAsync();
             await tx.CommitAsync();
 
             _logger.LogInformation(
-                "✅ Neon INVOICE DELTA sync completed | Count={Count}",
-                invoices.Count);
+                "✅ Neon INVOICE DELTA sync completed | Headers={Count} Lines={Lines}",
+                invoices.Count,
+                cacheLines.Count);
         });
     }
 }

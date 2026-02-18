@@ -19,6 +19,7 @@ public class MolasCacheDbContext : DbContext
     public DbSet<CacheSalesOrder> CacheSalesOrders => Set<CacheSalesOrder>();
     public DbSet<CacheSalesOrderLine> CacheSalesOrderLines => Set<CacheSalesOrderLine>();
     public DbSet<CacheInvoice> CacheInvoices => Set<CacheInvoice>();
+    public DbSet<CacheInvoiceLine> CacheInvoiceLines => Set<CacheInvoiceLine>();
     public DbSet<CachePayment> CachePayment => Set<CachePayment>(); // 🔴 singular by design
     public DbSet<CacheStockReservation> CacheStockReservations => Set<CacheStockReservation>();
 
@@ -202,6 +203,36 @@ public class MolasCacheDbContext : DbContext
 
             entity.HasIndex(x => x.OdooInvoiceId);
             entity.HasIndex(x => x.OdooStatus);
+        });
+
+        // =====================================================
+        // INVOICE LINES (FK → INVOICES)
+        // =====================================================
+        modelBuilder.Entity<CacheInvoiceLine>(entity =>
+        {
+            entity.ToTable("CacheInvoiceLines");
+
+            entity.HasKey(x => x.Id);
+
+            entity.Property(x => x.Quantity)
+                  .HasPrecision(18, 4);
+
+            entity.Property(x => x.LineTotal)
+                  .HasPrecision(18, 2);
+
+            entity.Property(x => x.ItemCode)
+                  .HasMaxLength(50);
+
+            entity.Property(x => x.OdooInvoiceLineId)
+                  .HasMaxLength(20);
+
+            entity.HasIndex(x => x.OdooInvoiceLineId);
+
+            // 🔗 FK → CacheInvoices.SapDocEntry
+            entity.HasOne(x => x.Invoice)
+                  .WithMany(x => x.Lines)
+                  .HasForeignKey(x => x.SapDocEntry)
+                  .OnDelete(DeleteBehavior.Cascade);
         });
 
         // =====================================================

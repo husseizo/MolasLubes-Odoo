@@ -1,6 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
 using Microsoft.EntityFrameworkCore;
-using MolasLubes.Domain.Entities.Cache; // ✅ FIX HII
+using MolasLubes.Domain.Entities.Cache;
 using MolasLubes.Infrastructure.Integrations.SapB1.DiApi.SapDtos;
 using MolasLubes.Infrastructure.Persistence;
 
@@ -24,13 +24,34 @@ public class InvoiceCacheService
 
     public async Task CacheInvoicesAsync(IEnumerable<SapInvoiceDto> invoices)
     {
-        foreach (var inv in invoices)
-        {
-            var exists = await _db.CacheInvoices.FindAsync(inv.DocEntry);
-            if (exists != null)
-                continue;
+        var list = invoices.ToList();
 
-            _db.CacheInvoices.Add(new CacheInvoice
+        foreach (var inv in list)
+        {
+            var exists = await _db.CacheInvoices
+                .Include(x => x.Lines)
+                .FirstOrDefaultAsync(x => x.SapDocEntry == inv.DocEntry);
+
+            if (exists != null)
+            {
+                // 🔁 Replace lines on update
+                _db.CacheInvoiceLines.RemoveRange(exists.Lines);
+
+                exists.Lines = inv.Lines.Select(l => new CacheInvoiceLine
+                {
+                    SapDocEntry = inv.DocEntry,
+                    ItemCode = l.ItemCode,
+                    Quantity = l.Quantity,
+                    LineTotal = l.LineTotal,
+                    BaseEntry = l.BaseEntry,
+                    BaseLine = l.BaseLine,
+                    OdooInvoiceLineId = l.OdooInvoiceLineId
+                }).ToList();
+
+                continue;
+            }
+
+            var header = new CacheInvoice
             {
                 SapDocEntry = inv.DocEntry,
                 SapDocNum = inv.DocNum,
@@ -38,7 +59,24 @@ public class InvoiceCacheService
                 DocDate = inv.DocDate,
                 DocTotal = inv.DocTotal,
                 VatSum = inv.VatSum
-            });
+            };
+
+            // 📦 LINES (INV1)
+            foreach (var line in inv.Lines)
+            {
+                header.Lines.Add(new CacheInvoiceLine
+                {
+                    SapDocEntry = inv.DocEntry,
+                    ItemCode = line.ItemCode,
+                    Quantity = line.Quantity,
+                    LineTotal = line.LineTotal,
+                    BaseEntry = line.BaseEntry,
+                    BaseLine = line.BaseLine,
+                    OdooInvoiceLineId = line.OdooInvoiceLineId
+                });
+            }
+
+            _db.CacheInvoices.Add(header);
 
             // 🔁 CLOSE RELATED SALES ORDERS
             foreach (var line in inv.Lines)
@@ -54,7 +92,7 @@ public class InvoiceCacheService
 
         _logger.LogInformation(
             "🧾 Invoice cache updated | Count={Count}",
-            invoices.Count());
+            list.Count);
     }
 
 

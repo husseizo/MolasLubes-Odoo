@@ -38,4 +38,10 @@ public class CacheInvoice
 
 
     public DateTime CachedAt { get; set; } = DateTime.UtcNow;
+
+    // =========================
+    // NAVIGATION
+    // =========================
+    public ICollection<CacheInvoiceLine> Lines { get; set; }
+        = new List<CacheInvoiceLine>();
 }
