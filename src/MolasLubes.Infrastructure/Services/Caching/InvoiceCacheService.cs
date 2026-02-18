@@ -41,11 +41,17 @@ public class InvoiceCacheService
                 {
                     SapDocEntry = inv.DocEntry,
                     ItemCode = l.ItemCode,
+                    Description = l.Description,
                     Quantity = l.Quantity,
                     LineTotal = l.LineTotal,
+                    GrossBuyPr = l.GrossBuyPr,
                     BaseEntry = l.BaseEntry,
                     BaseLine = l.BaseLine,
-                    OdooInvoiceLineId = l.OdooInvoiceLineId
+                    OdooInvoiceLineId = l.OdooInvoiceLineId,
+                    OdooStatus = l.OdooStatus,
+                    OdooSyncDir = l.OdooSyncDir,
+                    OdooErrorMsg = l.OdooErrorMsg,
+                    OdooLastSync = l.OdooLastSync
                 }).ToList();
 
                 continue;
@@ -68,11 +74,17 @@ public class InvoiceCacheService
                 {
                     SapDocEntry = inv.DocEntry,
                     ItemCode = line.ItemCode,
+                    Description = line.Description,
                     Quantity = line.Quantity,
                     LineTotal = line.LineTotal,
+                    GrossBuyPr = line.GrossBuyPr,
                     BaseEntry = line.BaseEntry,
                     BaseLine = line.BaseLine,
-                    OdooInvoiceLineId = line.OdooInvoiceLineId
+                    OdooInvoiceLineId = line.OdooInvoiceLineId,
+                    OdooStatus = line.OdooStatus,
+                    OdooSyncDir = line.OdooSyncDir,
+                    OdooErrorMsg = line.OdooErrorMsg,
+                    OdooLastSync = line.OdooLastSync
                 });
             }
 

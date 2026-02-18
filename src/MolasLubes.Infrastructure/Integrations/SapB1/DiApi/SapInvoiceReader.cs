@@ -86,14 +86,29 @@ ORDER BY DocEntry
                 dto.Lines.Add(new SapInvoiceLineDto
                 {
                     ItemCode = invoices.Lines.ItemCode,
+                    Description = invoices.Lines.ItemDescription,
                     Quantity = (decimal)invoices.Lines.Quantity,
                     LineTotal = (decimal)invoices.Lines.LineTotal,
+                    GrossBuyPr = (decimal)invoices.Lines.GrossBuyPrice,
                     BaseEntry = invoices.Lines.BaseEntry,
                     BaseLine = invoices.Lines.BaseLine,
 
-                    // 🔗 ODOO LINE UDF
+                    // 🔗 ODOO LINE UDFs
                     OdooInvoiceLineId = invoices.Lines.UserFields.Fields
-                        .Item("U_Odoo_InvLine_ID").Value?.ToString()
+                        .Item(OdooUdfs.InvoiceLineId).Value?.ToString(),
+
+                    OdooStatus = invoices.Lines.UserFields.Fields
+                        .Item(OdooUdfs.Status).Value?.ToString(),
+
+                    OdooSyncDir = invoices.Lines.UserFields.Fields
+                        .Item(OdooUdfs.SyncDir).Value?.ToString(),
+
+                    OdooErrorMsg = invoices.Lines.UserFields.Fields
+                        .Item(OdooUdfs.ErrorMsg).Value?.ToString(),
+
+                    OdooLastSync = TryGetDate(
+                        invoices.Lines.UserFields.Fields
+                            .Item(OdooUdfs.LastSync).Value)
                 });
             }
 
