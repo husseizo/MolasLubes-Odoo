@@ -2,6 +2,7 @@
 using Microsoft.Extensions.Logging;
 using MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 using MolasLubes.Infrastructure.Services.Caching;
+using MolasLubes.Infrastructure.Services.Sync;
 using Quartz;
 
 [DisallowConcurrentExecution]
@@ -20,12 +21,13 @@ public class InvoiceSyncJob : IJob
 
     public async Task Execute(IJobExecutionContext context)
     {
-        _logger.LogInformation("🧾 Invoice Sync started");
+        _logger.LogInformation("🧾 Invoice Sync started (OINV + INV1)");
 
         using var scope = _scopeFactory.CreateScope();
 
         var reader = scope.ServiceProvider.GetRequiredService<SapInvoiceReader>();
         var cache = scope.ServiceProvider.GetRequiredService<InvoiceCacheService>();
+        var neonSync = scope.ServiceProvider.GetRequiredService<NeonInvoiceSyncService>();
 
         var hasAny = await cache.HasAnyInvoiceAsync();
 
@@ -33,11 +35,17 @@ public class InvoiceSyncJob : IJob
             ? reader.ReadInvoices(DateTime.UtcNow.AddDays(-2)).ToList()
             : reader.ReadAllInvoices().ToList();
 
-        _logger.LogInformation("🧾 Invoices read from SAP | Count={Count}", invoices.Count);
+        _logger.LogInformation(
+            "🧾 Invoices read from SAP | Headers={Count} Lines={Lines}",
+            invoices.Count,
+            invoices.Sum(i => i.Lines.Count));
 
         if (invoices.Count > 0)
             await cache.CacheInvoicesAsync(invoices);
 
-        _logger.LogInformation("✅ Invoice Sync completed");
+        // 🔄 Sync cached invoices + lines → Neon
+        await neonSync.SyncDeltaAsync();
+
+        _logger.LogInformation("✅ Invoice Sync completed (OINV + INV1)");
     }
 }

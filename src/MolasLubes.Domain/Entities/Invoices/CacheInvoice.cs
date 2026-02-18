@@ -1,5 +1,6 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
+using MolasLubes.Domain.Entities.Invoices;
 
 namespace MolasLubes.Domain.Entities.Cache;
 
@@ -38,4 +39,10 @@ public class CacheInvoice
 
 
     public DateTime CachedAt { get; set; } = DateTime.UtcNow;
+
+    // =========================
+    // NAVIGATION
+    // =========================
+    public ICollection<CacheInvoiceLine> Lines { get; set; }
+        = new List<CacheInvoiceLine>();
 }
