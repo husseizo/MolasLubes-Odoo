@@ -141,6 +141,8 @@ builder.Services.AddTransient<NeonProductDeltaSyncJob>();
 builder.Services.AddTransient<NeonInvoiceSyncJob>();
 builder.Services.AddTransient<NeonPaymentSyncJob>();
 builder.Services.AddTransient<NeonDeliverySyncJob>();
+builder.Services.AddTransient<NeonSalesOrderSyncJob>();
+builder.Services.AddTransient<NeonSalesOrderLineSyncJob>();
 
 // =====================================================
 // QUARTZ CONFIGURATION
@@ -162,6 +164,8 @@ builder.Services.AddQuartz(q =>
             .ForJob(key)
             .WithIdentity($"{name}-trigger")
             .WithCronSchedule(cron));
+
+        
     }
 
     // =========================
@@ -171,6 +175,7 @@ builder.Services.AddQuartz(q =>
     RegisterJob<CustomerDeltaSyncJob>("CustomerDeltaSyncJob", "0 */5 * ? * *");
     RegisterJob<SalesOrderSyncJob>("SalesOrderSyncJob", "10 */5 * ? * *");
     RegisterJob<DeliveryDeltaSyncJob>("DeliveryDeltaSyncJob", "20 */5 * ? * *");
+
 
     if (syncSettings.EnableInvoiceCacheSync)
         RegisterJob<InvoiceSyncJob>("InvoiceSyncJob", "30 */5 * ? * *");
@@ -192,6 +197,13 @@ builder.Services.AddQuartz(q =>
 
     RegisterJob<NeonDeliverySyncJob>("NeonDeliverySyncJob", "50 */5 * ? * *");
     RegisterJob<NeonProductDeltaSyncJob>("NeonProductDeltaSyncJob", "55 */10 * ? * *");
+    RegisterJob<NeonSalesOrderSyncJob>(
+          "NeonSalesOrderSyncJob",
+          "15 */5 * ? * *"); // every 5 minutes
+
+    RegisterJob<NeonSalesOrderLineSyncJob>(
+        "NeonSalesOrderLineSyncJob",
+        "25 */5 * ? * *"); // every 5 minutes
 
     // Durable manual-only full sync
     q.AddJob<CustomerFullSyncJob>(opts =>
