@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Quartz;
 using MolasLubes.Api.Security;
+using MolasLubes.Infrastructure.Services.Sync;
 
 namespace MolasLubes.Api.Controllers.Admin;
 
@@ -106,6 +107,16 @@ public class AdminNeonSyncController : ControllerBase
         await scheduler.TriggerJob(new JobKey("NeonInvoiceSyncJob"));
 
         return Ok(new { Message = "Neon Invoice Sync triggered" });
+    }
+
+    // POST /api/admin/neon-sync/invoices/full
+    [HttpPost("invoices/full")]
+    public async Task<IActionResult> SyncInvoicesFull(
+        [FromServices] NeonInvoiceSyncService syncService)
+    {
+        await syncService.SyncFullAsync();
+
+        return Ok(new { Message = "Neon Invoice FULL Sync completed" });
     }
 
     // POST /api/admin/neon-sync/payments

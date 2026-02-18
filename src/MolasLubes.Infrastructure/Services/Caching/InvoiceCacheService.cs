@@ -34,6 +34,19 @@ public class InvoiceCacheService
 
             if (exists != null)
             {
+                // 🔁 Update header fields
+                exists.SapDocNum = inv.DocNum;
+                exists.CardCode = inv.CardCode;
+                exists.DocDate = inv.DocDate;
+                exists.DocTotal = inv.DocTotal;
+                exists.VatSum = inv.VatSum;
+                exists.OdooInvoiceId = inv.OdooInvoiceId;
+                exists.OdooStatus = inv.OdooStatus;
+                exists.OdooSyncDir = inv.OdooSyncDir;
+                exists.OdooErrorMsg = inv.OdooErrorMsg;
+                exists.OdooLastSync = inv.OdooLastSync;
+                exists.CachedAt = DateTime.UtcNow;
+
                 // 🔁 Replace lines on update
                 _db.CacheInvoiceLines.RemoveRange(exists.Lines);
 
@@ -64,7 +77,12 @@ public class InvoiceCacheService
                 CardCode = inv.CardCode,
                 DocDate = inv.DocDate,
                 DocTotal = inv.DocTotal,
-                VatSum = inv.VatSum
+                VatSum = inv.VatSum,
+                OdooInvoiceId = inv.OdooInvoiceId,
+                OdooStatus = inv.OdooStatus,
+                OdooSyncDir = inv.OdooSyncDir,
+                OdooErrorMsg = inv.OdooErrorMsg,
+                OdooLastSync = inv.OdooLastSync
             };
 
             // 📦 LINES (INV1)

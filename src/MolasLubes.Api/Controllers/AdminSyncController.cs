@@ -58,4 +58,19 @@ public class AdminSyncController : ControllerBase
             Message = "Customer FULL Sync triggered successfully"
         });
     }
+
+    // -------------------------------------------------
+    // 🔥 INVOICE FULL
+    // -------------------------------------------------
+    [HttpPost("invoices/full")]
+    public async Task<IActionResult> RunInvoiceFullSync()
+    {
+        var scheduler = await _schedulerFactory.GetScheduler();
+        await scheduler.TriggerJob(new JobKey("InvoiceFullSyncJob"));
+
+        return Ok(new
+        {
+            Message = "Invoice FULL Sync triggered successfully"
+        });
+    }
 }

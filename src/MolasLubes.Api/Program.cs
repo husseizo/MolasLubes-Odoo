@@ -133,6 +133,7 @@ builder.Services.AddTransient<CustomerDeltaSyncJob>();
 builder.Services.AddTransient<CustomerFullSyncJob>();
 builder.Services.AddTransient<SalesOrderSyncJob>();
 builder.Services.AddTransient<InvoiceSyncJob>();
+builder.Services.AddTransient<InvoiceFullSyncJob>();
 builder.Services.AddTransient<PaymentSyncJob>();
 builder.Services.AddTransient<DeliveryDeltaSyncJob>();
 
@@ -143,6 +144,7 @@ builder.Services.AddTransient<NeonPaymentSyncJob>();
 builder.Services.AddTransient<NeonDeliverySyncJob>();
 builder.Services.AddTransient<NeonSalesOrderSyncJob>();
 builder.Services.AddTransient<NeonSalesOrderLineSyncJob>();
+builder.Services.AddTransient<NeonPriceListSyncJob>();
 
 // =====================================================
 // QUARTZ CONFIGURATION
@@ -208,6 +210,14 @@ builder.Services.AddQuartz(q =>
     // Durable manual-only full sync
     q.AddJob<CustomerFullSyncJob>(opts =>
         opts.WithIdentity("CustomerFullSyncJob")
+            .StoreDurably());
+
+    q.AddJob<InvoiceFullSyncJob>(opts =>
+        opts.WithIdentity("InvoiceFullSyncJob")
+            .StoreDurably());
+
+    q.AddJob<NeonPriceListSyncJob>(opts =>
+        opts.WithIdentity("NeonPriceListSyncJob")
             .StoreDurably());
 });
 
