@@ -1,6 +1,5 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using MolasLubes.Domain.Entities.Cache;
-using MolasLubes.Domain.Entities.Invoices;
 
 namespace MolasLubes.Infrastructure.Persistence;
 

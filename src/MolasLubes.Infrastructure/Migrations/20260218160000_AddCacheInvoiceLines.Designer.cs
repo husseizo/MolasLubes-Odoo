@@ -213,7 +213,7 @@ namespace MolasLubes.Infrastructure.Migrations
                     b.ToTable("CacheInvoices", (string)null);
                 });
 
-            modelBuilder.Entity("MolasLubes.Domain.Entities.Invoices.CacheInvoiceLine", b =>
+            modelBuilder.Entity("MolasLubes.Domain.Entities.Cache.CacheInvoiceLine", b =>
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
@@ -539,7 +539,7 @@ namespace MolasLubes.Infrastructure.Migrations
                     b.ToTable("CacheStockReservations", (string)null);
                 });
 
-            modelBuilder.Entity("MolasLubes.Domain.Entities.Invoices.CacheInvoiceLine", b =>
+            modelBuilder.Entity("MolasLubes.Domain.Entities.Cache.CacheInvoiceLine", b =>
                 {
                     b.HasOne("MolasLubes.Domain.Entities.Cache.CacheInvoice", "Invoice")
                         .WithMany("Lines")

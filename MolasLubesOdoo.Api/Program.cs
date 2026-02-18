@@ -33,7 +33,7 @@ builder.Services.AddDbContext<NeonDbContext>(options =>
 // =====================================================
 builder.Services.AddScoped<InvoiceCacheService>();
 builder.Services.AddScoped<NeonInvoiceSyncService>();
-builder.Services.AddScoped<SalesOrderStatusService>();
+builder.Services.AddScoped<SalesOrderStatusService>(); // required by InvoiceCacheService
 
 var app = builder.Build();
 

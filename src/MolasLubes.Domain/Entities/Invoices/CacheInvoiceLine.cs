@@ -1,6 +1,4 @@
-﻿using MolasLubes.Domain.Entities.Cache;
-
-namespace MolasLubes.Domain.Entities.Invoices;
+﻿namespace MolasLubes.Domain.Entities.Cache;
 
 public class CacheInvoiceLine
 {

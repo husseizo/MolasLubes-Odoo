@@ -1,7 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
 using Microsoft.EntityFrameworkCore;
-using MolasLubes.Domain.Entities.Cache; // ✅ FIX HII
-using MolasLubes.Domain.Entities.Invoices;
+using MolasLubes.Domain.Entities.Cache;
 using MolasLubes.Infrastructure.Integrations.SapB1.DiApi.SapDtos;
 using MolasLubes.Infrastructure.Persistence;
 
