@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using MolasLubes.Infrastructure.Persistence;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace MolasLubes.Infrastructure.Persistence.Migrations.Neon
 {
     [DbContext(typeof(NeonDbContext))]
-    partial class NeonDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260218170000_AddInvoiceLineFields")]
+    partial class AddInvoiceLineFields
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -135,6 +138,12 @@ namespace MolasLubes.Infrastructure.Persistence.Migrations.Neon
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("SapDocEntry");
+
+                    b.HasIndex("DeliveryDate");
+
+                    b.HasIndex("LastSapSyncAt");
+
+                    b.HasIndex("OdooDeliveryId");
 
                     b.ToTable("NeonDeliveries", (string)null);
                 });

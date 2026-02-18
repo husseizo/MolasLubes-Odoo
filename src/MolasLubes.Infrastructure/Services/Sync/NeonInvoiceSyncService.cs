@@ -130,11 +130,17 @@ public class NeonInvoiceSyncService
                 {
                     InvoiceEntry = l.SapDocEntry,
                     ItemCode = l.ItemCode,
+                    Description = l.Description,
                     Quantity = l.Quantity,
                     LineTotal = l.LineTotal,
+                    GrossBuyPr = l.GrossBuyPr,
                     BaseEntry = l.BaseEntry,
                     BaseLine = l.BaseLine,
-                    OdooInvoiceLineId = l.OdooInvoiceLineId
+                    OdooInvoiceLineId = l.OdooInvoiceLineId,
+                    OdooStatus = l.OdooStatus,
+                    OdooSyncDir = l.OdooSyncDir,
+                    OdooErrorMsg = l.OdooErrorMsg,
+                    OdooLastSync = l.OdooLastSync
                 })
                 .ToListAsync();
 

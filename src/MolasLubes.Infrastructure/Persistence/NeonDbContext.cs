@@ -222,14 +222,30 @@ public class NeonDbContext : DbContext
              .IsRequired()
              .HasMaxLength(50);
 
+            e.Property(x => x.Description)
+             .IsRequired()
+             .HasMaxLength(200);
+
             e.Property(x => x.Quantity)
              .HasPrecision(18, 4);
 
             e.Property(x => x.LineTotal)
              .HasPrecision(18, 2);
 
+            e.Property(x => x.GrossBuyPr)
+             .HasPrecision(18, 2);
+
             e.Property(x => x.OdooInvoiceLineId)
              .HasMaxLength(20);
+
+            e.Property(x => x.OdooStatus)
+             .HasMaxLength(10);
+
+            e.Property(x => x.OdooSyncDir)
+             .HasMaxLength(10);
+
+            e.Property(x => x.OdooErrorMsg)
+             .HasMaxLength(255);
 
             // 🔗 FK relationship
             e.HasOne(x => x.Invoice)

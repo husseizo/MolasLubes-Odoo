@@ -27,12 +27,18 @@ public class SapInvoiceDto
 public class SapInvoiceLineDto
 {
     public string ItemCode { get; set; } = null!;
+    public string Description { get; set; } = null!;
     public decimal Quantity { get; set; }
     public decimal LineTotal { get; set; }
+    public decimal GrossBuyPr { get; set; }
 
     public int BaseEntry { get; set; }   // ODLN / ORDR DocEntry
     public int BaseLine { get; set; }
 
-    // 🔗 ODOO LINE UDF (INV1)
+    // 🔗 ODOO LINE UDFs (INV1)
     public string? OdooInvoiceLineId { get; set; }
+    public string? OdooStatus { get; set; }
+    public string? OdooSyncDir { get; set; }
+    public string? OdooErrorMsg { get; set; }
+    public DateTime? OdooLastSync { get; set; }
 }
