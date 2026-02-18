@@ -21,6 +21,7 @@ public class NeonDbContext : DbContext
     public DbSet<NeonSalesOrderLine> SalesOrderLines => Set<NeonSalesOrderLine>();
     public DbSet<NeonDelivery> Deliveries => Set<NeonDelivery>();
     public DbSet<NeonInvoice> Invoices => Set<NeonInvoice>();
+    public DbSet<NeonInvoiceLine> InvoiceLines => Set<NeonInvoiceLine>();
     public DbSet<NeonPayment> Payments => Set<NeonPayment>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -209,6 +210,36 @@ public class NeonDbContext : DbContext
 
             // 🔍 Delta sync speed
             e.HasIndex(x => x.SyncedAt);
+        });
+
+        modelBuilder.Entity<NeonInvoiceLine>(e =>
+        {
+            e.ToTable("NeonInvoiceLines");
+
+            e.HasKey(x => x.Id);
+
+            e.Property(x => x.ItemCode)
+             .IsRequired()
+             .HasMaxLength(50);
+
+            e.Property(x => x.Quantity)
+             .HasPrecision(18, 4);
+
+            e.Property(x => x.LineTotal)
+             .HasPrecision(18, 2);
+
+            e.Property(x => x.OdooInvoiceLineId)
+             .HasMaxLength(20);
+
+            // 🔗 FK relationship
+            e.HasOne(x => x.Invoice)
+             .WithMany(x => x.Lines)
+             .HasForeignKey(x => x.InvoiceEntry)
+             .OnDelete(DeleteBehavior.Cascade);
+
+            // 🚀 Query speed
+            e.HasIndex(x => x.InvoiceEntry);
+            e.HasIndex(x => x.OdooInvoiceLineId);
         });
 
         // =====================================================

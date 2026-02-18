@@ -245,6 +245,7 @@ app.MapGet("/debug/cache-counts", async (MolasCacheDbContext db) =>
         SalesOrders = await db.CacheSalesOrders.CountAsync(),
         Deliveries = await db.CacheDeliveries.CountAsync(),
         Invoices = await db.CacheInvoices.CountAsync(),
+        InvoiceLines = await db.CacheInvoiceLines.CountAsync(),
         Payments = await db.CachePayment.CountAsync()
     };
 });

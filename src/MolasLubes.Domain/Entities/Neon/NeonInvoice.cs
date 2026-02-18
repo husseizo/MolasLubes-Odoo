@@ -29,5 +29,9 @@ public class NeonInvoice
     public ICollection<NeonPayment> Payments { get; set; }
         = new List<NeonPayment>();
 
-
+    // =========================
+    // 🔗 LINES (INV1)
+    // =========================
+    public ICollection<NeonInvoiceLine> Lines { get; set; }
+        = new List<NeonInvoiceLine>();
 }
