@@ -1,0 +1,6 @@
+@MolasLubes.Api_HostAddress = http://localhost:5251
+
+GET {{MolasLubes.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

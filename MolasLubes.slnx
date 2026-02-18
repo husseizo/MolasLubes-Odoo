@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MolasLubes.Api/MolasLubes.Api.csproj" />
+    <Project Path="src/MolasLubes.Application/MolasLubes.Application.csproj" />
+    <Project Path="src/MolasLubes.Domain/MolasLubes.Domain.csproj" />
+    <Project Path="src/MolasLubes.Infrastructure/MolasLubes.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MolasLubes.Tests/MolasLubes.Tests.csproj" />
+  </Folder>
+</Solution>
