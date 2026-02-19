@@ -139,6 +139,80 @@ namespace MolasLubes.Infrastructure.Persistence.Migrations.Neon
                     b.ToTable("NeonDeliveries", (string)null);
                 });
 
+            modelBuilder.Entity("MolasLubes.Domain.Entities.Neon.NeonDeliveryLine", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<int>("BaseEntry")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("BaseLine")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<int>("DeliveryEntry")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("GrossBuyPr")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<string>("ItemCode")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<int>("LineNum")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("LineTotal")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<string>("OdooErrorMsg")
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<DateTime?>("OdooLastSync")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("OdooMoveId")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("OdooSalesOrderLineId")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("OdooStatus")
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)");
+
+                    b.Property<string>("OdooSyncDir")
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)");
+
+                    b.Property<decimal>("Quantity")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("numeric(18,4)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DeliveryEntry");
+
+                    b.HasIndex("OdooMoveId");
+
+                    b.ToTable("NeonDeliveryLines", (string)null);
+                });
+
             modelBuilder.Entity("MolasLubes.Domain.Entities.Neon.NeonInvoice", b =>
                 {
                     b.Property<int>("SapDocEntry")
@@ -556,6 +630,17 @@ namespace MolasLubes.Infrastructure.Persistence.Migrations.Neon
                     b.ToTable("NeonSalesOrderLines", (string)null);
                 });
 
+            modelBuilder.Entity("MolasLubes.Domain.Entities.Neon.NeonDeliveryLine", b =>
+                {
+                    b.HasOne("MolasLubes.Domain.Entities.Neon.NeonDelivery", "Delivery")
+                        .WithMany("Lines")
+                        .HasForeignKey("DeliveryEntry")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Delivery");
+                });
+
             modelBuilder.Entity("MolasLubes.Domain.Entities.Neon.NeonInvoiceLine", b =>
                 {
                     b.HasOne("MolasLubes.Domain.Entities.Neon.NeonInvoice", "Invoice")
@@ -587,6 +672,11 @@ namespace MolasLubes.Infrastructure.Persistence.Migrations.Neon
                         .IsRequired();
 
                     b.Navigation("SalesOrder");
+                });
+
+            modelBuilder.Entity("MolasLubes.Domain.Entities.Neon.NeonDelivery", b =>
+                {
+                    b.Navigation("Lines");
                 });
 
             modelBuilder.Entity("MolasLubes.Domain.Entities.Neon.NeonInvoice", b =>
