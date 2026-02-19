@@ -16,6 +16,7 @@ public class MolasCacheDbContext : DbContext
     public DbSet<CacheProduct> CacheProducts => Set<CacheProduct>();
     public DbSet<CacheCustomer> CacheCustomers => Set<CacheCustomer>();
     public DbSet<CacheDelivery> CacheDeliveries => Set<CacheDelivery>();
+    public DbSet<CacheDeliveryLine> CacheDeliveryLines => Set<CacheDeliveryLine>();
     public DbSet<CacheSalesOrder> CacheSalesOrders => Set<CacheSalesOrder>();
     public DbSet<CacheSalesOrderLine> CacheSalesOrderLines => Set<CacheSalesOrderLine>();
     public DbSet<CacheInvoice> CacheInvoices => Set<CacheInvoice>();
@@ -122,6 +123,59 @@ public class MolasCacheDbContext : DbContext
             entity.HasIndex(x => x.DeliveryDate);
             entity.HasIndex(x => x.LastSapSyncAt);
             entity.HasIndex(x => x.OdooDeliveryId);
+        });
+
+        // =====================================================
+        // DELIVERY LINES (FK → DELIVERIES)
+        // =====================================================
+        modelBuilder.Entity<CacheDeliveryLine>(entity =>
+        {
+            entity.ToTable("CacheDeliveryLines");
+
+            entity.HasKey(x => x.Id);
+
+            entity.Property(x => x.ItemCode)
+                  .HasMaxLength(50)
+                  .IsRequired();
+
+            entity.Property(x => x.Description)
+                  .HasMaxLength(200)
+                  .IsRequired();
+
+            entity.Property(x => x.Quantity)
+                  .HasPrecision(18, 4);
+
+            entity.Property(x => x.LineTotal)
+                  .HasPrecision(18, 2);
+
+            entity.Property(x => x.GrossBuyPr)
+                  .HasPrecision(18, 2);
+
+            entity.Property(x => x.OdooMoveId)
+                  .HasMaxLength(20);
+
+            entity.Property(x => x.OdooSalesOrderLineId)
+                  .HasMaxLength(20);
+
+            entity.Property(x => x.OdooStatus)
+                  .HasMaxLength(10);
+
+            entity.Property(x => x.OdooSyncDir)
+                  .HasMaxLength(10);
+
+            entity.Property(x => x.OdooErrorMsg)
+                  .HasMaxLength(255);
+
+            entity.HasIndex(x => x.OdooMoveId);
+
+            // 🔗 FK → CacheDeliveries.SapDocEntry
+            entity.HasOne(x => x.Delivery)
+                  .WithMany(x => x.Lines)
+                  .HasForeignKey(x => x.SapDocEntry)
+                  .OnDelete(DeleteBehavior.Cascade);
+
+            // 🚀 Query speed
+            entity.HasIndex(x => x.SapDocEntry);
         });
 
         // =====================================================
