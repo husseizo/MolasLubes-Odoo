@@ -147,6 +147,10 @@ namespace MolasLubes.Infrastructure.Persistence.Migrations.Neon
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("SapDocEntry"));
 
+                    b.Property<string>("CardName")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
                     b.Property<string>("CustomerCode")
                         .IsRequired()
                         .HasColumnType("text");
@@ -155,6 +159,10 @@ namespace MolasLubes.Infrastructure.Persistence.Migrations.Neon
                         .HasColumnType("integer");
 
                     b.Property<decimal>("DocTotal")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<decimal>("VatSum")
                         .HasPrecision(18, 2)
                         .HasColumnType("numeric(18,2)");
 

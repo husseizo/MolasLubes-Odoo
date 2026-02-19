@@ -6,6 +6,7 @@ public class NeonInvoice
     public int DocNum { get; set; }
 
     public string CustomerCode { get; set; } = null!;
+    public string? CardName { get; set; }
 
     // =========================
     // 🔗 ODOO / SAP SYNC
@@ -17,6 +18,7 @@ public class NeonInvoice
     public string? OdooSyncDir { get; set; }
 
     public decimal DocTotal { get; set; }
+    public decimal VatSum { get; set; }
     public decimal PaidAmount { get; set; }
     public bool IsPaid { get; set; }
 

@@ -1,4 +1,5 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using MolasLubes.Infrastructure.Services.Sync;
 using Quartz;
 
 namespace MolasLubes.Api.Controllers;
@@ -8,10 +9,14 @@ namespace MolasLubes.Api.Controllers;
 public class AdminSyncController : ControllerBase
 {
     private readonly ISchedulerFactory _schedulerFactory;
+    private readonly NeonInvoiceSyncService _invoiceSyncService;
 
-    public AdminSyncController(ISchedulerFactory schedulerFactory)
+    public AdminSyncController(
+        ISchedulerFactory schedulerFactory,
+        NeonInvoiceSyncService invoiceSyncService)
     {
         _schedulerFactory = schedulerFactory;
+        _invoiceSyncService = invoiceSyncService;
     }
 
     // -------------------------------------------------
@@ -71,6 +76,23 @@ public class AdminSyncController : ControllerBase
         return Ok(new
         {
             Message = "Invoice FULL Sync triggered successfully"
+        });
+    }
+
+    // -------------------------------------------------
+    // 🩹 INVOICE ORPHAN LINE BACKFILL
+    // Explicitly backfills invoice lines that exist in
+    // the cache but were never propagated to Neon.
+    // Runs immediately (not via Quartz).
+    // -------------------------------------------------
+    [HttpPost("invoices/backfill-lines")]
+    public async Task<IActionResult> BackfillOrphanedInvoiceLines()
+    {
+        await _invoiceSyncService.SyncOrphanedLinesAsync();
+
+        return Ok(new
+        {
+            Message = "Orphaned invoice line backfill completed"
         });
     }
 }

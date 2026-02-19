@@ -29,21 +29,25 @@ public class InvoiceSyncJob : IJob
         var cache = scope.ServiceProvider.GetRequiredService<InvoiceCacheService>();
         var neonSync = scope.ServiceProvider.GetRequiredService<NeonInvoiceSyncService>();
 
-        var hasAny = await cache.HasAnyInvoiceAsync();
+        // Use the last known DocDate from the cache as the SAP delta cursor.
+        // Falls back to a full read when the cache is empty (first run).
+        // A 1-day overlap is already applied inside GetLastSapSyncDateAsync.
+        var fromDate = await cache.GetLastSapSyncDateAsync();
 
-        var invoices = hasAny
-            ? reader.ReadInvoices(DateTime.UtcNow.AddDays(-2)).ToList()
+        var invoices = fromDate.HasValue
+            ? reader.ReadInvoices(fromDate.Value).ToList()
             : reader.ReadAllInvoices().ToList();
 
         _logger.LogInformation(
-            "🧾 Invoices read from SAP | Headers={Count} Lines={Lines}",
+            "🧾 Invoices read from SAP | FromDate={FromDate} Headers={Count} Lines={Lines}",
+            fromDate?.ToString("yyyy-MM-dd") ?? "ALL",
             invoices.Count,
             invoices.Sum(i => i.Lines.Count));
 
         if (invoices.Count > 0)
             await cache.CacheInvoicesAsync(invoices);
 
-        // 🔄 Sync cached invoices + lines → Neon
+        // 🔄 Sync cached invoices + lines → Neon (delta + orphan backfill)
         await neonSync.SyncDeltaAsync();
 
         _logger.LogInformation("✅ Invoice Sync completed (OINV + INV1)");

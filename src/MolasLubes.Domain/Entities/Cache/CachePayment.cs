@@ -16,6 +16,12 @@ public class CachePayment
 
     public decimal TotalPaid { get; set; }
 
+    // 🔗 INVOICE LINK (from RCT2 – first applied invoice)
+    // For the common case of a payment covering a single invoice.
+    // InvoiceDocEntry = OINV.DocEntry that this payment was applied to.
+    public int InvoiceDocEntry { get; set; }
+    public decimal SumApplied { get; set; }
+
     public DateTime CachedAt { get; set; } = DateTime.UtcNow;
 
     // 🔗 ODOO UDFS

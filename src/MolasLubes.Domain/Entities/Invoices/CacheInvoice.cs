@@ -17,6 +17,9 @@ public class CacheInvoice
     [MaxLength(20)]
     public string CardCode { get; set; } = null!;
 
+    [MaxLength(100)]
+    public string? CardName { get; set; }
+
     public DateTime DocDate { get; set; }
 
     [Column(TypeName = "decimal(18,2)")]

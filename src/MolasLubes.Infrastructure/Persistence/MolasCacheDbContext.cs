@@ -197,6 +197,8 @@ public class MolasCacheDbContext : DbContext
             entity.Property(x => x.VatSum)
                   .HasPrecision(18, 2);
 
+            entity.Property(x => x.CardName).HasMaxLength(100);
+
             entity.Property(x => x.OdooInvoiceId).HasMaxLength(20);
             entity.Property(x => x.OdooStatus).HasMaxLength(10);
             entity.Property(x => x.OdooSyncDir).HasMaxLength(10);
@@ -265,8 +267,13 @@ public class MolasCacheDbContext : DbContext
             entity.Property(x => x.TotalPaid)
                   .HasPrecision(18, 2);
 
+            entity.Property(x => x.SumApplied)
+                  .HasPrecision(18, 2);
+
             entity.Property(x => x.CardCode)
                   .HasMaxLength(20);
+
+            entity.HasIndex(x => x.InvoiceDocEntry);
 
             entity.Property(x => x.OdooPaymentId).HasMaxLength(20);
             entity.Property(x => x.OdooStatus).HasMaxLength(10);

@@ -197,7 +197,10 @@ public class NeonDbContext : DbContext
 
             e.HasKey(x => x.SapDocEntry);
 
+            e.Property(x => x.CardName).HasMaxLength(100);
+
             e.Property(x => x.DocTotal).HasPrecision(18, 2);
+            e.Property(x => x.VatSum).HasPrecision(18, 2);
             e.Property(x => x.PaidAmount).HasPrecision(18, 2);
             e.Property(x => x.InvoiceDate).IsRequired();
 
