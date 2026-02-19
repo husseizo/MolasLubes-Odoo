@@ -71,8 +71,10 @@ public class DeliveryCacheService
             }
             else
             {
-                // 🔥 Skip if SAP version is not newer
-                if (d.SapUpdateDate <= row.SapUpdateDate)
+                // 🔥 Skip if SAP version is not newer AND lines are already populated.
+                // If lines are missing (e.g. table was just created), always process
+                // so we backfill line data even for headers that haven't changed in SAP.
+                if (d.SapUpdateDate <= row.SapUpdateDate && row.Lines.Count > 0)
                 {
                     skipped++;
                     continue;
@@ -153,6 +155,11 @@ public class DeliveryCacheService
     public async Task<bool> HasAnyDeliveryAsync()
     {
         return await _db.CacheDeliveries.AnyAsync();
+    }
+
+    public async Task<bool> HasAnyDeliveryLineAsync()
+    {
+        return await _db.CacheDeliveryLines.AnyAsync();
     }
 
     // =====================================================
