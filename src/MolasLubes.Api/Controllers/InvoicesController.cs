@@ -1,8 +1,11 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using MolasLubes.Api.Security;
 using MolasLubes.Application.Invoices;
 using MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 using MolasLubes.Infrastructure.Integrations.SapB1.Errors;
+using MolasLubes.Infrastructure.Persistence;
+using MolasLubes.Infrastructure.Services.Finance;
 
 namespace MolasLubes.Api.Controllers;
 
@@ -12,12 +15,22 @@ namespace MolasLubes.Api.Controllers;
 public class InvoicesCommandController : ControllerBase
 {
     private readonly SapInvoiceWriter _writer;
+    private readonly NeonDbContext _neonDb;
+    private readonly InvoiceBalanceService _balanceService;
 
-    public InvoicesCommandController(SapInvoiceWriter writer)
+    public InvoicesCommandController(
+        SapInvoiceWriter writer,
+        NeonDbContext neonDb,
+        InvoiceBalanceService balanceService)
     {
         _writer = writer;
+        _neonDb = neonDb;
+        _balanceService = balanceService;
     }
 
+    // =====================================================
+    // POST /api/v1/invoices/create
+    // =====================================================
     [HttpPost("create")]
     public IActionResult Create([FromBody] CreateInvoiceDto dto)
     {
@@ -36,5 +49,117 @@ public class InvoicesCommandController : ControllerBase
                 retryable = ex.Retryable
             });
         }
+    }
+
+    // =====================================================
+    // GET /api/v1/invoices/{sapDocEntry}
+    // Returns invoice header + lines + balance
+    // =====================================================
+    [HttpGet("{sapDocEntry:int}")]
+    public async Task<IActionResult> GetInvoice(int sapDocEntry)
+    {
+        var invoice = await _neonDb.Invoices
+            .AsNoTracking()
+            .Include(i => i.Lines)
+            .FirstOrDefaultAsync(i => i.SapDocEntry == sapDocEntry);
+
+        if (invoice == null)
+            return NotFound(new { message = $"Invoice {sapDocEntry} not found" });
+
+        var balance = await _balanceService.GetInvoiceBalanceAsync(sapDocEntry);
+
+        return Ok(new
+        {
+            invoice.SapDocEntry,
+            invoice.DocNum,
+            invoice.CustomerCode,
+            invoice.CardName,
+            invoiceDate   = invoice.InvoiceDate,
+            invoice.DocTotal,
+            invoice.VatSum,
+            invoice.PaidAmount,
+            balance       = balance?.Balance ?? invoice.DocTotal,
+            status        = balance?.Status ?? "Unpaid",
+            invoice.IsPaid,
+            invoice.OdooInvoiceId,
+            invoice.OdooStatus,
+            lines = invoice.Lines.Select(l => new
+            {
+                l.ItemCode,
+                l.Description,
+                l.Quantity,
+                l.LineTotal,
+                l.GrossBuyPr,
+                l.BaseEntry,
+                l.BaseLine,
+                l.OdooInvoiceLineId,
+                l.OdooStatus
+            })
+        });
+    }
+
+    // =====================================================
+    // GET /api/v1/invoices?cardCode=C0001&page=1&pageSize=50
+    // Returns paginated invoice headers for a customer
+    // =====================================================
+    [HttpGet]
+    public async Task<IActionResult> ListInvoices(
+        [FromQuery] string? cardCode,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 50)
+    {
+        if (pageSize > 200) pageSize = 200;
+        if (page < 1) page = 1;
+
+        var query = _neonDb.Invoices.AsNoTracking();
+
+        if (!string.IsNullOrWhiteSpace(cardCode))
+            query = query.Where(i => i.CustomerCode == cardCode);
+
+        var total = await query.CountAsync();
+
+        var invoices = await query
+            .OrderByDescending(i => i.InvoiceDate)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(i => new
+            {
+                i.SapDocEntry,
+                i.DocNum,
+                i.CustomerCode,
+                i.CardName,
+                invoiceDate = i.InvoiceDate,
+                i.DocTotal,
+                i.VatSum,
+                i.PaidAmount,
+                balance = i.DocTotal - i.PaidAmount,
+                i.IsPaid,
+                i.OdooInvoiceId,
+                i.OdooStatus
+            })
+            .ToListAsync();
+
+        return Ok(new
+        {
+            total,
+            page,
+            pageSize,
+            items = invoices
+        });
+    }
+
+    // =====================================================
+    // GET /api/v1/invoices/{sapDocEntry}/balance
+    // Returns balance summary only (lightweight)
+    // =====================================================
+    [HttpGet("{sapDocEntry:int}/balance")]
+    public async Task<IActionResult> GetBalance(int sapDocEntry)
+    {
+        var result = await _balanceService.GetInvoiceBalanceAsync(sapDocEntry);
+
+        if (result == null)
+            return NotFound(new { message = $"Invoice {sapDocEntry} not found" });
+
+        return Ok(result);
     }
 }

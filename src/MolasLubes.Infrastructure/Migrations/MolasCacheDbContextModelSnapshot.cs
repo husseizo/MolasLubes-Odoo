@@ -169,6 +169,10 @@ namespace MolasLubes.Infrastructure.Migrations
                         .HasMaxLength(20)
                         .HasColumnType("nvarchar(20)");
 
+                    b.Property<string>("CardName")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
                     b.Property<DateTime>("DocDate")
                         .HasColumnType("datetime2");
 
@@ -293,6 +297,13 @@ namespace MolasLubes.Infrastructure.Migrations
                     b.Property<DateTime>("DocDate")
                         .HasColumnType("datetime2");
 
+                    b.Property<int>("InvoiceDocEntry")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("SumApplied")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
                     b.Property<string>("OdooErrorMsg")
                         .HasColumnType("nvarchar(max)");
 
@@ -319,6 +330,8 @@ namespace MolasLubes.Infrastructure.Migrations
                         .HasColumnType("decimal(18,2)");
 
                     b.HasKey("SapDocEntry");
+
+                    b.HasIndex("InvoiceDocEntry");
 
                     b.HasIndex("OdooPaymentId");
 

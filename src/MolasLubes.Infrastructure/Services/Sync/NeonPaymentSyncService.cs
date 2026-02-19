@@ -74,22 +74,26 @@ public class NeonPaymentSyncService
 
             // -------------------------------------------------
             // 4️⃣ FILTER PAYMENTS (FK SAFE)
+            // Only sync payments that have a known invoice link
+            // (InvoiceDocEntry > 0) AND whose invoice header already
+            // exists in Neon so the FK constraint is satisfied.
             // -------------------------------------------------
             var payments = cachePayments
-                .Where(p => invoiceKeySet.Contains(p.SapDocEntry))
+                .Where(p => p.InvoiceDocEntry > 0 && invoiceKeySet.Contains(p.InvoiceDocEntry))
                 .Select(p => new NeonPayment
                 {
-                    SapDocEntry = p.SapDocEntry,
-                    DocNum = p.SapDocNum,
+                    SapDocEntry  = p.SapDocEntry,
+                    DocNum       = p.SapDocNum,
                     CustomerCode = p.CardCode,
-                    PaymentDate = p.DocDate.AsUtc(),
-                    Amount = p.TotalPaid,
+                    InvoiceEntry = p.InvoiceDocEntry,   // ✅ correct FK → NeonInvoice
+                    PaymentDate  = p.DocDate.AsUtc(),
+                    Amount       = p.SumApplied > 0 ? p.SumApplied : p.TotalPaid,
 
                     OdooPaymentId = p.OdooPaymentId,
-                    OdooStatus = p.OdooStatus,
-                    OdooSyncDir = p.OdooSyncDir,
-                    OdooErrorMsg = p.OdooErrorMsg,
-                    OdooLastSync = p.OdooLastSync.AsUtc(),
+                    OdooStatus    = p.OdooStatus,
+                    OdooSyncDir   = p.OdooSyncDir,
+                    OdooErrorMsg  = p.OdooErrorMsg,
+                    OdooLastSync  = p.OdooLastSync.AsUtc(),
 
                     SyncedAt = now
                 })
@@ -123,20 +127,44 @@ public class NeonPaymentSyncService
                 }
                 else
                 {
-                    entity.DocNum = incoming.DocNum;
-                    entity.CustomerCode = incoming.CustomerCode;
-                    entity.PaymentDate = incoming.PaymentDate;
-                    entity.Amount = incoming.Amount;
+                    entity.DocNum        = incoming.DocNum;
+                    entity.CustomerCode  = incoming.CustomerCode;
+                    entity.InvoiceEntry  = incoming.InvoiceEntry;
+                    entity.PaymentDate   = incoming.PaymentDate;
+                    entity.Amount        = incoming.Amount;
 
                     entity.OdooPaymentId = incoming.OdooPaymentId;
-                    entity.OdooStatus = incoming.OdooStatus;
-                    entity.OdooSyncDir = incoming.OdooSyncDir;
-                    entity.OdooErrorMsg = incoming.OdooErrorMsg;
-                    entity.OdooLastSync = incoming.OdooLastSync;
+                    entity.OdooStatus    = incoming.OdooStatus;
+                    entity.OdooSyncDir   = incoming.OdooSyncDir;
+                    entity.OdooErrorMsg  = incoming.OdooErrorMsg;
+                    entity.OdooLastSync  = incoming.OdooLastSync;
 
                     entity.SyncedAt = now;
                     updated++;
                 }
+            }
+
+            await _neonDb.SaveChangesAsync();
+
+            // -------------------------------------------------
+            // 6️⃣ REFRESH PaidAmount / IsPaid ON NEON INVOICES
+            // -------------------------------------------------
+            var affectedInvoices = payments.Select(p => p.InvoiceEntry).Distinct().ToList();
+
+            var invoicesToUpdate = await _neonDb.Invoices
+                .Where(i => affectedInvoices.Contains(i.SapDocEntry))
+                .ToListAsync();
+
+            var paidTotals = await _neonDb.Payments
+                .Where(p => affectedInvoices.Contains(p.InvoiceEntry))
+                .GroupBy(p => p.InvoiceEntry)
+                .Select(g => new { InvoiceEntry = g.Key, Total = g.Sum(p => p.Amount) })
+                .ToDictionaryAsync(x => x.InvoiceEntry, x => x.Total);
+
+            foreach (var inv in invoicesToUpdate)
+            {
+                inv.PaidAmount = paidTotals.GetValueOrDefault(inv.SapDocEntry, 0m);
+                inv.IsPaid = inv.PaidAmount >= inv.DocTotal && inv.DocTotal > 0;
             }
 
             await _neonDb.SaveChangesAsync();

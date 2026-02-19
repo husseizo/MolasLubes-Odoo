@@ -23,16 +23,42 @@ public class PaymentCacheService
     {
         foreach (var p in payments)
         {
+            // Use the first RCT2 invoice link as the primary invoice reference.
+            // Most payments in this business context apply to exactly one invoice.
+            var firstLink = p.Invoices.FirstOrDefault();
+            var invoiceDocEntry = firstLink?.InvoiceDocEntry ?? 0;
+            var sumApplied     = firstLink?.SumApplied      ?? p.TotalPaid;
+
             var exists = await _db.Set<CachePayment>().FindAsync(p.DocEntry);
-            if (exists != null) continue;
+
+            if (exists != null)
+            {
+                // Update invoice link in case it was missing on a previous read
+                exists.InvoiceDocEntry = invoiceDocEntry;
+                exists.SumApplied      = sumApplied;
+                exists.TotalPaid       = p.TotalPaid;
+                exists.OdooPaymentId   = p.OdooPaymentId;
+                exists.OdooStatus      = p.OdooStatus;
+                exists.OdooSyncDir     = p.OdooSyncDir;
+                exists.OdooErrorMsg    = p.OdooErrorMsg;
+                exists.OdooLastSync    = p.OdooLastSync;
+                continue;
+            }
 
             _db.Set<CachePayment>().Add(new CachePayment
             {
-                SapDocEntry = p.DocEntry,
-                SapDocNum = p.DocNum,
-                CardCode = p.CardCode,
-                DocDate = p.DocDate,
-                TotalPaid = p.TotalPaid
+                SapDocEntry    = p.DocEntry,
+                SapDocNum      = p.DocNum,
+                CardCode       = p.CardCode,
+                DocDate        = p.DocDate,
+                TotalPaid      = p.TotalPaid,
+                InvoiceDocEntry = invoiceDocEntry,
+                SumApplied     = sumApplied,
+                OdooPaymentId  = p.OdooPaymentId,
+                OdooStatus     = p.OdooStatus,
+                OdooSyncDir    = p.OdooSyncDir,
+                OdooErrorMsg   = p.OdooErrorMsg,
+                OdooLastSync   = p.OdooLastSync
             });
         }
 

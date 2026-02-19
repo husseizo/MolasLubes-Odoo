@@ -5,34 +5,35 @@ namespace MolasLubes.Infrastructure.Services.Finance;
 
 public class InvoiceBalanceService
 {
-    private readonly MolasCacheDbContext _db;
+    private readonly NeonDbContext _neonDb;
 
-    public InvoiceBalanceService(MolasCacheDbContext db)
+    public InvoiceBalanceService(NeonDbContext neonDb)
     {
-        _db = db;
+        _neonDb = neonDb;
     }
 
     public async Task<InvoiceBalanceResult?> GetInvoiceBalanceAsync(int sapDocEntry)
     {
-        var invoice = await _db.CacheInvoices
+        // Read directly from the Neon read-replica which keeps PaidAmount up-to-date
+        var invoice = await _neonDb.Invoices
             .FirstOrDefaultAsync(x => x.SapDocEntry == sapDocEntry);
 
         if (invoice == null)
             return null;
 
-        // ⚠ PAYMENTS NOT ENABLED YET
-        // Will be calculated once CachePayment is added
-        var totalPaid = 0m;
+        var balance = invoice.DocTotal - invoice.PaidAmount;
 
-        var balance = invoice.DocTotal - totalPaid;
+        var status = invoice.IsPaid ? "Paid"
+            : invoice.PaidAmount > 0 ? "PartiallyPaid"
+            : "Unpaid";
 
         return new InvoiceBalanceResult
         {
             SapDocEntry = invoice.SapDocEntry,
-            DocTotal = invoice.DocTotal,
-            TotalPaid = totalPaid,
-            Balance = balance,
-            Status = "Unpaid"
+            DocTotal    = invoice.DocTotal,
+            TotalPaid   = invoice.PaidAmount,
+            Balance     = balance,
+            Status      = status
         };
     }
 }
