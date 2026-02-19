@@ -30,6 +30,18 @@ public class DeliveryDeltaSyncJob : IJob
 
         var watermark = await cache.GetLastSapUpdateDateAsync();
 
+        // Force a full sync if headers exist but the lines table is empty.
+        // This self-heals the one-time case where CacheDeliveryLines was added
+        // after headers were already cached — the watermark would otherwise skip
+        // all existing records and lines would never be populated.
+        var linesExist = await cache.HasAnyDeliveryLineAsync();
+        if (watermark != null && !linesExist)
+        {
+            _logger.LogWarning(
+                "⚠️ CacheDeliveries has data but CacheDeliveryLines is empty — forcing full sync to backfill lines");
+            watermark = null;
+        }
+
         var deliveries = watermark == null
             ? reader.ReadAllDeliveries().ToList()
             : reader.ReadRecentDeliveries(watermark.Value.AddMinutes(-2)).ToList();
