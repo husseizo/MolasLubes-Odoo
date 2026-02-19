@@ -23,4 +23,10 @@ public class NeonDelivery
     public int? BaseOrderEntry { get; set; }
     public decimal DeliveredQty { get; set; }
     public DateTime SyncedAt { get; set; }
+
+    // =========================
+    // 🔗 LINES (DLN1)
+    // =========================
+    public ICollection<NeonDeliveryLine> Lines { get; set; }
+        = new List<NeonDeliveryLine>();
 }

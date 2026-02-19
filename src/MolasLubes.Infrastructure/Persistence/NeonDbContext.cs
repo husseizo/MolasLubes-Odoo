@@ -20,6 +20,7 @@ public class NeonDbContext : DbContext
     public DbSet<NeonSalesOrder> SalesOrders => Set<NeonSalesOrder>();
     public DbSet<NeonSalesOrderLine> SalesOrderLines => Set<NeonSalesOrderLine>();
     public DbSet<NeonDelivery> Deliveries => Set<NeonDelivery>();
+    public DbSet<NeonDeliveryLine> DeliveryLines => Set<NeonDeliveryLine>();
     public DbSet<NeonInvoice> Invoices => Set<NeonInvoice>();
     public DbSet<NeonInvoiceLine> InvoiceLines => Set<NeonInvoiceLine>();
     public DbSet<NeonPayment> Payments => Set<NeonPayment>();
@@ -186,6 +187,55 @@ public class NeonDbContext : DbContext
             e.Property(x => x.OdooSyncDir).HasMaxLength(10);
 
             e.Property(x => x.SyncedAt).IsRequired();
+        });
+
+        modelBuilder.Entity<NeonDeliveryLine>(e =>
+        {
+            e.ToTable("NeonDeliveryLines");
+
+            e.HasKey(x => x.Id);
+
+            e.Property(x => x.ItemCode)
+             .IsRequired()
+             .HasMaxLength(50);
+
+            e.Property(x => x.Description)
+             .IsRequired()
+             .HasMaxLength(200);
+
+            e.Property(x => x.Quantity)
+             .HasPrecision(18, 4);
+
+            e.Property(x => x.LineTotal)
+             .HasPrecision(18, 2);
+
+            e.Property(x => x.GrossBuyPr)
+             .HasPrecision(18, 2);
+
+            e.Property(x => x.OdooMoveId)
+             .HasMaxLength(20);
+
+            e.Property(x => x.OdooSalesOrderLineId)
+             .HasMaxLength(20);
+
+            e.Property(x => x.OdooStatus)
+             .HasMaxLength(10);
+
+            e.Property(x => x.OdooSyncDir)
+             .HasMaxLength(10);
+
+            e.Property(x => x.OdooErrorMsg)
+             .HasMaxLength(255);
+
+            // 🔗 FK relationship
+            e.HasOne(x => x.Delivery)
+             .WithMany(x => x.Lines)
+             .HasForeignKey(x => x.DeliveryEntry)
+             .OnDelete(DeleteBehavior.Cascade);
+
+            // 🚀 Query speed
+            e.HasIndex(x => x.DeliveryEntry);
+            e.HasIndex(x => x.OdooMoveId);
         });
 
         // =====================================================

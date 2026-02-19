@@ -40,6 +40,12 @@ public class CacheDelivery
     public DateTime? LastSapSyncAt { get; set; }
 
     // =========================
+    // 🔗 LINES (DLN1)
+    // =========================
+    public ICollection<CacheDeliveryLine> Lines { get; set; }
+        = new List<CacheDeliveryLine>();
+
+    // =========================
     // 🔗 ODOO FIELDS
     // =========================
     public string? OdooDeliveryId { get; set; }

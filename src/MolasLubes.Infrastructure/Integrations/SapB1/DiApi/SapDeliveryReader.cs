@@ -1,4 +1,4 @@
-﻿using SAPbobsCOM;
+using SAPbobsCOM;
 using Microsoft.Extensions.Logging;
 using MolasLubes.Infrastructure.Integrations.SapB1.DiApi.SapDtos;
 using MolasLubes.Infrastructure.Integrations.SapB1.Udfs;
@@ -30,19 +30,13 @@ public class SapDeliveryReader
         var company = _connection.GetConnectedCompany();
         var rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
 
-        string whereClause;
+        var whereClause = fromDate <= new DateTime(2000, 1, 1)
+            ? "1=1"
+            : $"d.UpdateDate >= '{fromDate:yyyy-MM-dd}'";
 
-        // FULL sync safe guard
-        if (fromDate <= new DateTime(2000, 1, 1))
-        {
-            whereClause = "1=1";
-        }
-        else
-        {
-            whereClause = $"d.UpdateDate >= '{fromDate:yyyy-MM-dd}'";
-        }
-
-        var query = $@"
+        // One row per DLN1 line — grouped in memory by DocEntry.
+        // Avoids the GROUP BY collapse bug that lost per-line data.
+        rs.DoQuery($@"
 SELECT
     d.DocEntry,
     d.DocNum,
@@ -50,87 +44,87 @@ SELECT
     d.DocDate,
     d.UpdateDate,
     d.CANCELED,
+    d.{OdooUdfs.Status}      AS HdrStatus,
+    d.{OdooUdfs.SyncDir}     AS HdrSyncDir,
+    d.{OdooUdfs.LastSync}    AS HdrLastSync,
+    d.{OdooUdfs.ErrorMsg}    AS HdrErrorMsg,
+    d.{OdooUdfs.DeliveryId}  AS OdooDeliveryId,
 
-    d.{OdooUdfs.Status}     AS OdooStatus,
-    d.{OdooUdfs.SyncDir}    AS OdooSyncDir,
-    d.{OdooUdfs.LastSync}   AS OdooLastSync,
-    d.{OdooUdfs.ErrorMsg}   AS OdooErrorMsg,
-    d.U_Odoo_Delivery_ID    AS OdooDeliveryId,
-
+    l.LineNum,
+    l.ItemCode,
+    l.Dscription             AS Description,
+    l.Quantity,
+    l.LineTotal,
+    l.GrossBuyPr,
     l.BaseEntry,
-    l.{OdooUdfs.SalesOrderLineId} AS OdooSalesOrderLineId,
-    l.U_Odoo_Move_ID        AS OdooMoveId,
-    SUM(l.Quantity)         AS Qty
+    l.BaseLine,
+    l.{OdooUdfs.DeliveryMoveId}   AS LineMoveId,
+    l.{OdooUdfs.SalesOrderLineId}  AS LineSoLineId,
+    l.{OdooUdfs.Status}            AS LineStatus,
+    l.{OdooUdfs.SyncDir}           AS LineSyncDir,
+    l.{OdooUdfs.LastSync}          AS LineLastSync,
+    l.{OdooUdfs.ErrorMsg}          AS LineErrorMsg
 
 FROM ODLN d
 INNER JOIN DLN1 l ON d.DocEntry = l.DocEntry
 WHERE {whereClause}
-GROUP BY
-    d.DocEntry,
-    d.DocNum,
-    d.CardCode,
-    d.DocDate,
-    d.UpdateDate,
-    d.CANCELED,
-    d.{OdooUdfs.Status},
-    d.{OdooUdfs.SyncDir},
-    d.{OdooUdfs.LastSync},
-    d.{OdooUdfs.ErrorMsg},
-    d.U_Odoo_Delivery_ID,
-    l.BaseEntry,
-    l.{OdooUdfs.SalesOrderLineId},
-    l.U_Odoo_Move_ID
-ORDER BY d.DocEntry
-";
+ORDER BY d.DocEntry, l.LineNum
+");
 
-        rs.DoQuery(query);
+        SapDeliveryDto? current = null;
 
         while (!rs.EoF)
         {
-            yield return new SapDeliveryDto
+            var docEntry = Convert.ToInt32(rs.Fields.Item("DocEntry").Value);
+
+            // New document — flush previous and start fresh
+            if (current == null || current.DocEntry != docEntry)
             {
-                DocEntry = Convert.ToInt32(rs.Fields.Item("DocEntry").Value),
-                DocNum = Convert.ToInt32(rs.Fields.Item("DocNum").Value),
-                CardCode = rs.Fields.Item("CardCode").Value.ToString()!,
-                DocDate = (DateTime)rs.Fields.Item("DocDate").Value,
+                if (current != null)
+                    yield return Finalise(current);
 
-                SapUpdateDate = (DateTime)rs.Fields.Item("UpdateDate").Value,
+                current = new SapDeliveryDto
+                {
+                    DocEntry      = docEntry,
+                    DocNum        = Convert.ToInt32(rs.Fields.Item("DocNum").Value),
+                    CardCode      = rs.Fields.Item("CardCode").Value.ToString()!,
+                    DocDate       = (DateTime)rs.Fields.Item("DocDate").Value,
+                    SapUpdateDate = (DateTime)rs.Fields.Item("UpdateDate").Value,
+                    IsCancelled   = rs.Fields.Item("CANCELED").Value?.ToString() == "Y",
 
-                IsCancelled =
-                    rs.Fields.Item("CANCELED").Value?.ToString() == "Y",
+                    OdooDeliveryId = rs.Fields.Item("OdooDeliveryId").Value?.ToString(),
+                    OdooStatus     = rs.Fields.Item("HdrStatus").Value?.ToString(),
+                    OdooSyncDir    = rs.Fields.Item("HdrSyncDir").Value?.ToString(),
+                    OdooErrorMsg   = rs.Fields.Item("HdrErrorMsg").Value?.ToString(),
+                    OdooLastSync   = TryGetDate(rs.Fields.Item("HdrLastSync").Value),
+                };
+            }
 
-                BaseOrderEntry =
-                    Convert.ToInt32(rs.Fields.Item("BaseEntry").Value),
+            current.Lines.Add(new SapDeliveryLineDto
+            {
+                LineNum     = Convert.ToInt32(rs.Fields.Item("LineNum").Value),
+                ItemCode    = rs.Fields.Item("ItemCode").Value?.ToString() ?? "",
+                Description = rs.Fields.Item("Description").Value?.ToString() ?? "",
+                Quantity    = Convert.ToDecimal(rs.Fields.Item("Quantity").Value),
+                LineTotal   = Convert.ToDecimal(rs.Fields.Item("LineTotal").Value),
+                GrossBuyPr  = Convert.ToDecimal(rs.Fields.Item("GrossBuyPr").Value),
+                BaseEntry   = Convert.ToInt32(rs.Fields.Item("BaseEntry").Value),
+                BaseLine    = Convert.ToInt32(rs.Fields.Item("BaseLine").Value),
 
-                DeliveredQuantity =
-                    Convert.ToDecimal(rs.Fields.Item("Qty").Value),
-
-                // 🔗 ODOO HEADER
-                OdooDeliveryId =
-                    rs.Fields.Item("OdooDeliveryId").Value?.ToString(),
-
-                OdooStatus =
-                    rs.Fields.Item("OdooStatus").Value?.ToString(),
-
-                OdooSyncDir =
-                    rs.Fields.Item("OdooSyncDir").Value?.ToString(),
-
-                OdooErrorMsg =
-                    rs.Fields.Item("OdooErrorMsg").Value?.ToString(),
-
-                OdooLastSync =
-                    TryGetDate(rs.Fields.Item("OdooLastSync").Value),
-
-                // 🔗 ODOO LINE
-                OdooMoveId =
-                    rs.Fields.Item("OdooMoveId").Value?.ToString(),
-
-                OdooSalesOrderLineId =
-                    rs.Fields.Item("OdooSalesOrderLineId").Value?.ToString()
-            };
+                OdooMoveId           = rs.Fields.Item("LineMoveId").Value?.ToString(),
+                OdooSalesOrderLineId = rs.Fields.Item("LineSoLineId").Value?.ToString(),
+                OdooStatus           = rs.Fields.Item("LineStatus").Value?.ToString(),
+                OdooSyncDir          = rs.Fields.Item("LineSyncDir").Value?.ToString(),
+                OdooErrorMsg         = rs.Fields.Item("LineErrorMsg").Value?.ToString(),
+                OdooLastSync         = TryGetDate(rs.Fields.Item("LineLastSync").Value),
+            });
 
             rs.MoveNext();
         }
+
+        // Flush the final delivery
+        if (current != null)
+            yield return Finalise(current);
     }
 
     // =====================================================
@@ -140,6 +134,20 @@ ORDER BY d.DocEntry
     {
         _logger.LogInformation("📦 Reading ALL SAP deliveries");
         return ReadRecentDeliveries(new DateTime(2000, 1, 1));
+    }
+
+    // =====================================================
+    // HELPERS
+    // =====================================================
+
+    /// <summary>
+    /// Computes convenience header fields from accumulated lines before yielding.
+    /// </summary>
+    private static SapDeliveryDto Finalise(SapDeliveryDto dto)
+    {
+        dto.BaseOrderEntry    = dto.Lines.FirstOrDefault()?.BaseEntry ?? 0;
+        dto.DeliveredQuantity = dto.Lines.Sum(l => l.Quantity);
+        return dto;
     }
 
     private static DateTime? TryGetDate(object? v)
