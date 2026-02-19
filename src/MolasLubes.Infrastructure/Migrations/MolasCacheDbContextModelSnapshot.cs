@@ -153,6 +153,80 @@ namespace MolasLubes.Infrastructure.Migrations
                     b.ToTable("CacheDeliveries", (string)null);
                 });
 
+            modelBuilder.Entity("MolasLubes.Domain.Entities.Cache.CacheDeliveryLine", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("BaseEntry")
+                        .HasColumnType("int");
+
+                    b.Property<int>("BaseLine")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<decimal>("GrossBuyPr")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("ItemCode")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<int>("LineNum")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("LineTotal")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("OdooErrorMsg")
+                        .HasMaxLength(255)
+                        .HasColumnType("nvarchar(255)");
+
+                    b.Property<DateTime?>("OdooLastSync")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("OdooMoveId")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("OdooSalesOrderLineId")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("OdooStatus")
+                        .HasMaxLength(10)
+                        .HasColumnType("nvarchar(10)");
+
+                    b.Property<string>("OdooSyncDir")
+                        .HasMaxLength(10)
+                        .HasColumnType("nvarchar(10)");
+
+                    b.Property<decimal>("Quantity")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<int>("SapDocEntry")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OdooMoveId");
+
+                    b.HasIndex("SapDocEntry");
+
+                    b.ToTable("CacheDeliveryLines", (string)null);
+                });
+
             modelBuilder.Entity("MolasLubes.Domain.Entities.Cache.CacheInvoice", b =>
                 {
                     b.Property<int>("SapDocEntry")
@@ -573,6 +647,17 @@ namespace MolasLubes.Infrastructure.Migrations
                     b.ToTable("CacheStockReservations", (string)null);
                 });
 
+            modelBuilder.Entity("MolasLubes.Domain.Entities.Cache.CacheDeliveryLine", b =>
+                {
+                    b.HasOne("MolasLubes.Domain.Entities.Cache.CacheDelivery", "Delivery")
+                        .WithMany("Lines")
+                        .HasForeignKey("SapDocEntry")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Delivery");
+                });
+
             modelBuilder.Entity("MolasLubes.Domain.Entities.Cache.CacheInvoiceLine", b =>
                 {
                     b.HasOne("MolasLubes.Domain.Entities.Cache.CacheInvoice", "Invoice")
@@ -594,6 +679,11 @@ namespace MolasLubes.Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("SalesOrder");
+                });
+
+            modelBuilder.Entity("MolasLubes.Domain.Entities.Cache.CacheDelivery", b =>
+                {
+                    b.Navigation("Lines");
                 });
 
             modelBuilder.Entity("MolasLubes.Domain.Entities.Cache.CacheInvoice", b =>
