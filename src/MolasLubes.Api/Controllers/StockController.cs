@@ -40,4 +40,37 @@ public class StockController : ControllerBase
         await _svc.ReleaseAsync(id);
         return Ok(new { Message = "Released", ReservationId = id });
     }
+
+    // GET /api/stock/diagnostics/3715
+    // Returns per-warehouse OnHandSap, AvailableCache, and all active reservations.
+    // Use this to find out why a reservation is failing before calling /repair.
+    [HttpGet("diagnostics/{itemCode}")]
+    public async Task<IActionResult> Diagnostics(string itemCode)
+    {
+        var result = await _svc.GetStockDiagnosticsAsync(itemCode.Trim());
+        return Ok(result);
+    }
+
+    // POST /api/stock/repair/3715
+    // Recomputes AvailableCache = Max(0, OnHandSap − activeReservations) for every
+    // warehouse row of the item WITHOUT touching SAP.
+    // Use when AvailableCache has drifted to 0 due to stuck/stale reservations
+    // and you cannot wait for the next full product sync.
+    [HttpPost("repair/{itemCode}")]
+    public async Task<IActionResult> RepairCache(string itemCode)
+    {
+        var rows = await _svc.RepairCacheAsync(itemCode.Trim());
+
+        return Ok(new
+        {
+            ItemCode = itemCode,
+            Repaired = rows.Select(r => new
+            {
+                Warehouse = r.Warehouse,
+                OnHandSap = r.OnHandSap,
+                ActiveReserved = r.ActiveReserved,
+                NewAvailableCache = r.NewAvailable
+            })
+        });
+    }
 }
