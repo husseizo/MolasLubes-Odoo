@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ============================================================ -->
+    <!-- DASHBOARD: Client action that opens channel kanban            -->
+    <!-- with stat cards at the top                                    -->
+    <!-- ============================================================ -->
+    <record id="icc_dashboard_action" model="ir.actions.act_window">
+        <field name="name">ICC Dashboard</field>
+        <field name="res_model">icc.channel</field>
+        <field name="view_mode">kanban,tree,form</field>
+        <field name="context">{'search_default_active': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Welcome to the Integration Control Centre
+            </p>
+            <p>
+                Create channels to receive webhook data from SAP B1 and
+                Neon. Monitor health, review event logs, and retry
+                failed integrations — all from this dashboard.
+            </p>
+        </field>
+    </record>
+
+    <!-- ============================================================ -->
+    <!-- DASHBOARD: Event throughput graph                             -->
+    <!-- ============================================================ -->
+    <record id="icc_dashboard_throughput_action" model="ir.actions.act_window">
+        <field name="name">Event Throughput</field>
+        <field name="res_model">icc.event.log</field>
+        <field name="view_mode">graph,pivot,tree</field>
+        <field name="context">{'search_default_today': 1}</field>
+    </record>
+
+</odoo>

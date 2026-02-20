@@ -1,0 +1,214 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ============================================================ -->
+    <!-- CHANNEL: TREE VIEW                                            -->
+    <!-- ============================================================ -->
+    <record id="icc_channel_view_tree" model="ir.ui.view">
+        <field name="name">icc.channel.tree</field>
+        <field name="model">icc.channel</field>
+        <field name="arch" type="xml">
+            <tree>
+                <field name="sequence" widget="handle"/>
+                <field name="name"/>
+                <field name="code"/>
+                <field name="endpoint" widget="url"/>
+                <field name="direction"/>
+                <field name="auth_method"/>
+                <field name="target_model"/>
+                <field name="event_count_24h"/>
+                <field name="error_count_24h"
+                       decoration-danger="error_count_24h > 0"/>
+                <field name="health_state" widget="badge"
+                       decoration-success="health_state == 'healthy'"
+                       decoration-warning="health_state == 'warning'"
+                       decoration-danger="health_state == 'error'"
+                       decoration-muted="health_state == 'idle'"/>
+                <field name="active" optional="hide"/>
+            </tree>
+        </field>
+    </record>
+
+    <!-- ============================================================ -->
+    <!-- CHANNEL: FORM VIEW                                            -->
+    <!-- ============================================================ -->
+    <record id="icc_channel_view_form" model="ir.ui.view">
+        <field name="name">icc.channel.form</field>
+        <field name="model">icc.channel</field>
+        <field name="arch" type="xml">
+            <form>
+                <header>
+                    <button name="action_generate_api_key"
+                            string="Generate API Key"
+                            type="object"
+                            class="btn-primary"
+                            groups="molas_icc.group_icc_manager"/>
+                    <button name="action_view_events"
+                            string="View Events"
+                            type="object"
+                            class="btn-secondary"/>
+                    <field name="health_state" widget="statusbar"
+                           statusbar_visible="idle,healthy,warning,error"/>
+                </header>
+                <sheet>
+                    <div class="oe_button_box" name="button_box">
+                        <button name="action_view_events"
+                                type="object"
+                                class="oe_stat_button"
+                                icon="fa-list">
+                            <div class="o_stat_info">
+                                <field name="event_count_24h" class="o_stat_value"/>
+                                <span class="o_stat_text">Events (24h)</span>
+                            </div>
+                        </button>
+                    </div>
+                    <widget name="web_ribbon" title="Archived"
+                            bg_color="text-bg-danger"
+                            invisible="active"/>
+                    <div class="oe_title">
+                        <h1><field name="name" placeholder="Channel Name"/></h1>
+                    </div>
+
+                    <group>
+                        <group string="Endpoint">
+                            <field name="code"/>
+                            <field name="endpoint" widget="url"/>
+                            <field name="direction"/>
+                            <field name="target_model"/>
+                            <field name="active"/>
+                        </group>
+                        <group string="Authentication">
+                            <field name="auth_method"/>
+                            <field name="api_key" password="True"
+                                   invisible="auth_method != 'api_key'"
+                                   groups="molas_icc.group_icc_manager"/>
+                            <field name="hmac_secret" password="True"
+                                   invisible="auth_method != 'hmac'"
+                                   groups="molas_icc.group_icc_manager"/>
+                        </group>
+                    </group>
+
+                    <group string="Statistics">
+                        <group>
+                            <field name="last_event_date"/>
+                            <field name="event_count_24h"/>
+                        </group>
+                        <group>
+                            <field name="error_count_24h"/>
+                        </group>
+                    </group>
+
+                    <field name="description" placeholder="Notes about this channel..."/>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- ============================================================ -->
+    <!-- CHANNEL: KANBAN VIEW (for dashboard-style overview)           -->
+    <!-- ============================================================ -->
+    <record id="icc_channel_view_kanban" model="ir.ui.view">
+        <field name="name">icc.channel.kanban</field>
+        <field name="model">icc.channel</field>
+        <field name="arch" type="xml">
+            <kanban class="o_kanban_dashboard">
+                <field name="name"/>
+                <field name="code"/>
+                <field name="health_state"/>
+                <field name="event_count_24h"/>
+                <field name="error_count_24h"/>
+                <field name="last_event_date"/>
+                <field name="direction"/>
+                <templates>
+                    <t t-name="kanban-box">
+                        <div t-attf-class="oe_kanban_card oe_kanban_global_click">
+                            <div class="o_kanban_card_header">
+                                <div class="o_kanban_card_header_title">
+                                    <strong><field name="name"/></strong>
+                                </div>
+                            </div>
+                            <div class="container o_kanban_card_content mt-2">
+                                <div class="row">
+                                    <div class="col-6">
+                                        <span class="text-muted">Events (24h)</span><br/>
+                                        <strong><field name="event_count_24h"/></strong>
+                                    </div>
+                                    <div class="col-6">
+                                        <span class="text-muted">Errors (24h)</span><br/>
+                                        <strong t-attf-class="#{record.error_count_24h.raw_value > 0 ? 'text-danger' : ''}">
+                                            <field name="error_count_24h"/>
+                                        </strong>
+                                    </div>
+                                </div>
+                                <div class="row mt-2">
+                                    <div class="col-12">
+                                        <span class="text-muted">Last event: </span>
+                                        <field name="last_event_date" widget="datetime"/>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="o_kanban_card_footer">
+                                <field name="health_state" widget="label_selection"
+                                       options="{'classes': {
+                                           'healthy': 'success',
+                                           'warning': 'warning',
+                                           'error': 'danger',
+                                           'idle': 'secondary'
+                                       }}"/>
+                            </div>
+                        </div>
+                    </t>
+                </templates>
+            </kanban>
+        </field>
+    </record>
+
+    <!-- ============================================================ -->
+    <!-- CHANNEL: SEARCH VIEW                                          -->
+    <!-- ============================================================ -->
+    <record id="icc_channel_view_search" model="ir.ui.view">
+        <field name="name">icc.channel.search</field>
+        <field name="model">icc.channel</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="name"/>
+                <field name="code"/>
+                <filter name="active" string="Active" domain="[('active','=',True)]"/>
+                <filter name="inactive" string="Archived" domain="[('active','=',False)]"/>
+                <separator/>
+                <filter name="inbound" string="Inbound" domain="[('direction','=','inbound')]"/>
+                <filter name="outbound" string="Outbound" domain="[('direction','=','outbound')]"/>
+                <separator/>
+                <filter name="errors" string="Has Errors"
+                        domain="[('error_count_24h', '>', 0)]"/>
+                <group expand="0" string="Group By">
+                    <filter name="group_direction" string="Direction"
+                            context="{'group_by': 'direction'}"/>
+                    <filter name="group_health" string="Health"
+                            context="{'group_by': 'health_state'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <!-- ============================================================ -->
+    <!-- CHANNEL: ACTION                                               -->
+    <!-- ============================================================ -->
+    <record id="icc_channel_action" model="ir.actions.act_window">
+        <field name="name">Integration Channels</field>
+        <field name="res_model">icc.channel</field>
+        <field name="view_mode">kanban,tree,form</field>
+        <field name="search_view_id" ref="icc_channel_view_search"/>
+        <field name="context">{'search_default_active': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Create your first integration channel
+            </p>
+            <p>
+                Each channel represents a webhook endpoint that external
+                systems (SAP, Neon) can POST data to.
+            </p>
+        </field>
+    </record>
+
+</odoo>

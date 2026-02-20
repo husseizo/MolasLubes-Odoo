@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+
+    <!-- ============================================================ -->
+    <!-- PRE-SEEDED CHANNELS                                           -->
+    <!-- These match the OdooApiClient endpoints in the .NET middleware -->
+    <!-- ============================================================ -->
+
+    <record id="channel_invoice" model="icc.channel">
+        <field name="name">Invoice Sync</field>
+        <field name="code">invoice</field>
+        <field name="direction">inbound</field>
+        <field name="auth_method">api_key</field>
+        <field name="target_model">account.move</field>
+        <field name="description">Receives invoice data pushed from SAP B1 via Neon.
+Maps to account.move (out_invoice). Includes header + line items.
+Source: NeonInvoice / NeonInvoiceLine entities.</field>
+        <field name="sequence">10</field>
+    </record>
+
+    <record id="channel_delivery" model="icc.channel">
+        <field name="name">Delivery Sync</field>
+        <field name="code">delivery</field>
+        <field name="direction">inbound</field>
+        <field name="auth_method">api_key</field>
+        <field name="target_model">stock.picking</field>
+        <field name="description">Receives delivery/picking data pushed from SAP B1 via Neon.
+Maps to stock.picking (outgoing) + stock.move lines.
+Source: NeonDelivery / NeonDeliveryLine entities.</field>
+        <field name="sequence">20</field>
+    </record>
+
+    <record id="channel_payment" model="icc.channel">
+        <field name="name">Payment Sync</field>
+        <field name="code">payment</field>
+        <field name="direction">inbound</field>
+        <field name="auth_method">api_key</field>
+        <field name="target_model">account.payment</field>
+        <field name="description">Receives incoming payment data pushed from SAP B1 via Neon.
+Maps to account.payment (inbound / customer).
+Source: NeonPayment entity.</field>
+        <field name="sequence">30</field>
+    </record>
+
+    <record id="channel_customer" model="icc.channel">
+        <field name="name">Customer Sync</field>
+        <field name="code">customer</field>
+        <field name="direction">inbound</field>
+        <field name="auth_method">api_key</field>
+        <field name="target_model">res.partner</field>
+        <field name="description">Receives customer/business partner data from SAP B1 via Neon.
+Maps to res.partner (customer_rank = 1).
+Source: NeonCustomer entity.</field>
+        <field name="sequence">40</field>
+    </record>
+
+    <record id="channel_product" model="icc.channel">
+        <field name="name">Product Sync</field>
+        <field name="code">product</field>
+        <field name="direction">inbound</field>
+        <field name="auth_method">api_key</field>
+        <field name="target_model">product.product</field>
+        <field name="description">Receives product/item master data from SAP B1 via Neon.
+Maps to product.product (default_code = ItemCode).
+Source: NeonProduct entity.</field>
+        <field name="sequence">50</field>
+    </record>
+
+    <record id="channel_sales_order" model="icc.channel">
+        <field name="name">Sales Order Sync</field>
+        <field name="code">sales_order</field>
+        <field name="direction">bidirectional</field>
+        <field name="auth_method">api_key</field>
+        <field name="target_model">sale.order</field>
+        <field name="description">Bidirectional sales order sync.
+Inbound: SAP -> Odoo (order confirmations, status updates).
+Outbound: Odoo -> SAP (new orders created in Odoo).
+Source: NeonSalesOrder / NeonSalesOrderLine entities.</field>
+        <field name="sequence">60</field>
+    </record>
+
+</odoo>

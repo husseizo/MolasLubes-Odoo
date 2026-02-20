@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ============================================================ -->
+    <!-- MODULE CATEGORY                                               -->
+    <!-- ============================================================ -->
+    <record id="module_category_icc" model="ir.module.category">
+        <field name="name">Integration Control Centre</field>
+        <field name="sequence">50</field>
+    </record>
+
+    <!-- ============================================================ -->
+    <!-- GROUPS                                                        -->
+    <!-- ============================================================ -->
+    <record id="group_icc_viewer" model="res.groups">
+        <field name="name">ICC Viewer</field>
+        <field name="category_id" ref="module_category_icc"/>
+        <field name="comment">Can view channels, event logs, and dashboard. Read-only.</field>
+    </record>
+
+    <record id="group_icc_operator" model="res.groups">
+        <field name="name">ICC Operator</field>
+        <field name="category_id" ref="module_category_icc"/>
+        <field name="implied_ids" eval="[(4, ref('group_icc_viewer'))]"/>
+        <field name="comment">Can retry failed events and toggle channels.</field>
+    </record>
+
+    <record id="group_icc_manager" model="res.groups">
+        <field name="name">ICC Manager</field>
+        <field name="category_id" ref="module_category_icc"/>
+        <field name="implied_ids" eval="[(4, ref('group_icc_operator'))]"/>
+        <field name="comment">Full access: create channels, manage API keys, purge logs.</field>
+    </record>
+
+</odoo>

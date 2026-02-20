@@ -1,0 +1,43 @@
+<section class="oe_container">
+    <div class="oe_row oe_spaced">
+        <h2 class="oe_slogan">Integration Control Centre (ICC)</h2>
+        <h3 class="oe_slogan">Central hub for SAP B1 / Neon webhook integrations</h3>
+
+        <div class="oe_span12">
+            <h4>Key Features</h4>
+            <ul>
+                <li><strong>Webhook Endpoints</strong> — Receive JSON payloads from SAP B1 / Neon middleware via channel-specific URLs</li>
+                <li><strong>Channel Management</strong> — Enable/disable endpoints per document type with per-channel API key authentication</li>
+                <li><strong>Event Audit Trail</strong> — Full log of every inbound and outbound event with payload, timing, and status</li>
+                <li><strong>Health Dashboard</strong> — Kanban overview with health indicators and throughput graphs</li>
+                <li><strong>Retry Failed Events</strong> — One-click retry for failed webhook events directly from the event log</li>
+                <li><strong>Fallback Polling</strong> — Safety-net cron that catches records missed by webhooks</li>
+                <li><strong>Log Cleanup</strong> — Configurable retention period with automatic purge cron</li>
+            </ul>
+        </div>
+
+        <div class="oe_span12">
+            <h4>Supported Channels</h4>
+            <ul>
+                <li>Invoice Sync (account.move)</li>
+                <li>Delivery Sync (stock.picking)</li>
+                <li>Payment Sync (account.payment)</li>
+                <li>Customer Sync (res.partner)</li>
+                <li>Product Sync (product.product)</li>
+                <li>Sales Order Sync (sale.order)</li>
+            </ul>
+        </div>
+
+        <div class="oe_span12">
+            <h4>Architecture</h4>
+            <pre>
+SAP B1  -->  .NET Middleware (Quartz)  -->  Neon DB  -->  POST /icc/webhook/{channel}
+                                                                    |
+                                                              ICC Controller
+                                                         authenticate / log / process
+                                                                    |
+                                                              Odoo Records
+            </pre>
+        </div>
+    </div>
+</section>

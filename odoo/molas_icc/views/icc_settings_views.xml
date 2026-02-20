@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ============================================================ -->
+    <!-- SETTINGS: Inherit res.config.settings form                    -->
+    <!-- ============================================================ -->
+    <record id="icc_res_config_settings_view_form" model="ir.ui.view">
+        <field name="name">res.config.settings.view.form.icc</field>
+        <field name="model">res.config.settings</field>
+        <field name="inherit_id" ref="base.res_config_settings_view_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//form" position="inside">
+                <app data-string="Integration Control Centre"
+                     string="Integration Control Centre"
+                     groups="molas_icc.group_icc_manager">
+
+                    <!-- Global -->
+                    <block title="Global Settings">
+                        <setting string="Enable Webhooks"
+                                 help="Master switch for all inbound webhook endpoints.">
+                            <field name="icc_webhooks_enabled"/>
+                        </setting>
+                        <setting string="Default Authentication"
+                                 help="Default auth method for new channels.">
+                            <field name="icc_default_auth_method"/>
+                        </setting>
+                    </block>
+
+                    <!-- Logging -->
+                    <block title="Event Logging">
+                        <setting string="Log Retention"
+                                 help="Automatically purge event logs older than this.">
+                            <div class="content-group">
+                                <div class="row mt8">
+                                    <label for="icc_log_retention_days"
+                                           class="col-lg-4"/>
+                                    <field name="icc_log_retention_days"
+                                           class="col-lg-2"/>
+                                    <span class="col-lg-2"> days</span>
+                                </div>
+                            </div>
+                        </setting>
+                    </block>
+
+                    <!-- Fallback Polling -->
+                    <block title="Fallback Polling (Safety Net)">
+                        <setting string="Enable Fallback Cron"
+                                 help="Polls Neon for records that webhooks may have missed.">
+                            <field name="icc_fallback_cron_enabled"/>
+                        </setting>
+                        <setting string="Polling Interval"
+                                 help="How often the fallback cron runs."
+                                 invisible="not icc_fallback_cron_enabled">
+                            <div class="content-group">
+                                <div class="row mt8">
+                                    <label for="icc_fallback_interval_minutes"
+                                           class="col-lg-4"/>
+                                    <field name="icc_fallback_interval_minutes"
+                                           class="col-lg-2"/>
+                                    <span class="col-lg-2"> minutes</span>
+                                </div>
+                            </div>
+                        </setting>
+                    </block>
+
+                    <!-- Neon Connection -->
+                    <block title="Neon Database">
+                        <setting string="Neon DSN"
+                                 help="PostgreSQL connection string for the Neon intermediary DB.">
+                            <field name="icc_neon_dsn" password="True"/>
+                        </setting>
+                    </block>
+
+                </app>
+            </xpath>
+        </field>
+    </record>
+
+</odoo>

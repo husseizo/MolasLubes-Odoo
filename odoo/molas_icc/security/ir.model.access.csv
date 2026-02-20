@@ -1,0 +1,7 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_icc_channel_viewer,icc.channel.viewer,model_icc_channel,group_icc_viewer,1,0,0,0
+access_icc_channel_operator,icc.channel.operator,model_icc_channel,group_icc_operator,1,1,0,0
+access_icc_channel_manager,icc.channel.manager,model_icc_channel,group_icc_manager,1,1,1,1
+access_icc_event_log_viewer,icc.event.log.viewer,model_icc_event_log,group_icc_viewer,1,0,0,0
+access_icc_event_log_operator,icc.event.log.operator,model_icc_event_log,group_icc_operator,1,1,0,0
+access_icc_event_log_manager,icc.event.log.manager,model_icc_event_log,group_icc_manager,1,1,1,1

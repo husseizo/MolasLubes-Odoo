@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+
+    <!-- ============================================================ -->
+    <!-- FALLBACK POLLING CRON (Safety Net)                            -->
+    <!-- Catches records the webhooks may have missed due to           -->
+    <!-- network issues or downtime.                                   -->
+    <!-- ============================================================ -->
+    <record id="ir_cron_icc_fallback_poll" model="ir.cron">
+        <field name="name">ICC: Fallback Neon Poll</field>
+        <field name="model_id" ref="model_icc_channel"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_fallback_poll()</field>
+        <field name="interval_number">30</field>
+        <field name="interval_type">minutes</field>
+        <field name="numbercall">-1</field>
+        <field name="active" eval="True"/>
+        <field name="doall" eval="False"/>
+    </record>
+
+    <!-- ============================================================ -->
+    <!-- LOG CLEANUP CRON                                              -->
+    <!-- Purges event logs older than the configured retention period. -->
+    <!-- ============================================================ -->
+    <record id="ir_cron_icc_log_cleanup" model="ir.cron">
+        <field name="name">ICC: Purge Old Event Logs</field>
+        <field name="model_id" ref="model_icc_event_log"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_purge_old_logs()</field>
+        <field name="interval_number">1</field>
+        <field name="interval_type">days</field>
+        <field name="numbercall">-1</field>
+        <field name="active" eval="True"/>
+        <field name="doall" eval="False"/>
+    </record>
+
+</odoo>

@@ -1,0 +1,194 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ============================================================ -->
+    <!-- EVENT LOG: TREE VIEW                                          -->
+    <!-- ============================================================ -->
+    <record id="icc_event_log_view_tree" model="ir.ui.view">
+        <field name="name">icc.event.log.tree</field>
+        <field name="model">icc.event.log</field>
+        <field name="arch" type="xml">
+            <tree decoration-danger="state == 'error'"
+                  decoration-muted="state == 'skipped'"
+                  default_order="create_date desc">
+                <field name="create_date" string="Timestamp"/>
+                <field name="channel_code"/>
+                <field name="direction"/>
+                <field name="event_type"/>
+                <field name="source_system"/>
+                <field name="source_ref"/>
+                <field name="odoo_model"/>
+                <field name="odoo_ref"/>
+                <field name="state" widget="badge"
+                       decoration-success="state == 'success'"
+                       decoration-danger="state == 'error'"
+                       decoration-warning="state == 'skipped'"/>
+                <field name="processing_ms" string="ms"/>
+                <field name="retry_count" optional="show"/>
+                <field name="error_message" optional="hide"/>
+            </tree>
+        </field>
+    </record>
+
+    <!-- ============================================================ -->
+    <!-- EVENT LOG: FORM VIEW                                          -->
+    <!-- ============================================================ -->
+    <record id="icc_event_log_view_form" model="ir.ui.view">
+        <field name="name">icc.event.log.form</field>
+        <field name="model">icc.event.log</field>
+        <field name="arch" type="xml">
+            <form create="false">
+                <header>
+                    <button name="action_retry"
+                            string="Retry"
+                            type="object"
+                            class="btn-primary"
+                            invisible="state != 'error'"
+                            groups="molas_icc.group_icc_operator"/>
+                </header>
+                <sheet>
+                    <group>
+                        <group string="Event">
+                            <field name="channel_id"/>
+                            <field name="direction"/>
+                            <field name="event_type"/>
+                            <field name="state"/>
+                            <field name="create_date" string="Received At"/>
+                            <field name="processing_ms"/>
+                        </group>
+                        <group string="References">
+                            <field name="source_system"/>
+                            <field name="source_ref"/>
+                            <field name="odoo_model"/>
+                            <field name="odoo_ref"/>
+                            <field name="http_status"/>
+                        </group>
+                    </group>
+
+                    <group string="Retry Info"
+                           invisible="retry_count == 0">
+                        <field name="retry_count"/>
+                        <field name="retried_at"/>
+                        <field name="parent_event_id"/>
+                    </group>
+
+                    <group string="Error" invisible="state != 'error'">
+                        <field name="error_message" nolabel="1"
+                               colspan="2" widget="text"/>
+                    </group>
+
+                    <group string="Payload">
+                        <field name="payload" nolabel="1"
+                               colspan="2" widget="ace"
+                               options="{'mode': 'json'}"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- ============================================================ -->
+    <!-- EVENT LOG: SEARCH VIEW                                        -->
+    <!-- ============================================================ -->
+    <record id="icc_event_log_view_search" model="ir.ui.view">
+        <field name="name">icc.event.log.search</field>
+        <field name="model">icc.event.log</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="event_type"/>
+                <field name="source_ref"/>
+                <field name="odoo_ref"/>
+                <field name="channel_id"/>
+                <field name="error_message"/>
+                <separator/>
+                <filter name="inbound" string="Inbound"
+                        domain="[('direction','=','in')]"/>
+                <filter name="outbound" string="Outbound"
+                        domain="[('direction','=','out')]"/>
+                <separator/>
+                <filter name="success" string="Success"
+                        domain="[('state','=','success')]"/>
+                <filter name="errors" string="Errors"
+                        domain="[('state','=','error')]"/>
+                <filter name="skipped" string="Skipped"
+                        domain="[('state','=','skipped')]"/>
+                <separator/>
+                <filter name="today" string="Today"
+                        domain="[('create_date','>=', (context_today()).strftime('%Y-%m-%d'))]"/>
+                <filter name="last_hour" string="Last Hour"
+                        domain="[('create_date','>=', (context_today() - datetime.timedelta(hours=1)).strftime('%Y-%m-%d %H:%M:%S'))]"/>
+                <group expand="0" string="Group By">
+                    <filter name="group_channel" string="Channel"
+                            context="{'group_by': 'channel_id'}"/>
+                    <filter name="group_state" string="State"
+                            context="{'group_by': 'state'}"/>
+                    <filter name="group_event_type" string="Event Type"
+                            context="{'group_by': 'event_type'}"/>
+                    <filter name="group_date" string="Date"
+                            context="{'group_by': 'create_date:day'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <!-- ============================================================ -->
+    <!-- EVENT LOG: GRAPH VIEW                                         -->
+    <!-- ============================================================ -->
+    <record id="icc_event_log_view_graph" model="ir.ui.view">
+        <field name="name">icc.event.log.graph</field>
+        <field name="model">icc.event.log</field>
+        <field name="arch" type="xml">
+            <graph type="bar">
+                <field name="create_date" interval="hour"/>
+                <field name="state" type="col"/>
+            </graph>
+        </field>
+    </record>
+
+    <!-- ============================================================ -->
+    <!-- EVENT LOG: PIVOT VIEW                                         -->
+    <!-- ============================================================ -->
+    <record id="icc_event_log_view_pivot" model="ir.ui.view">
+        <field name="name">icc.event.log.pivot</field>
+        <field name="model">icc.event.log</field>
+        <field name="arch" type="xml">
+            <pivot>
+                <field name="channel_id" type="row"/>
+                <field name="state" type="col"/>
+                <field name="processing_ms" type="measure"/>
+            </pivot>
+        </field>
+    </record>
+
+    <!-- ============================================================ -->
+    <!-- EVENT LOG: ACTION                                             -->
+    <!-- ============================================================ -->
+    <record id="icc_event_log_action" model="ir.actions.act_window">
+        <field name="name">Event Log</field>
+        <field name="res_model">icc.event.log</field>
+        <field name="view_mode">tree,form,graph,pivot</field>
+        <field name="search_view_id" ref="icc_event_log_view_search"/>
+        <field name="context">{'search_default_today': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                No events recorded yet
+            </p>
+            <p>
+                Events will appear here once external systems start
+                sending data to the ICC webhook endpoints.
+            </p>
+        </field>
+    </record>
+
+    <!-- ============================================================ -->
+    <!-- EVENT LOG: ERRORS-ONLY ACTION                                 -->
+    <!-- ============================================================ -->
+    <record id="icc_event_log_errors_action" model="ir.actions.act_window">
+        <field name="name">Failed Events</field>
+        <field name="res_model">icc.event.log</field>
+        <field name="view_mode">tree,form</field>
+        <field name="domain">[('state', '=', 'error')]</field>
+        <field name="context">{'search_default_today': 1}</field>
+    </record>
+
+</odoo>

@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ============================================================ -->
+    <!-- TOP-LEVEL MENU                                                -->
+    <!-- ============================================================ -->
+    <menuitem id="icc_menu_root"
+              name="Integration Control Centre"
+              web_icon="molas_icc,static/description/icon.png"
+              sequence="90"
+              groups="molas_icc.group_icc_viewer"/>
+
+    <!-- ============================================================ -->
+    <!-- DASHBOARD                                                     -->
+    <!-- ============================================================ -->
+    <menuitem id="icc_menu_dashboard"
+              name="Dashboard"
+              parent="icc_menu_root"
+              action="icc_dashboard_action"
+              sequence="10"/>
+
+    <!-- ============================================================ -->
+    <!-- CHANNELS                                                      -->
+    <!-- ============================================================ -->
+    <menuitem id="icc_menu_channels"
+              name="Channels"
+              parent="icc_menu_root"
+              action="icc_channel_action"
+              sequence="20"/>
+
+    <!-- ============================================================ -->
+    <!-- EVENT LOG                                                     -->
+    <!-- ============================================================ -->
+    <menuitem id="icc_menu_events"
+              name="Event Log"
+              parent="icc_menu_root"
+              sequence="30"/>
+
+    <menuitem id="icc_menu_events_all"
+              name="All Events"
+              parent="icc_menu_events"
+              action="icc_event_log_action"
+              sequence="10"/>
+
+    <menuitem id="icc_menu_events_errors"
+              name="Failed Events"
+              parent="icc_menu_events"
+              action="icc_event_log_errors_action"
+              sequence="20"/>
+
+    <menuitem id="icc_menu_events_throughput"
+              name="Throughput"
+              parent="icc_menu_events"
+              action="icc_dashboard_throughput_action"
+              sequence="30"/>
+
+    <!-- ============================================================ -->
+    <!-- CONFIGURATION                                                 -->
+    <!-- ============================================================ -->
+    <menuitem id="icc_menu_config"
+              name="Configuration"
+              parent="icc_menu_root"
+              sequence="90"
+              groups="molas_icc.group_icc_manager"/>
+
+    <menuitem id="icc_menu_settings"
+              name="Settings"
+              parent="icc_menu_config"
+              action="base.action_general_configuration"
+              sequence="10"/>
+
+</odoo>
