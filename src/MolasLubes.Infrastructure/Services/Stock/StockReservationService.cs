@@ -33,6 +33,11 @@ public class StockReservationService
         if (qty <= 0)
             throw new ArgumentException("Quantity must be greater than zero", nameof(qty));
 
+        // Normalize incoming warehouse code (e.g. "WH" → "MainWHSE") so the
+        // preferred-warehouse lookup finds the correct row in CacheProducts.
+        if (!string.IsNullOrWhiteSpace(warehouseCode))
+            warehouseCode = NormalizeWarehouse(warehouseCode);
+
         const int maxRetries = 3;
 
         _logger.LogInformation(
@@ -236,12 +241,14 @@ public class StockReservationService
         if (string.IsNullOrWhiteSpace(warehouseCode))
             throw new ArgumentException("WarehouseCode is required");
 
-        warehouseCode = warehouseCode.Trim().ToUpperInvariant();
+        var trimmed = warehouseCode.Trim();
 
-        return warehouseCode switch
+        // Compare in upper-case but return original casing for the pass-through so
+        // that DB lookups work correctly regardless of the column collation.
+        return trimmed.ToUpperInvariant() switch
         {
             "WH" => "MainWHSE",     // 🔥 MAP API → REAL SAP CODE
-            _ => warehouseCode      // pass-through if already valid
+            _ => trimmed            // pass-through with original casing preserved
         };
     }
 }
