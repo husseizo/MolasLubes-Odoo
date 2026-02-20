@@ -1,0 +1,60 @@
+Document Type,Entity,Neon Table,Neon Field,C# Type,DB Type / Constraints,PK/FK,SAP Source,Odoo Target Field,Notes
+Invoice Header,NeonInvoice,NeonInvoices,SapDocEntry,int,INT,PK,OINV.DocEntry,,Primary key - SAP document entry
+Invoice Header,NeonInvoice,NeonInvoices,DocNum,int,INT,,OINV.DocNum,,SAP document number (user-visible)
+Invoice Header,NeonInvoice,NeonInvoices,CustomerCode,string,TEXT (required),,OINV.CardCode,partner_id (via mapping),Customer/Business Partner code
+Invoice Header,NeonInvoice,NeonInvoices,CardName,string?,VARCHAR(100),,OINV.CardName,partner_id.name,Customer display name
+Invoice Header,NeonInvoice,NeonInvoices,InvoiceDate,DateTime,TIMESTAMP UTC (required),,OINV.DocDate,invoice_date,Invoice date
+Invoice Header,NeonInvoice,NeonInvoices,DocTotal,decimal,DECIMAL(18,2),,OINV.DocTotal,amount_total,Total invoice amount
+Invoice Header,NeonInvoice,NeonInvoices,VatSum,decimal,DECIMAL(18,2),,OINV.VatSum,amount_tax,VAT / tax amount
+Invoice Header,NeonInvoice,NeonInvoices,PaidAmount,decimal,DECIMAL(18,2),,OINV.PaidToDate,amount_residual (derived),Amount already paid
+Invoice Header,NeonInvoice,NeonInvoices,IsPaid,bool,BOOLEAN,,Derived,payment_state (paid/not_paid),Whether invoice is fully paid
+Invoice Header,NeonInvoice,NeonInvoices,OdooInvoiceId,string?,VARCHAR(20),,U_Odoo_Invoice_ID,id,Odoo invoice record ID (account.move)
+Invoice Header,NeonInvoice,NeonInvoices,OdooStatus,string?,VARCHAR(10),,U_Odoo_Status,,Sync status: PENDING / SYNCED / ERROR
+Invoice Header,NeonInvoice,NeonInvoices,OdooErrorMsg,string?,VARCHAR(255),,U_Odoo_ErrorMsg,,Last sync error message
+Invoice Header,NeonInvoice,NeonInvoices,OdooLastSync,DateTime?,TIMESTAMP UTC,,U_Odoo_LastSync,,Timestamp of last Odoo sync attempt
+Invoice Header,NeonInvoice,NeonInvoices,OdooSyncDir,string?,VARCHAR(10),,U_Odoo_SyncDir,,Sync direction: TO_SAP / FROM_SAP / BIDIR
+Invoice Header,NeonInvoice,NeonInvoices,SyncedAt,DateTime,TIMESTAMP UTC (required),,System,,When record was synced to Neon from cache
+Invoice Line,NeonInvoiceLine,NeonInvoiceLines,Id,long,BIGINT (auto),PK,Auto,,Auto-generated surrogate key
+Invoice Line,NeonInvoiceLine,NeonInvoiceLines,InvoiceEntry,int,INT,FK → NeonInvoices.SapDocEntry,INV1.DocEntry,,FK to parent invoice (cascade delete)
+Invoice Line,NeonInvoiceLine,NeonInvoiceLines,ItemCode,string,VARCHAR(50) (required),,INV1.ItemCode,product_id (via mapping),Product item code
+Invoice Line,NeonInvoiceLine,NeonInvoiceLines,Description,string,VARCHAR(200) (required),,INV1.Dscription,name,Line description / product name
+Invoice Line,NeonInvoiceLine,NeonInvoiceLines,Quantity,decimal,DECIMAL(18,4),,INV1.Quantity,quantity,Item quantity
+Invoice Line,NeonInvoiceLine,NeonInvoiceLines,LineTotal,decimal,DECIMAL(18,2),,INV1.LineTotal,price_subtotal,Line total amount
+Invoice Line,NeonInvoiceLine,NeonInvoiceLines,GrossBuyPr,decimal,DECIMAL(18,2),,INV1.GrossBuyPr,,Gross buying price (cost)
+Invoice Line,NeonInvoiceLine,NeonInvoiceLines,BaseEntry,int,INT,,INV1.BaseEntry,,SAP delivery DocEntry this line was copied from
+Invoice Line,NeonInvoiceLine,NeonInvoiceLines,BaseLine,int,INT,,INV1.BaseLine,,SAP delivery line number this line was copied from
+Invoice Line,NeonInvoiceLine,NeonInvoiceLines,OdooInvoiceLineId,string?,VARCHAR(20),,U_Odoo_InvLine_ID,id,Odoo invoice line record ID (account.move.line)
+Invoice Line,NeonInvoiceLine,NeonInvoiceLines,OdooStatus,string?,VARCHAR(10),,U_Odoo_Status,,Sync status: PENDING / SYNCED / ERROR
+Invoice Line,NeonInvoiceLine,NeonInvoiceLines,OdooSyncDir,string?,VARCHAR(10),,U_Odoo_SyncDir,,Sync direction: TO_SAP / FROM_SAP / BIDIR
+Invoice Line,NeonInvoiceLine,NeonInvoiceLines,OdooErrorMsg,string?,VARCHAR(255),,U_Odoo_ErrorMsg,,Last sync error message
+Invoice Line,NeonInvoiceLine,NeonInvoiceLines,OdooLastSync,DateTime?,TIMESTAMP UTC,,U_Odoo_LastSync,,Timestamp of last Odoo sync attempt
+Delivery Header,NeonDelivery,NeonDeliveries,SapDocEntry,int,INT,PK,ODLN.DocEntry,,Primary key - SAP document entry
+Delivery Header,NeonDelivery,NeonDeliveries,SapDocNum,int,INT,,ODLN.DocNum,,SAP document number (user-visible)
+Delivery Header,NeonDelivery,NeonDeliveries,CardCode,string,TEXT (required),,ODLN.CardCode,partner_id (via mapping),Customer/Business Partner code
+Delivery Header,NeonDelivery,NeonDeliveries,DeliveryDate,DateTime,TIMESTAMP UTC (required),,ODLN.DocDate,scheduled_date / date_done,Delivery date
+Delivery Header,NeonDelivery,NeonDeliveries,SalesOrderEntry,int,INT,,ODLN custom,,Related sales order DocEntry
+Delivery Header,NeonDelivery,NeonDeliveries,BaseOrderEntry,int?,INT (nullable),,ODLN.BaseEntry,origin (via SO mapping),Base sales order reference
+Delivery Header,NeonDelivery,NeonDeliveries,DeliveredQty,decimal,DECIMAL,,Derived,qty_done (sum of lines),Total delivered quantity
+Delivery Header,NeonDelivery,NeonDeliveries,IsCancelled,bool,BOOLEAN,,ODLN.Cancelled,state (cancel),Whether delivery is cancelled
+Delivery Header,NeonDelivery,NeonDeliveries,OdooDeliveryId,string?,VARCHAR(20),,U_Odoo_Delivery_ID,id,Odoo delivery/picking record ID (stock.picking)
+Delivery Header,NeonDelivery,NeonDeliveries,OdooStatus,string?,VARCHAR(10),,U_Odoo_Status,,Sync status: PENDING / SYNCED / ERROR
+Delivery Header,NeonDelivery,NeonDeliveries,OdooErrorMsg,string?,VARCHAR(255),,U_Odoo_ErrorMsg,,Last sync error message
+Delivery Header,NeonDelivery,NeonDeliveries,OdooLastSync,DateTime?,TIMESTAMP UTC,,U_Odoo_LastSync,,Timestamp of last Odoo sync attempt
+Delivery Header,NeonDelivery,NeonDeliveries,OdooSyncDir,string?,VARCHAR(10),,U_Odoo_SyncDir,,Sync direction: TO_SAP / FROM_SAP / BIDIR
+Delivery Header,NeonDelivery,NeonDeliveries,SyncedAt,DateTime,TIMESTAMP UTC (required),,System,,When record was synced to Neon from cache
+Delivery Line,NeonDeliveryLine,NeonDeliveryLines,Id,long,BIGINT (auto),PK,Auto,,Auto-generated surrogate key
+Delivery Line,NeonDeliveryLine,NeonDeliveryLines,DeliveryEntry,int,INT,FK → NeonDeliveries.SapDocEntry,DLN1.DocEntry,,FK to parent delivery (cascade delete)
+Delivery Line,NeonDeliveryLine,NeonDeliveryLines,LineNum,int,INT,,DLN1.LineNum,,SAP line position within delivery
+Delivery Line,NeonDeliveryLine,NeonDeliveryLines,ItemCode,string,VARCHAR(50) (required),,DLN1.ItemCode,product_id (via mapping),Product item code
+Delivery Line,NeonDeliveryLine,NeonDeliveryLines,Description,string,VARCHAR(200) (required),,DLN1.Dscription,description_picking,Line description / product name
+Delivery Line,NeonDeliveryLine,NeonDeliveryLines,Quantity,decimal,DECIMAL(18,4),,DLN1.Quantity,quantity / qty_done,Item quantity
+Delivery Line,NeonDeliveryLine,NeonDeliveryLines,LineTotal,decimal,DECIMAL(18,2),,DLN1.LineTotal,,Line total amount
+Delivery Line,NeonDeliveryLine,NeonDeliveryLines,GrossBuyPr,decimal,DECIMAL(18,2),,DLN1.GrossBuyPr,,Gross buying price (cost)
+Delivery Line,NeonDeliveryLine,NeonDeliveryLines,BaseEntry,int,INT,,DLN1.BaseEntry (ORDR.DocEntry),,SAP sales order DocEntry this line originated from
+Delivery Line,NeonDeliveryLine,NeonDeliveryLines,BaseLine,int,INT,,DLN1.BaseLine,,SAP sales order line number this line originated from
+Delivery Line,NeonDeliveryLine,NeonDeliveryLines,OdooMoveId,string?,VARCHAR(20),,U_Odoo_Move_ID,id,Odoo stock move record ID (stock.move)
+Delivery Line,NeonDeliveryLine,NeonDeliveryLines,OdooSalesOrderLineId,string?,VARCHAR(20),,U_Odoo_SOLine_ID,sale_line_id,Odoo SO line this move originated from
+Delivery Line,NeonDeliveryLine,NeonDeliveryLines,OdooStatus,string?,VARCHAR(10),,U_Odoo_Status,,Sync status: PENDING / SYNCED / ERROR
+Delivery Line,NeonDeliveryLine,NeonDeliveryLines,OdooSyncDir,string?,VARCHAR(10),,U_Odoo_SyncDir,,Sync direction: TO_SAP / FROM_SAP / BIDIR
+Delivery Line,NeonDeliveryLine,NeonDeliveryLines,OdooErrorMsg,string?,VARCHAR(255),,U_Odoo_ErrorMsg,,Last sync error message
+Delivery Line,NeonDeliveryLine,NeonDeliveryLines,OdooLastSync,DateTime?,TIMESTAMP UTC,,U_Odoo_LastSync,,Timestamp of last Odoo sync attempt
