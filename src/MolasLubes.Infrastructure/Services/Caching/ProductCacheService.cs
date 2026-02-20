@@ -89,7 +89,17 @@ public class ProductCacheService
                 cache.ItemName = p.ItemName;
 
                 cache.OnHandSap = p.OnHand;
-                cache.AvailableCache = p.OnHand;
+
+                // Subtract active (uncommitted, unreleased) reservations so a sync
+                // does not reset AvailableCache back above what has already been reserved.
+                var reservedQty = await _db.CacheStockReservations
+                    .Where(r => r.ItemCode == p.ItemCode &&
+                                r.WarehouseCode == p.WarehouseCode &&
+                                r.ReleasedAt == null &&
+                                !r.IsCommitted)
+                    .SumAsync(r => r.Quantity);
+
+                cache.AvailableCache = Math.Max(0m, p.OnHand - reservedQty);
                 cache.IsActive = true;
 
                 cache.Barcode = p.Barcode;
