@@ -49,15 +49,24 @@ public class ProductNeonSyncService
             lastSync = lastSync.AsUtc(); // ✅ CRITICAL
 
             // -------------------------------------------------
-            // 2️⃣ IN-STOCK DELTA → UPSERT INTO NEON
-            //    Only products with AvailableCache > 0 are pushed
-            //    so Neon/Odoo never receives items that cannot be ordered.
+            // 2️⃣ HYBRID DELTA → UPSERT ALL CHANGED ACTIVE ITEMS
+            //
+            //    • ALL active items that changed since lastSync are
+            //      pushed — regardless of AvailableCache value.
+            //    • IsActive in Neon is DERIVED from stock level:
+            //        IsActive = AvailableCache > 0
+            //      so Odoo/Neon only shows orderable items, but the
+            //      row is always present with an accurate stock snapshot.
+            //    • "Healing" is automatic: when SAP replenishes stock,
+            //      the next delta flips IsActive back to true with no
+            //      separate sweep needed.
+            //    • Stale zero-stock rows stay dormant in Neon (not
+            //      deleted) so history and Odoo UDFs are preserved.
             // -------------------------------------------------
             var products = await _cacheDb.CacheProducts
                 .AsNoTracking()
                 .Where(x =>
                     x.IsActive &&
-                    x.AvailableCache > 0 &&
                     x.LastSapSyncAt > lastSync)
                 .Select(x => new NeonProduct
                 {
@@ -67,7 +76,8 @@ public class ProductNeonSyncService
                     OnHandSap = x.OnHandSap,
                     AvailableCache = x.AvailableCache,
 
-                    IsActive = x.IsActive,
+                    // ✅ HYBRID: orderable only when stock > 0
+                    IsActive = x.IsActive && x.AvailableCache > 0,
 
                     Barcode = x.Barcode,
 
@@ -83,11 +93,11 @@ public class ProductNeonSyncService
                 })
                 .ToListAsync();
 
+            int upserted = 0, deactivated = 0, reactivated = 0;
+
             if (products.Count > 0)
             {
-                var itemCodes = products
-                    .Select(p => p.ItemCode)
-                    .ToList();
+                var itemCodes = products.Select(p => p.ItemCode).ToList();
 
                 var existing = await _neonDb.Products
                     .Where(p => itemCodes.Contains(p.ItemCode))
@@ -98,75 +108,41 @@ public class ProductNeonSyncService
                     if (!existing.TryGetValue(incoming.ItemCode, out var entity))
                     {
                         _neonDb.Products.Add(incoming);
+                        upserted++;
                     }
                     else
                     {
-                        entity.ItemName = incoming.ItemName;
-                        entity.OnHandSap = incoming.OnHandSap;
-                        entity.AvailableCache = incoming.AvailableCache;
-                        entity.IsActive = incoming.IsActive;
+                        bool wasActive = entity.IsActive;
+
+                        entity.ItemName        = incoming.ItemName;
+                        entity.OnHandSap       = incoming.OnHandSap;
+                        entity.AvailableCache  = incoming.AvailableCache;
+                        entity.IsActive        = incoming.IsActive;
+                        entity.Barcode         = incoming.Barcode;
 
                         // 🔗 ODOO UDFS
                         entity.OdooProductId = incoming.OdooProductId;
-                        entity.OdooStatus = incoming.OdooStatus;
-                        entity.OdooSyncDir = incoming.OdooSyncDir;
-                        entity.OdooErrorMsg = incoming.OdooErrorMsg;
-                        entity.OdooLastSync = incoming.OdooLastSync.AsUtc();
+                        entity.OdooStatus    = incoming.OdooStatus;
+                        entity.OdooSyncDir   = incoming.OdooSyncDir;
+                        entity.OdooErrorMsg  = incoming.OdooErrorMsg;
+                        entity.OdooLastSync  = incoming.OdooLastSync.AsUtc();
 
                         // ✅ ALWAYS UTC
                         entity.SyncedAt = DateTime.UtcNow;
+
+                        upserted++;
+                        if (wasActive && !entity.IsActive) deactivated++;
+                        if (!wasActive && entity.IsActive)  reactivated++;
                     }
                 }
-
-                _logger.LogInformation("🗄 Neon upsert prepared | Count={Count}", products.Count);
-            }
-            else
-            {
-                _logger.LogInformation("ℹ No in-stock product changes for Neon");
-            }
-
-            // -------------------------------------------------
-            // 3️⃣ ZERO-STOCK SWEEP → DEACTIVATE IN NEON
-            //    Items whose AvailableCache dropped to 0 since the
-            //    last sync are deactivated in Neon so Odoo stops
-            //    showing them as orderable. They are NOT deleted —
-            //    the next sync will reactivate them when stock returns.
-            // -------------------------------------------------
-            var zeroStockCodes = await _cacheDb.CacheProducts
-                .AsNoTracking()
-                .Where(x =>
-                    x.IsActive &&
-                    x.AvailableCache <= 0 &&
-                    x.LastSapSyncAt > lastSync)
-                .Select(x => x.ItemCode)
-                .Distinct()
-                .ToListAsync();
-
-            if (zeroStockCodes.Count > 0)
-            {
-                var toDeactivate = await _neonDb.Products
-                    .Where(p => zeroStockCodes.Contains(p.ItemCode) && p.IsActive)
-                    .ToListAsync();
-
-                foreach (var p in toDeactivate)
-                {
-                    p.IsActive = false;
-                    p.SyncedAt = DateTime.UtcNow;
-                }
-
-                _logger.LogInformation(
-                    "⚠ Neon: deactivated {Count} zero-stock items | Items={Items}",
-                    toDeactivate.Count,
-                    string.Join(", ", toDeactivate.Select(p => p.ItemCode)));
             }
 
             await _neonDb.SaveChangesAsync();
             await tx.CommitAsync();
 
             _logger.LogInformation(
-                "✅ Neon PRODUCT DELTA sync completed | Upserted={Upserted} | Deactivated={Deactivated}",
-                products.Count,
-                zeroStockCodes.Count);
+                "✅ Neon PRODUCT DELTA sync completed | Upserted={Upserted} | Deactivated={Deactivated} | Reactivated={Reactivated}",
+                upserted, deactivated, reactivated);
         });
     }
 }
