@@ -8,4 +8,6 @@ public class SyncSettings
     public bool EnableNeonPaymentSync { get; set; }
 
     public bool EnableNeonCustomerSync { get; set; } = true;
+
+    public bool EnableOdooDeliveryPush { get; set; }
 }

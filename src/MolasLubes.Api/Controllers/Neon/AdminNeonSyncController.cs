@@ -138,4 +138,14 @@ public class AdminNeonSyncController : ControllerBase
 
         return Ok(new { Message = "Neon Delivery Sync triggered" });
     }
+
+    // POST /api/admin/neon-sync/deliveries/push
+    [HttpPost("deliveries/push")]
+    public async Task<IActionResult> PushDeliveriesToOdoo(
+        [FromServices] OdooDeliveryPushService pushService)
+    {
+        await pushService.PushPendingDeliveriesAsync();
+
+        return Ok(new { Message = "Odoo Delivery Push completed" });
+    }
 }

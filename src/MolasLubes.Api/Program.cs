@@ -85,6 +85,7 @@ builder.Services.AddScoped<SapSalesOrderCanceler>();
 builder.Services.AddScoped<SapInvoiceWriter>();
 builder.Services.AddScoped<SapPaymentWriter>();
 
+builder.Services.AddScoped<OdooPushResultHandler>();
 
 builder.Services.AddScoped<
     MolasLubes.Infrastructure.Integrations.SapB1.Idempotency.IdempotencyService>();
@@ -126,6 +127,18 @@ builder.Services.AddScoped<PriceListNeonSyncService>();
 builder.Services.AddHostedService<NeonKeepAliveService>();
 
 // =====================================================
+// ODOO PUSH SERVICES
+// =====================================================
+builder.Services.AddHttpClient<OdooApiClient>(client =>
+{
+    var baseUrl = builder.Configuration["OdooApi:BaseUrl"] ?? "";
+    if (!string.IsNullOrWhiteSpace(baseUrl))
+        client.BaseAddress = new Uri(baseUrl);
+});
+
+builder.Services.AddScoped<OdooDeliveryPushService>();
+
+// =====================================================
 // QUARTZ JOB REGISTRATION
 // =====================================================
 builder.Services.AddTransient<ProductFullSyncJob>();
@@ -136,6 +149,7 @@ builder.Services.AddTransient<InvoiceSyncJob>();
 builder.Services.AddTransient<InvoiceFullSyncJob>();
 builder.Services.AddTransient<PaymentSyncJob>();
 builder.Services.AddTransient<DeliveryDeltaSyncJob>();
+builder.Services.AddTransient<OdooDeliveryPushJob>();
 
 builder.Services.AddTransient<NeonCustomerSyncJob>();
 builder.Services.AddTransient<NeonProductDeltaSyncJob>();
@@ -198,6 +212,10 @@ builder.Services.AddQuartz(q =>
         RegisterJob<NeonPaymentSyncJob>("NeonPaymentSyncJob", "45 */5 * ? * *");
 
     RegisterJob<NeonDeliverySyncJob>("NeonDeliverySyncJob", "50 */5 * ? * *");
+
+    if (syncSettings.EnableOdooDeliveryPush)
+        RegisterJob<OdooDeliveryPushJob>("OdooDeliveryPushJob", "57 */5 * ? * *");
+
     RegisterJob<NeonProductDeltaSyncJob>("NeonProductDeltaSyncJob", "55 */10 * ? * *");
     RegisterJob<NeonSalesOrderSyncJob>(
           "NeonSalesOrderSyncJob",
