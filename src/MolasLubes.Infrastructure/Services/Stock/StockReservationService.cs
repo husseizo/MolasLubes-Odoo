@@ -95,6 +95,7 @@ public class StockReservationService
                     selected.AvailableCache);
 
                 selected.AvailableCache -= qty;
+                selected.LastSapSyncAt = DateTime.UtcNow; // trigger Neon delta sync
 
                 var reservation = new CacheStockReservation
                 {
@@ -214,6 +215,7 @@ public class StockReservationService
 
             // 🔓 Restore stock
             product.AvailableCache += reservation.Quantity;
+            product.LastSapSyncAt = DateTime.UtcNow; // trigger Neon delta sync
 
             reservation.ReleasedAt = DateTime.UtcNow;
             reservation.IsCommitted = false;
