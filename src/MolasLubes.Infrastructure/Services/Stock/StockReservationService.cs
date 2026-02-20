@@ -76,6 +76,15 @@ public class StockReservationService
                 {
                     var totalAvailable = warehouses.Sum(x => x.AvailableCache);
 
+                    // Log a per-warehouse breakdown to make the root cause diagnosable
+                    // (e.g. distinguish "SAP has 0 stock" from "stuck reservations drained cache").
+                    foreach (var wh in warehouses)
+                    {
+                        _logger.LogWarning(
+                            "📊 StockDetail | Item={Item} | Warehouse={Whs} | OnHandSap={OnHand} | AvailableCache={Available}",
+                            itemCode, wh.WarehouseCode, wh.OnHandSap, wh.AvailableCache);
+                    }
+
                     throw new InvalidOperationException(
                         $"Insufficient total stock | Item={itemCode} | Requested={qty} | TotalAvailable={totalAvailable}");
                 }
@@ -235,6 +244,104 @@ public class StockReservationService
     }
 
 
+
+    // =====================================================
+    // 🔧 REPAIR CACHE (RECOMPUTE AvailableCache FROM SAP ON-HAND)
+    // =====================================================
+    /// <summary>
+    /// Recomputes AvailableCache for every warehouse row of <paramref name="itemCode"/>
+    /// as: Max(0, OnHandSap − active uncommitted reservations).
+    /// Use this when AvailableCache has drifted from reality due to stuck
+    /// reservations or a missed sync, without needing a full SAP sync.
+    /// </summary>
+    public async Task<IReadOnlyList<(string Warehouse, decimal OnHandSap, decimal ActiveReserved, decimal NewAvailable)>>
+        RepairCacheAsync(string itemCode)
+    {
+        if (string.IsNullOrWhiteSpace(itemCode))
+            throw new ArgumentException("ItemCode is required", nameof(itemCode));
+
+        _logger.LogInformation("🔧 RepairCache started | Item={Item}", itemCode);
+
+        var products = await _db.CacheProducts
+            .Where(x => x.ItemCode == itemCode)
+            .ToListAsync();
+
+        if (products.Count == 0)
+            throw new InvalidOperationException($"No cache rows found for item: {itemCode}");
+
+        var results = new List<(string, decimal, decimal, decimal)>();
+
+        foreach (var product in products)
+        {
+            var reserved = await _db.CacheStockReservations
+                .Where(r => r.ItemCode == product.ItemCode &&
+                            r.WarehouseCode == product.WarehouseCode &&
+                            r.ReleasedAt == null &&
+                            !r.IsCommitted)
+                .SumAsync(r => r.Quantity);
+
+            var newAvailable = Math.Max(0m, product.OnHandSap - reserved);
+
+            _logger.LogInformation(
+                "🔧 Repair | Whs={Whs} | OnHandSap={OnHand} | ActiveReserved={Reserved} | OldAvail={Old} → NewAvail={New}",
+                product.WarehouseCode, product.OnHandSap, reserved, product.AvailableCache, newAvailable);
+
+            product.AvailableCache = newAvailable;
+            results.Add((product.WarehouseCode, product.OnHandSap, reserved, newAvailable));
+        }
+
+        await _db.SaveChangesAsync();
+
+        _logger.LogInformation("✅ RepairCache completed | Item={Item} | Warehouses={Count}", itemCode, products.Count);
+
+        return results;
+    }
+
+    // =====================================================
+    // 🔍 DIAGNOSTICS (READ-ONLY)
+    // =====================================================
+    public async Task<object> GetStockDiagnosticsAsync(string itemCode)
+    {
+        if (string.IsNullOrWhiteSpace(itemCode))
+            throw new ArgumentException("ItemCode is required", nameof(itemCode));
+
+        var warehouses = await _db.CacheProducts
+            .AsNoTracking()
+            .Where(x => x.ItemCode == itemCode)
+            .Select(x => new
+            {
+                x.WarehouseCode,
+                x.OnHandSap,
+                x.AvailableCache,
+                x.IsActive,
+                x.LastSapSyncAt
+            })
+            .ToListAsync();
+
+        var activeReservations = await _db.CacheStockReservations
+            .AsNoTracking()
+            .Where(r => r.ItemCode == itemCode && r.ReleasedAt == null && !r.IsCommitted)
+            .Select(r => new
+            {
+                r.Id,
+                r.WarehouseCode,
+                r.Quantity,
+                r.Reference,
+                r.CreatedAt,
+                r.IsCommitted
+            })
+            .ToListAsync();
+
+        return new
+        {
+            ItemCode = itemCode,
+            Warehouses = warehouses,
+            ActiveReservations = activeReservations,
+            TotalOnHandSap = warehouses.Sum(w => w.OnHandSap),
+            TotalAvailableCache = warehouses.Sum(w => w.AvailableCache),
+            TotalActiveReserved = activeReservations.Sum(r => r.Quantity)
+        };
+    }
 
     private string NormalizeWarehouse(string warehouseCode)
     {
