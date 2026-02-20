@@ -358,4 +358,45 @@ public class StockReservationService
             _ => trimmed            // pass-through with original casing preserved
         };
     }
+
+    // =====================================================
+    // 🔍 STOCK PRE-VALIDATION (READ-ONLY, NO SIDE EFFECTS)
+    // =====================================================
+    /// <summary>
+    /// Checks availability for every line WITHOUT creating reservations.
+    /// Returns one result per line. Lines where IsAvailable=false should
+    /// block order creation before any ReserveAsync call is made.
+    /// </summary>
+    public async Task<IReadOnlyList<StockAvailabilityResult>> CheckAvailabilityAsync(
+        IEnumerable<(string ItemCode, string? WarehouseCode, decimal Qty)> lines)
+    {
+        var results = new List<StockAvailabilityResult>();
+
+        foreach (var line in lines)
+        {
+            var available = await _db.CacheProducts
+                .Where(x => x.ItemCode == line.ItemCode && x.IsActive)
+                .SumAsync(x => x.AvailableCache);
+
+            results.Add(new StockAvailabilityResult
+            {
+                ItemCode = line.ItemCode,
+                RequestedWarehouse = line.WarehouseCode,
+                RequestedQty = line.Qty,
+                TotalAvailable = available
+            });
+        }
+
+        return results;
+    }
+}
+
+/// <summary>Per-line result from <see cref="StockReservationService.CheckAvailabilityAsync"/>.</summary>
+public sealed class StockAvailabilityResult
+{
+    public string ItemCode { get; init; } = null!;
+    public string? RequestedWarehouse { get; init; }
+    public decimal RequestedQty { get; init; }
+    public decimal TotalAvailable { get; init; }
+    public bool IsAvailable => TotalAvailable >= RequestedQty;
 }
