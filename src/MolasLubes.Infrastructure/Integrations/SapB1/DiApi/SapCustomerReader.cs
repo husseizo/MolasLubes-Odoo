@@ -319,4 +319,37 @@ AND CardCode = '{safe}'
 
         return null;
     }
+
+    // =====================================================
+    // ACTIVE CHECK
+    // =====================================================
+    /// <summary>
+    /// Throws ArgumentException if the CardCode does not exist or is marked Inactive in SAP.
+    /// Call this before posting invoices, payments, or orders to SAP.
+    /// </summary>
+    public void ValidateCardCodeActive(string cardCode)
+    {
+        if (string.IsNullOrWhiteSpace(cardCode))
+            throw new ArgumentException("CardCode is required");
+
+        var safe = cardCode.Replace("'", "''");
+        var company = _connection.GetConnectedCompany();
+        var rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
+
+        try
+        {
+            rs.DoQuery($"SELECT Inactive FROM OCRD WHERE CardType='C' AND CardCode='{safe}'");
+
+            if (rs.EoF)
+                throw new ArgumentException($"Customer '{cardCode}' not found in SAP.");
+
+            var inactive = rs.Fields.Item("Inactive").Value?.ToString();
+            if (string.Equals(inactive, "Y", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException($"Customer '{cardCode}' is inactive in SAP and cannot be used for transactions.");
+        }
+        finally
+        {
+            System.Runtime.InteropServices.Marshal.ReleaseComObject(rs);
+        }
+    }
 }

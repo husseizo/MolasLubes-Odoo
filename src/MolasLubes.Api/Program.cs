@@ -83,7 +83,9 @@ builder.Services.AddScoped<SapCustomerWriter>();
 builder.Services.AddScoped<SapSalesOrderCreator>();
 builder.Services.AddScoped<SapSalesOrderCanceler>();
 builder.Services.AddScoped<SapInvoiceWriter>();
+builder.Services.AddScoped<SapCreditMemoWriter>();
 builder.Services.AddScoped<SapPaymentWriter>();
+builder.Services.AddScoped<SapPaymentChannelReader>();
 
 builder.Services.AddScoped<OdooPushResultHandler>();
 
@@ -234,9 +236,8 @@ builder.Services.AddQuartz(q =>
         opts.WithIdentity("InvoiceFullSyncJob")
             .StoreDurably());
 
-    q.AddJob<NeonPriceListSyncJob>(opts =>
-        opts.WithIdentity("NeonPriceListSyncJob")
-            .StoreDurably());
+    // Price list sync: every 6 hours (also manually triggerable via admin endpoint)
+    RegisterJob<NeonPriceListSyncJob>("NeonPriceListSyncJob", "0 30 */6 ? * *");
 });
 
 builder.Services.AddQuartzHostedService(o =>
