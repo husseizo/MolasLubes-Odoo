@@ -15,6 +15,7 @@ public class SapCustomerDto
 
     public int? PriceList { get; set; }     // OCRD.ListNum
     public int? SlpCode { get; set; }       // OCRD.SlpCode
+    public bool IsActive { get; set; } = true; // false when OCRD.Inactive='Y' or Frozen='Y'
 
 
     // =========================

@@ -46,8 +46,8 @@ public class SapPaymentWriter
 
         if (dto.TransferSum > 0 && string.IsNullOrWhiteSpace(dto.TransferAccount))
             throw new ArgumentException("TransferAccount is required when TransferSum > 0");
-        if (dto.CardSum > 0 && string.IsNullOrWhiteSpace(dto.CardName))
-            throw new ArgumentException("CardName is required when CardSum > 0");
+        if (dto.CardSum > 0 && string.IsNullOrWhiteSpace(dto.CreditCardCode))
+            throw new ArgumentException("CreditCardCode is required when CardSum > 0");
 
         // Validate customer is active in SAP
         _customerReader.ValidateCardCodeActive(dto.CardCode);
@@ -109,7 +109,10 @@ public class SapPaymentWriter
 
             if (dto.CardSum > 0)
             {
-                pay.CreditCards.CreditCardCode = dto.CardName!.Trim();
+                if (!int.TryParse(dto.CreditCardCode?.Trim(), out var creditCardInt))
+                    throw new ArgumentException(
+                        $"CreditCardCode must be a numeric code from OCRC (use GET /api/v1/payments/channels). Got: '{dto.CreditCardCode}'");
+                pay.CreditCards.CreditCard = creditCardInt;
                 pay.CreditCards.CreditSum = (double)dto.CardSum;
                 pay.CreditCards.CardValidUntil = docDate;
                 pay.CreditCards.Add();

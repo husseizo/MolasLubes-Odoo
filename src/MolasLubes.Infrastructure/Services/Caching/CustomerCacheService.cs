@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using MolasLubes.Domain.Entities.Cache;
 using MolasLubes.Infrastructure.Integrations.SapB1.DiApi.SapDtos;
@@ -34,21 +34,41 @@ public class CustomerCacheService
             .FirstOrDefaultAsync(x => x.CardCode == cardCode);
 
     // =====================================================
-    // GET PAGED
+    // GET PAGED + SEARCH
+    // Returns total count alongside the page items so callers
+    // can build pagination UIs without a separate count call.
     // =====================================================
-    public async Task<IReadOnlyList<CacheCustomer>> GetCustomersAsync(
+    public async Task<(int Total, IReadOnlyList<CacheCustomer> Items)> GetCustomersAsync(
         int page,
-        int pageSize)
+        int pageSize,
+        string? search = null,
+        bool? activeOnly = null)
     {
         if (page < 1) page = 1;
-        if (pageSize < 1) pageSize = 50;
+        if (pageSize < 1 || pageSize > 500) pageSize = 50;
 
-        return await _db.CacheCustomers
-            .AsNoTracking()
+        var query = _db.CacheCustomers.AsNoTracking();
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var s = search.Trim().ToLower();
+            query = query.Where(x =>
+                x.CardCode.ToLower().Contains(s) ||
+                x.CardName.ToLower().Contains(s));
+        }
+
+        if (activeOnly == true)
+            query = query.Where(x => x.IsActive);
+
+        var total = await query.CountAsync();
+
+        var items = await query
             .OrderBy(x => x.CardCode)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
             .ToListAsync();
+
+        return (total, items);
     }
 
     // =====================================================
@@ -59,7 +79,7 @@ public class CustomerCacheService
         var now = DateTime.UtcNow;
         var list = customers
             .Where(x => !string.IsNullOrWhiteSpace(x.CardCode))
-            .GroupBy(x => x.CardCode)       // 🔥 remove duplicates in batch
+            .GroupBy(x => x.CardCode)
             .Select(g => g.First())
             .ToList();
 
@@ -73,9 +93,6 @@ public class CustomerCacheService
             "🗄️ Starting CUSTOMER cache upsert | BatchSize={BatchSize}",
             list.Count);
 
-        // --------------------------------------------------
-        // 🔥 Disable tracking auto-detect for performance
-        // --------------------------------------------------
         var originalAutoDetect = _db.ChangeTracker.AutoDetectChangesEnabled;
         _db.ChangeTracker.AutoDetectChangesEnabled = false;
 
@@ -84,9 +101,6 @@ public class CustomerCacheService
             var inserted = 0;
             var updated = 0;
 
-            // --------------------------------------------------
-            // Load existing customers WITHOUT tracking
-            // --------------------------------------------------
             var cardCodes = list.Select(x => x.CardCode).ToList();
 
             var existingCustomers = await _db.CacheCustomers
@@ -98,12 +112,11 @@ public class CustomerCacheService
             {
                 if (existingCustomers.TryGetValue(c.CardCode, out var existing))
                 {
-                    // UPDATE (attach clean instance)
                     var entity = new CacheCustomer
                     {
                         CardCode = existing.CardCode,
                         CardName = c.CardName,
-                        IsActive = true,
+                        IsActive = c.IsActive,  // propagate from SAP Inactive/Frozen flags
 
                         PriceList = c.PriceList,
                         SlpCode = c.SlpCode,
@@ -131,7 +144,10 @@ public class CustomerCacheService
                     {
                         CardCode = c.CardCode,
                         CardName = c.CardName,
-                        IsActive = true,
+                        IsActive = c.IsActive,  // propagate from SAP
+
+                        PriceList = c.PriceList,
+                        SlpCode = c.SlpCode,
 
                         OdooPartnerId = c.OdooPartnerId,
                         OdooStatus = c.OdooStatus ?? "SYNCED",
@@ -156,9 +172,6 @@ public class CustomerCacheService
         }
         finally
         {
-            // --------------------------------------------------
-            // 🔥 CRITICAL MEMORY + TRACKING RESET
-            // --------------------------------------------------
             _db.ChangeTracker.Clear();
             _db.ChangeTracker.AutoDetectChangesEnabled = originalAutoDetect;
         }
@@ -184,7 +197,7 @@ public class CustomerCacheService
             {
                 CardCode = c.CardCode,
                 CardName = c.CardName,
-                IsActive = true,
+                IsActive = c.IsActive,
 
                 PriceList = c.PriceList,
                 SlpCode = c.SlpCode,
@@ -202,7 +215,11 @@ public class CustomerCacheService
             {
                 CardCode = existing.CardCode,
                 CardName = c.CardName,
-                IsActive = true,
+                IsActive = c.IsActive,  // propagate from SAP
+
+                PriceList = c.PriceList,
+                SlpCode = c.SlpCode,
+
                 OdooPartnerId = c.OdooPartnerId,
                 OdooStatus = c.OdooStatus ?? existing.OdooStatus,
                 OdooErrorMsg = c.OdooErrorMsg,

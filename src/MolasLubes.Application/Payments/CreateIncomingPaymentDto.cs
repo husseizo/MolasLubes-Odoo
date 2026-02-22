@@ -17,7 +17,7 @@ public class CreateIncomingPaymentDto
     public string? TransferAccount { get; set; }   // required when TransferSum > 0
     public string? TransferReference { get; set; } // optional
     public decimal CardSum { get; set; }
-    public string? CardName { get; set; }           // required when CardSum > 0
+    public string? CreditCardCode { get; set; }     // integer code from OCRC (required when CardSum > 0)
 
     // invoices to apply
     public List<CreateIncomingPaymentInvoiceDto> Invoices { get; set; } = new();
