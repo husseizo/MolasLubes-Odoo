@@ -88,6 +88,8 @@ SELECT TOP {batchSize}
     E_Mail,
     UpdateDate,
     UpdateTS,
+    Inactive,
+    Frozen,
     U_Odoo_Partner_ID
 FROM OCRD
 {whereClause}
@@ -228,17 +230,21 @@ AND CardCode = '{safe}'
             return null;
         }
 
+        var inactive = SafeGetString(rs, "Inactive");
+        var frozen   = SafeGetString(rs, "Frozen");
+
         return new SapCustomerDto
         {
             CardCode = cardCode.Trim(),
             CardName = SafeGetString(rs, "CardName") ?? "",
             CardType = "C",
 
+            IsActive = inactive != "Y" && frozen != "Y",
+
             Phone1 = SafeGetString(rs, "Phone1"),
             Phone2 = SafeGetString(rs, "Phone2"),
             Email = SafeGetString(rs, "E_Mail"),
 
-            // ✅ NEW
             PriceList = SafeGetDecimal(rs, "ListNum") is decimal pl ? (int)pl : null,
             SlpCode = SafeGetDecimal(rs, "SlpCode") is decimal slp ? (int)slp : null,
 
@@ -338,14 +344,19 @@ AND CardCode = '{safe}'
 
         try
         {
-            rs.DoQuery($"SELECT Inactive FROM OCRD WHERE CardType='C' AND CardCode='{safe}'");
+            rs.DoQuery($"SELECT Inactive, Frozen FROM OCRD WHERE CardType='C' AND CardCode='{safe}'");
 
             if (rs.EoF)
                 throw new ArgumentException($"Customer '{cardCode}' not found in SAP.");
 
             var inactive = rs.Fields.Item("Inactive").Value?.ToString();
+            var frozen   = rs.Fields.Item("Frozen").Value?.ToString();
+
             if (string.Equals(inactive, "Y", StringComparison.OrdinalIgnoreCase))
-                throw new ArgumentException($"Customer '{cardCode}' is inactive in SAP and cannot be used for transactions.");
+                throw new ArgumentException($"Customer '{cardCode}' is marked Inactive in SAP and cannot be used for transactions.");
+
+            if (string.Equals(frozen, "Y", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException($"Customer '{cardCode}' is Frozen in SAP and cannot be used for transactions.");
         }
         finally
         {

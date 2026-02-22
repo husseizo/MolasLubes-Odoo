@@ -9,4 +9,7 @@ public class SapSettings
     public string DbServerType { get; set; } = null!;
     public string LicenseServer { get; set; } = null!;
     public string SLDServer { get; set; } = null!;
+
+    /// <summary>SAP numbering series name for customer (OCRD). Defaults to "CSR".</summary>
+    public string CustomerSeries { get; set; } = "CSR";
 }
