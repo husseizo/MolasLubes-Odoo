@@ -265,7 +265,7 @@ AND Locked = 'N'
                 $"Check SAP settings or update SAP:CustomerSeries in appsettings.");
         }
 
-        var series = Convert.ToInt32(rs.Fields.Item("Series").Value);
+        var series = Convert.ToInt32((object)rs.Fields.Item("Series").Value);
         _logger.LogInformation("Using Customer Series {Series} ({Name})", series, seriesName);
         return series;
     }

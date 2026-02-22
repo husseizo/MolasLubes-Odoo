@@ -69,7 +69,7 @@ public class CustomerDeltaSyncJob : IJob
                     // =====================================================
                     if (customers.Count == 0)
                     {
-                        var cacheCount = (await cache.GetCustomersAsync(1, 1_000_000)).Count;
+                        var cacheCount = (await cache.GetCustomersAsync(1, 1_000_000)).Total;
 
                         if (cacheCount < 100) // threshold safety
                         {
