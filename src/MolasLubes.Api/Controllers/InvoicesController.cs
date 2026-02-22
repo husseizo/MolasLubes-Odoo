@@ -15,15 +15,18 @@ namespace MolasLubes.Api.Controllers;
 public class InvoicesCommandController : ControllerBase
 {
     private readonly SapInvoiceWriter _writer;
+    private readonly SapCreditMemoWriter _creditMemoWriter;
     private readonly NeonDbContext _neonDb;
     private readonly InvoiceBalanceService _balanceService;
 
     public InvoicesCommandController(
         SapInvoiceWriter writer,
+        SapCreditMemoWriter creditMemoWriter,
         NeonDbContext neonDb,
         InvoiceBalanceService balanceService)
     {
         _writer = writer;
+        _creditMemoWriter = creditMemoWriter;
         _neonDb = neonDb;
         _balanceService = balanceService;
     }
@@ -161,5 +164,63 @@ public class InvoicesCommandController : ControllerBase
             return NotFound(new { message = $"Invoice {sapDocEntry} not found" });
 
         return Ok(result);
+    }
+
+    // =====================================================
+    // POST /api/v1/invoices/{sapDocEntry}/credit-memo
+    // Creates a credit note (ORIN) based on the invoice.
+    // =====================================================
+    [HttpPost("{sapDocEntry:int}/credit-memo")]
+    public IActionResult CreateCreditMemo(int sapDocEntry, [FromBody] CreateCreditMemoDto dto)
+    {
+        dto.InvoiceDocEntry = sapDocEntry;
+
+        try
+        {
+            var r = _creditMemoWriter.CreateCreditMemo(dto);
+            return Ok(new { r.DocEntry, r.DocNum });
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error_code = "VALIDATION_ERROR", user_message = ex.Message });
+        }
+        catch (SapIntegrationException ex)
+        {
+            return BadRequest(new
+            {
+                error_code = ex.ErrorCode,
+                sap_message = ex.SapMessage,
+                user_message = ex.UserMessage,
+                retryable = ex.Retryable
+            });
+        }
+    }
+
+    // =====================================================
+    // POST /api/v1/invoices/{sapDocEntry}/cancel
+    // Cancels an open invoice in SAP.
+    // =====================================================
+    [HttpPost("{sapDocEntry:int}/cancel")]
+    public IActionResult CancelInvoice(int sapDocEntry)
+    {
+        try
+        {
+            _writer.CancelInvoice(sapDocEntry);
+            return Ok(new { Message = $"Invoice {sapDocEntry} cancelled successfully" });
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error_code = "VALIDATION_ERROR", user_message = ex.Message });
+        }
+        catch (SapIntegrationException ex)
+        {
+            return BadRequest(new
+            {
+                error_code = ex.ErrorCode,
+                sap_message = ex.SapMessage,
+                user_message = ex.UserMessage,
+                retryable = ex.Retryable
+            });
+        }
     }
 }

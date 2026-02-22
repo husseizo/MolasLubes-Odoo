@@ -1,4 +1,5 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using MolasLubes.Api.Security;
 using MolasLubes.Infrastructure.Services.Sync;
 using Quartz;
 
@@ -6,6 +7,7 @@ namespace MolasLubes.Api.Controllers;
 
 [ApiController]
 [Route("api/admin/sync")]
+[ServiceFilter(typeof(ApiKeyAttribute))]
 public class AdminSyncController : ControllerBase
 {
     private readonly ISchedulerFactory _schedulerFactory;

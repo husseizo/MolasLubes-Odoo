@@ -1,10 +1,12 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using MolasLubes.Api.Security;
 using MolasLubes.Infrastructure.Services.Stock;
 
 namespace MolasLubes.Api.Controllers;
 
 [ApiController]
 [Route("api/stock")]
+[ServiceFilter(typeof(ApiKeyAttribute))]
 public class StockController : ControllerBase
 {
     private readonly StockReservationService _svc;
