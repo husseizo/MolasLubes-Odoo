@@ -139,6 +139,8 @@ builder.Services.AddHttpClient<OdooApiClient>(client =>
 });
 
 builder.Services.AddScoped<OdooDeliveryPushService>();
+builder.Services.AddScoped<OdooInvoicePushService>();
+builder.Services.AddScoped<OdooPaymentPushService>();
 
 // =====================================================
 // QUARTZ JOB REGISTRATION
@@ -152,6 +154,8 @@ builder.Services.AddTransient<InvoiceFullSyncJob>();
 builder.Services.AddTransient<PaymentSyncJob>();
 builder.Services.AddTransient<DeliveryDeltaSyncJob>();
 builder.Services.AddTransient<OdooDeliveryPushJob>();
+builder.Services.AddTransient<OdooInvoicePushJob>();
+builder.Services.AddTransient<OdooPaymentPushJob>();
 
 builder.Services.AddTransient<NeonCustomerSyncJob>();
 builder.Services.AddTransient<NeonProductDeltaSyncJob>();
@@ -217,6 +221,12 @@ builder.Services.AddQuartz(q =>
 
     if (syncSettings.EnableOdooDeliveryPush)
         RegisterJob<OdooDeliveryPushJob>("OdooDeliveryPushJob", "57 */5 * ? * *");
+
+    if (syncSettings.EnableOdooInvoicePush)
+        RegisterJob<OdooInvoicePushJob>("OdooInvoicePushJob", "58 */5 * ? * *");
+
+    if (syncSettings.EnableOdooPaymentPush)
+        RegisterJob<OdooPaymentPushJob>("OdooPaymentPushJob", "59 */5 * ? * *");
 
     RegisterJob<NeonProductDeltaSyncJob>("NeonProductDeltaSyncJob", "55 */10 * ? * *");
     RegisterJob<NeonSalesOrderSyncJob>(
