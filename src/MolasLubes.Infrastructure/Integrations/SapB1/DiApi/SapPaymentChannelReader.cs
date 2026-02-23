@@ -18,7 +18,7 @@ public class SapPaymentChannelReader
 
     /// <summary>
     /// Returns available payment channels:
-    /// - BankAccounts: G/L accounts usable for bank transfers (AccType = 'C', account level 3)
+    /// - BankAccounts: G/L accounts usable for bank transfers (ActType = 'C', account level 3)
     /// - CreditCards: credit card master records from OCRC
     /// </summary>
     public PaymentChannelsDto ReadPaymentChannels()
@@ -37,7 +37,7 @@ public class SapPaymentChannelReader
             rsBank.DoQuery(@"
 SELECT AcctCode, AcctName
 FROM OACT
-WHERE AccType = 'C'
+WHERE ActType = 'C'
   AND Postable = 'Y'
   AND Frozen = 'N'
 ORDER BY AcctCode
