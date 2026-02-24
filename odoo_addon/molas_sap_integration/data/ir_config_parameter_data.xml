@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!--
+        Set noupdate="1" so this record is only created on first install.
+        To change the key after install: Settings → Technical → System Parameters
+        → key = molas_sap_integration.api_key
+    -->
+    <data noupdate="1">
+        <record id="sap_api_key_param" model="ir.config_parameter">
+            <field name="key">molas_sap_integration.api_key</field>
+            <field name="value">49d3316744fd298f5823eaea1312f2c04db7d49c</field>
+        </record>
+    </data>
+</odoo>
