@@ -200,37 +200,37 @@ builder.Services.AddQuartz(q =>
     RegisterJob<ProductFullSyncJob>("ProductFullSyncJob", "0 0 */6 ? * *"); // every 6 hours
     RegisterJob<CustomerDeltaSyncJob>("CustomerDeltaSyncJob", "0 */5 * ? * *");
     RegisterJob<SalesOrderSyncJob>("SalesOrderSyncJob", "10 */5 * ? * *");
-    RegisterJob<DeliveryDeltaSyncJob>("DeliveryDeltaSyncJob", "20 */5 * ? * *");
+    RegisterJob<DeliveryDeltaSyncJob>("DeliveryDeltaSyncJob", "0/10 * * ? * *"); // every 10s — SAP→Cache (delivery layer 1)
 
 
     if (syncSettings.EnableInvoiceCacheSync)
-        RegisterJob<InvoiceSyncJob>("InvoiceSyncJob", "30 */5 * ? * *");
+        RegisterJob<InvoiceSyncJob>("InvoiceSyncJob", "3/10 * * ? * *"); // every 10s — SAP→Cache (invoice layer 1)
 
     if (syncSettings.EnablePaymentCacheSync)
-        RegisterJob<PaymentSyncJob>("PaymentSyncJob", "40 */5 * ? * *");
+        RegisterJob<PaymentSyncJob>("PaymentSyncJob", "6/10 * * ? * *"); // every 10s — SAP→Cache (payment layer 1)
 
     // =========================
     // CACHE → NEON (second layer)
     // =========================
     if (syncSettings.EnableNeonCustomerSync)
-        RegisterJob<NeonCustomerSyncJob>("NeonCustomerSyncJob", "5 */5 * ? * *");
+        RegisterJob<NeonCustomerSyncJob>("NeonCustomerSyncJob", "5 */5 * ? * *"); // every 5 min (customers change infrequently)
 
     if (syncSettings.EnableNeonInvoiceSync)
-        RegisterJob<NeonInvoiceSyncJob>("NeonInvoiceSyncJob", "35 */5 * ? * *");
+        RegisterJob<NeonInvoiceSyncJob>("NeonInvoiceSyncJob", "4/10 * * ? * *"); // every 10s — Cache→Neon (invoice layer 2)
 
     if (syncSettings.EnableNeonPaymentSync)
-        RegisterJob<NeonPaymentSyncJob>("NeonPaymentSyncJob", "45 */5 * ? * *");
+        RegisterJob<NeonPaymentSyncJob>("NeonPaymentSyncJob", "7/10 * * ? * *"); // every 10s — Cache→Neon (payment layer 2)
 
-    RegisterJob<NeonDeliverySyncJob>("NeonDeliverySyncJob", "50 */5 * ? * *");
+    RegisterJob<NeonDeliverySyncJob>("NeonDeliverySyncJob", "1/10 * * ? * *"); // every 10s — Cache→Neon (delivery layer 2)
 
     if (syncSettings.EnableOdooDeliveryPush)
-        RegisterJob<OdooDeliveryPushJob>("OdooDeliveryPushJob", "57 */5 * ? * *");
+        RegisterJob<OdooDeliveryPushJob>("OdooDeliveryPushJob", "2/10 * * ? * *"); // every 10s — Neon→Odoo (delivery layer 3)
 
     if (syncSettings.EnableOdooInvoicePush)
-        RegisterJob<OdooInvoicePushJob>("OdooInvoicePushJob", "58 */5 * ? * *");
+        RegisterJob<OdooInvoicePushJob>("OdooInvoicePushJob", "5/10 * * ? * *"); // every 10s — Neon→Odoo (invoice layer 3)
 
     if (syncSettings.EnableOdooPaymentPush)
-        RegisterJob<OdooPaymentPushJob>("OdooPaymentPushJob", "59 */5 * ? * *");
+        RegisterJob<OdooPaymentPushJob>("OdooPaymentPushJob", "8/10 * * ? * *"); // every 10s — Neon→Odoo (payment layer 3)
 
     RegisterJob<NeonProductDeltaSyncJob>("NeonProductDeltaSyncJob", "55 */10 * ? * *");
     RegisterJob<NeonSalesOrderSyncJob>(
