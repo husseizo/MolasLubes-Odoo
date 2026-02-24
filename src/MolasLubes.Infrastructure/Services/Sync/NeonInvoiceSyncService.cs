@@ -159,7 +159,7 @@ public class NeonInvoiceSyncService
                     OdooStatus = l.OdooStatus,
                     OdooSyncDir = l.OdooSyncDir,
                     OdooErrorMsg = l.OdooErrorMsg,
-                    OdooLastSync = l.OdooLastSync
+                    OdooLastSync = l.OdooLastSync.AsUtc()
                 })
                 .ToListAsync();
 
@@ -308,7 +308,7 @@ public class NeonInvoiceSyncService
                     OdooStatus = l.OdooStatus,
                     OdooSyncDir = l.OdooSyncDir,
                     OdooErrorMsg = l.OdooErrorMsg,
-                    OdooLastSync = l.OdooLastSync
+                    OdooLastSync = l.OdooLastSync.AsUtc()
                 })
                 .ToListAsync();
 
@@ -410,7 +410,7 @@ public class NeonInvoiceSyncService
                     OdooStatus = l.OdooStatus,
                     OdooSyncDir = l.OdooSyncDir,
                     OdooErrorMsg = l.OdooErrorMsg,
-                    OdooLastSync = l.OdooLastSync
+                    OdooLastSync = l.OdooLastSync.AsUtc()
                 })
                 .ToListAsync();
 
