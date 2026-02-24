@@ -136,6 +136,10 @@ builder.Services.AddHttpClient<OdooApiClient>(client =>
     var baseUrl = builder.Configuration["OdooApi:BaseUrl"] ?? "";
     if (!string.IsNullOrWhiteSpace(baseUrl))
         client.BaseAddress = new Uri(baseUrl);
+
+    var apiKey = builder.Configuration["OdooApi:ApiKey"] ?? "";
+    if (!string.IsNullOrWhiteSpace(apiKey))
+        client.DefaultRequestHeaders.Add("X-API-KEY", apiKey);
 });
 
 builder.Services.AddScoped<OdooDeliveryPushService>();
