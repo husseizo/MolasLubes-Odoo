@@ -65,9 +65,7 @@ ORDER BY AcctCode
         try
         {
             rsCard.DoQuery(@"
-SELECT CardCode, CardName, GLAccount
-FROM OCRC
-ORDER BY CardCode
+SELECT CreditCard AS 'CardCode', CardName, AcctCode AS 'GLAccoun' FROM OCRC  ORDER BY CreditCard
 ");
 
             while (!rsCard.EoF)
