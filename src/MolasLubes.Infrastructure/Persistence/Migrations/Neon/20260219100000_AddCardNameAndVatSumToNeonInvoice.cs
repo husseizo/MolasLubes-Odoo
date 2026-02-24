@@ -10,23 +10,18 @@ namespace MolasLubes.Infrastructure.Persistence.Migrations.Neon
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            // Customer name carried from SAP CardName (OINV.CardName)
-            migrationBuilder.AddColumn<string>(
-                name: "CardName",
-                table: "NeonInvoices",
-                type: "character varying(100)",
-                maxLength: 100,
-                nullable: true);
+            // Use IF NOT EXISTS so this migration is idempotent.
+            // The Designer.cs was originally missing, which caused EF Core to skip
+            // this migration entirely — the columns were never added.  Even if the
+            // migration ID is already in __EFMigrationsHistory, running the app after
+            // a manual delete of that row (or a fresh DB) will safely add the columns.
+            migrationBuilder.Sql(@"
+ALTER TABLE ""NeonInvoices""
+    ADD COLUMN IF NOT EXISTS ""CardName"" character varying(100);
 
-            // VAT total – was already in CacheInvoice but missing from NeonInvoices
-            migrationBuilder.AddColumn<decimal>(
-                name: "VatSum",
-                table: "NeonInvoices",
-                type: "numeric(18,2)",
-                precision: 18,
-                scale: 2,
-                nullable: false,
-                defaultValue: 0m);
+ALTER TABLE ""NeonInvoices""
+    ADD COLUMN IF NOT EXISTS ""VatSum"" numeric(18,2) NOT NULL DEFAULT 0;
+");
         }
 
         /// <inheritdoc />
