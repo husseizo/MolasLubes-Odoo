@@ -83,6 +83,108 @@ public class LiquiMolyProductScraperService
         return all;
     }
 
+    /// <summary>
+    /// Looks up each article number via the site search page and returns one
+    /// <see cref="LiquiMolyProductDto"/> per match (fully enriched from the
+    /// product detail page when a product URL can be resolved).
+    ///
+    /// This is the preferred entry-point when the caller already has a list of
+    /// known article numbers (e.g. distinct ItemCodes from CacheProducts) and
+    /// the category-listing URLs are unavailable.
+    /// </summary>
+    public async Task<List<LiquiMolyProductDto>> ScrapeByArticleNumbersAsync(
+        IEnumerable<string> articleNumbers,
+        CancellationToken cancellationToken = default)
+    {
+        var numbers = articleNumbers.Select(n => n.Trim())
+                                    .Where(n => !string.IsNullOrEmpty(n))
+                                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                                    .ToList();
+
+        _logger.LogInformation(
+            "[LiquiMoly] Starting article-number scrape for {Count} items", numbers.Count);
+
+        var all = new List<LiquiMolyProductDto>();
+
+        foreach (var articleNumber in numbers)
+        {
+            if (cancellationToken.IsCancellationRequested) break;
+
+            try
+            {
+                var dto = await ScrapeOneByArticleNumberAsync(articleNumber, cancellationToken);
+                if (dto != null)
+                {
+                    all.Add(dto);
+                    _logger.LogInformation(
+                        "[LiquiMoly] [{Done}/{Total}] Found {Article}: {Name}",
+                        all.Count, numbers.Count, dto.ArticleNumber, dto.Name);
+                }
+                else
+                {
+                    _logger.LogDebug(
+                        "[LiquiMoly] No match on site for article {Article}", articleNumber);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "[LiquiMoly] Error scraping article {Article}", articleNumber);
+            }
+
+            await DelayAsync(_settings.DelayBetweenRequestsMs, cancellationToken);
+        }
+
+        _logger.LogInformation(
+            "[LiquiMoly] Article-number scrape complete: {Found}/{Total} matched",
+            all.Count, numbers.Count);
+
+        return all;
+    }
+
+    // ------------------------------------------------------------------
+    // SINGLE ARTICLE LOOKUP VIA SEARCH
+    // ------------------------------------------------------------------
+
+    private async Task<LiquiMolyProductDto?> ScrapeOneByArticleNumberAsync(
+        string articleNumber,
+        CancellationToken ct)
+    {
+        var searchUrl = BuildAbsolute(string.Format(_settings.SearchPath, articleNumber));
+        var html      = await FetchHtmlAsync(searchUrl, ct);
+        if (string.IsNullOrWhiteSpace(html)) return null;
+
+        var doc = new HtmlDocument();
+        doc.LoadHtml(html);
+
+        // Try JSON-LD first (fastest), then HTML card extraction
+        var candidates = ExtractFromJsonLd(doc, "Liqui-Moly", searchUrl);
+        if (candidates.Count == 0)
+            candidates = ExtractFromHtml(doc, "Liqui-Moly", searchUrl);
+
+        if (candidates.Count == 0) return null;
+
+        // Prefer exact article-number match; fall back to the first result when
+        // the search returned only one hit (it was specific enough).
+        var dto = candidates.FirstOrDefault(p =>
+                      string.Equals(p.ArticleNumber, articleNumber,
+                          StringComparison.OrdinalIgnoreCase))
+                  ?? (candidates.Count == 1 ? candidates[0] : null);
+
+        if (dto == null) return null;
+
+        // Ensure the article number is exactly what we searched for
+        dto.ArticleNumber = articleNumber;
+
+        if (!string.IsNullOrWhiteSpace(dto.ProductUrl))
+        {
+            await DelayAsync(_settings.DelayBetweenRequestsMs, ct);
+            await EnrichFromDetailPageAsync(dto, ct);
+        }
+
+        return dto;
+    }
+
     // ------------------------------------------------------------------
     // CATEGORY PAGINATION
     // ------------------------------------------------------------------

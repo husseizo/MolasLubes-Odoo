@@ -1,7 +1,9 @@
 using System.Diagnostics;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using MolasLubes.Infrastructure.Integrations.LiquiMoly;
+using MolasLubes.Infrastructure.Persistence;
 using MolasLubes.Infrastructure.Services.Sync;
 using MolasLubes.Infrastructure.Scheduling;
 using Quartz;
@@ -10,13 +12,13 @@ namespace MolasLubes.Infrastructure.Scheduling.Jobs;
 
 /// <summary>
 /// Quartz job that:
-///   1. Runs the <see cref="LiquiMolyProductScraperService"/> to fetch the
-///      Liqui-Moly public product catalog.
-///   2. Upserts results into the local SQL Server cache via
+///   1. Reads distinct active ItemCodes from <see cref="MolasCacheDbContext.CacheProducts"/>.
+///   2. Looks up each article number on the Liqui-Moly website via the search page.
+///   3. Upserts results into the local SQL Server cache via
 ///      <see cref="LiquiMolyCacheSyncService"/>.
-///   3. Upserts results into Neon PostgreSQL via
+///   4. Upserts results into Neon PostgreSQL via
 ///      <see cref="LiquiMolyNeonSyncService"/>.
-///   4. Marks products no longer found on the website as inactive in both stores.
+///   5. Marks products no longer found on the website as inactive in both stores.
 ///
 /// Scheduled (default) every 24 hours via Program.cs configuration.
 /// Can also be triggered manually via the admin API.
@@ -44,13 +46,31 @@ public class LiquiMolyProductScrapeJob : IJob
         {
             using var scope = _scopeFactory.CreateScope();
 
+            var cacheDb   = scope.ServiceProvider.GetRequiredService<MolasCacheDbContext>();
             var scraper   = scope.ServiceProvider.GetRequiredService<LiquiMolyProductScraperService>();
             var cacheSync = scope.ServiceProvider.GetRequiredService<LiquiMolyCacheSyncService>();
             var neonSync  = scope.ServiceProvider.GetRequiredService<LiquiMolyNeonSyncService>();
 
-            // ── Step 1: Scrape ──────────────────────────────────────────
-            var products = await scraper.ScrapeAllProductsAsync(
-                context.CancellationToken);
+            // ── Step 1: Resolve article numbers from local cache ────────
+            var articleNumbers = await cacheDb.CacheProducts
+                .Where(p => p.IsActive)
+                .Select(p => p.ItemCode)
+                .Distinct()
+                .ToListAsync(context.CancellationToken);
+
+            _logger.LogInformation(
+                "[LiquiMoly] Resolved {Count} distinct article numbers from CacheProducts",
+                articleNumbers.Count);
+
+            if (articleNumbers.Count == 0)
+            {
+                _logger.LogWarning("[LiquiMoly] No active products in CacheProducts — skipping scrape");
+                return;
+            }
+
+            // ── Step 2: Scrape Liqui-Moly by article number ─────────────
+            var products = await scraper.ScrapeByArticleNumbersAsync(
+                articleNumbers, context.CancellationToken);
 
             if (products.Count == 0)
             {
@@ -58,20 +78,20 @@ public class LiquiMolyProductScrapeJob : IJob
                 return;
             }
 
-            var articleNumbers = products.Select(p => p.ArticleNumber).ToList();
+            var scrapedNumbers = products.Select(p => p.ArticleNumber).ToList();
 
-            // ── Step 2: Save to local cache (SQL Server) ────────────────
+            // ── Step 3: Save to local cache (SQL Server) ────────────────
             await cacheSync.UpsertAsync(products);
-            await cacheSync.DeactivateStaleAsync(articleNumbers);
+            await cacheSync.DeactivateStaleAsync(scrapedNumbers);
 
-            // ── Step 3: Save to Neon (PostgreSQL) ──────────────────────
+            // ── Step 4: Save to Neon (PostgreSQL) ──────────────────────
             await neonSync.UpsertAsync(products);
-            await neonSync.DeactivateStaleAsync(articleNumbers);
+            await neonSync.DeactivateStaleAsync(scrapedNumbers);
 
             sw.Stop();
             _logger.LogInformation(
-                "[LiquiMoly] Scrape job completed | Products={Count} | DurationMs={Ms}",
-                products.Count, sw.ElapsedMilliseconds);
+                "[LiquiMoly] Scrape job completed | Found={Found}/{Total} | DurationMs={Ms}",
+                products.Count, articleNumbers.Count, sw.ElapsedMilliseconds);
         }
         catch (Exception ex)
         {
