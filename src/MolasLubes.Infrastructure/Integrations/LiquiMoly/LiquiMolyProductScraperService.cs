@@ -84,105 +84,46 @@ public class LiquiMolyProductScraperService
     }
 
     /// <summary>
-    /// Looks up each article number via the site search page and returns one
-    /// <see cref="LiquiMolyProductDto"/> per match (fully enriched from the
-    /// product detail page when a product URL can be resolved).
+    /// Scrapes all configured category pages, then returns only the products
+    /// whose article number (variant SKU) is present in <paramref name="articleNumbers"/>.
     ///
-    /// This is the preferred entry-point when the caller already has a list of
-    /// known article numbers (e.g. distinct ItemCodes from CacheProducts) and
-    /// the category-listing URLs are unavailable.
+    /// Background: Liqui-Moly product pages list each packaging variant with its
+    /// own 4–6 digit article number (e.g. "1035" for the 1 L can of a gear oil).
+    /// These variant article numbers match the ItemCode values stored in
+    /// CacheProducts.  The category listing pages include per-variant JSON-LD
+    /// entries, so filtering the full scrape to the target set is the most
+    /// reliable way to resolve a CacheProducts ItemCode to a Liqui-Moly product.
     /// </summary>
     public async Task<List<LiquiMolyProductDto>> ScrapeByArticleNumbersAsync(
         IEnumerable<string> articleNumbers,
         CancellationToken cancellationToken = default)
     {
-        var numbers = articleNumbers.Select(n => n.Trim())
-                                    .Where(n => !string.IsNullOrEmpty(n))
-                                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                                    .ToList();
+        var targets = new HashSet<string>(
+            articleNumbers.Select(n => n.Trim()).Where(n => n.Length > 0),
+            StringComparer.OrdinalIgnoreCase);
 
         _logger.LogInformation(
-            "[LiquiMoly] Starting article-number scrape for {Count} items", numbers.Count);
+            "[LiquiMoly] Filtering scrape to {Count} target article numbers", targets.Count);
 
-        var all = new List<LiquiMolyProductDto>();
+        // Scrape all category pages (now using the correct .html URLs)
+        var all = await ScrapeAllProductsAsync(cancellationToken);
 
-        foreach (var articleNumber in numbers)
-        {
-            if (cancellationToken.IsCancellationRequested) break;
+        // Keep only products whose variant article number is in our target set
+        var matched = all
+            .Where(p => targets.Contains(p.ArticleNumber))
+            .ToList();
 
-            try
-            {
-                var dto = await ScrapeOneByArticleNumberAsync(articleNumber, cancellationToken);
-                if (dto != null)
-                {
-                    all.Add(dto);
-                    _logger.LogInformation(
-                        "[LiquiMoly] [{Done}/{Total}] Found {Article}: {Name}",
-                        all.Count, numbers.Count, dto.ArticleNumber, dto.Name);
-                }
-                else
-                {
-                    _logger.LogDebug(
-                        "[LiquiMoly] No match on site for article {Article}", articleNumber);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex,
-                    "[LiquiMoly] Error scraping article {Article}", articleNumber);
-            }
-
-            await DelayAsync(_settings.DelayBetweenRequestsMs, cancellationToken);
-        }
+        var notFoundCount = targets.Count - matched.Count;
+        if (notFoundCount > 0)
+            _logger.LogInformation(
+                "[LiquiMoly] {NotFound} article numbers had no match on the Liqui-Moly site",
+                notFoundCount);
 
         _logger.LogInformation(
-            "[LiquiMoly] Article-number scrape complete: {Found}/{Total} matched",
-            all.Count, numbers.Count);
+            "[LiquiMoly] Returning {Matched}/{Total} matched products",
+            matched.Count, targets.Count);
 
-        return all;
-    }
-
-    // ------------------------------------------------------------------
-    // SINGLE ARTICLE LOOKUP VIA SEARCH
-    // ------------------------------------------------------------------
-
-    private async Task<LiquiMolyProductDto?> ScrapeOneByArticleNumberAsync(
-        string articleNumber,
-        CancellationToken ct)
-    {
-        var searchUrl = BuildAbsolute(string.Format(_settings.SearchPath, articleNumber));
-        var html      = await FetchHtmlAsync(searchUrl, ct);
-        if (string.IsNullOrWhiteSpace(html)) return null;
-
-        var doc = new HtmlDocument();
-        doc.LoadHtml(html);
-
-        // Try JSON-LD first (fastest), then HTML card extraction
-        var candidates = ExtractFromJsonLd(doc, "Liqui-Moly", searchUrl);
-        if (candidates.Count == 0)
-            candidates = ExtractFromHtml(doc, "Liqui-Moly", searchUrl);
-
-        if (candidates.Count == 0) return null;
-
-        // Prefer exact article-number match; fall back to the first result when
-        // the search returned only one hit (it was specific enough).
-        var dto = candidates.FirstOrDefault(p =>
-                      string.Equals(p.ArticleNumber, articleNumber,
-                          StringComparison.OrdinalIgnoreCase))
-                  ?? (candidates.Count == 1 ? candidates[0] : null);
-
-        if (dto == null) return null;
-
-        // Ensure the article number is exactly what we searched for
-        dto.ArticleNumber = articleNumber;
-
-        if (!string.IsNullOrWhiteSpace(dto.ProductUrl))
-        {
-            await DelayAsync(_settings.DelayBetweenRequestsMs, ct);
-            await EnrichFromDetailPageAsync(dto, ct);
-        }
-
-        return dto;
+        return matched;
     }
 
     // ------------------------------------------------------------------
