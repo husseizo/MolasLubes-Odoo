@@ -947,11 +947,15 @@ public class LiquiMolyProductScraperService
 
     /// <summary>
     /// Re-issues <paramref name="originalUrl"/> through the OWW API proxy.
-    /// The OWW system prepends its routing prefix to the original Magento path so the
-    /// server can serve the correct geo-localised content.
     ///
-    /// Returns the response body string (HTML or JSON) or <see langword="null"/> if the
-    /// prefix is unknown or the request fails.
+    /// The OWW API only responds with data (HTML or JSON) when the request looks like
+    /// a same-origin XHR sent by the oil-guide SPA.  A plain browser-navigation request
+    /// (even to the /api/v2/oww/... path) is geo-redirected right back to oil-guide.
+    /// We therefore set AJAX-style headers that distinguish XHR from navigation:
+    ///   • X-Requested-With: XMLHttpRequest   – standard jQuery/Axios AJAX marker
+    ///   • Origin + Referer = oil-guide page  – simulates the SPA calling its own API
+    ///   • Sec-Fetch-Mode: cors               – browser's XHR Sec-Fetch signal
+    ///   • Accept: application/json           – API, not an HTML page
     /// </summary>
     private async Task<string?> TryFetchViaOwwAsync(string originalUrl, CancellationToken ct)
     {
@@ -969,50 +973,59 @@ public class LiquiMolyProductScraperService
             return null;
         }
 
-        _logger.LogDebug("[LiquiMoly] OWW retry: {Url}", owwUrl);
+        _logger.LogDebug("[LiquiMoly] OWW XHR: {Url}", owwUrl);
+
+        var oilGuideReferer = _settings.BaseUrl.TrimEnd('/') + "/en/service/oil-guide.html";
 
         try
         {
             using var req = new HttpRequestMessage(HttpMethod.Get, owwUrl);
+
+            // Mimic an XHR from the oil-guide SPA
             req.Headers.TryAddWithoutValidation("User-Agent",
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
                 "AppleWebKit/537.36 (KHTML, like Gecko) " +
                 "Chrome/122.0.0.0 Safari/537.36");
-            req.Headers.TryAddWithoutValidation("Accept",
-                "text/html,application/xhtml+xml,application/json,*/*;q=0.8");
-            req.Headers.TryAddWithoutValidation("Accept-Language", "en-US,en;q=0.9");
-            req.Headers.TryAddWithoutValidation("Accept-Encoding", "gzip, deflate, br");
-            req.Headers.TryAddWithoutValidation("Referer", _settings.BaseUrl);
+            req.Headers.TryAddWithoutValidation("X-Requested-With", "XMLHttpRequest");
+            req.Headers.TryAddWithoutValidation("Accept",            "application/json, text/plain, */*");
+            req.Headers.TryAddWithoutValidation("Accept-Language",   "en-US,en;q=0.9");
+            req.Headers.TryAddWithoutValidation("Accept-Encoding",   "gzip, deflate, br");
+            req.Headers.TryAddWithoutValidation("Origin",            _settings.BaseUrl);
+            req.Headers.TryAddWithoutValidation("Referer",           oilGuideReferer);
+            // Sec-Fetch headers for XHR (not top-level navigation)
+            req.Headers.TryAddWithoutValidation("Sec-Fetch-Dest",    "empty");
+            req.Headers.TryAddWithoutValidation("Sec-Fetch-Mode",    "cors");
+            req.Headers.TryAddWithoutValidation("Sec-Fetch-Site",    "same-origin");
 
             using var resp = await _http.SendAsync(req, ct);
 
-            // A further oil-guide redirect means even the OWW path is blocked
+            // If even the XHR gets geo-redirected, the API is fully locked for this IP
             var finalUri = resp.RequestMessage?.RequestUri;
             if (finalUri?.AbsolutePath.Contains("oil-guide", StringComparison.OrdinalIgnoreCase) == true)
             {
-                _logger.LogWarning("[LiquiMoly] OWW API also redirected to oil-guide: {Url}", owwUrl);
+                _logger.LogWarning("[LiquiMoly] OWW XHR also redirected to oil-guide — IP fully geo-blocked: {Url}", owwUrl);
                 return null;
             }
 
             if (!resp.IsSuccessStatusCode)
             {
                 _logger.LogWarning(
-                    "[LiquiMoly] OWW API {Status} for {Url}", (int)resp.StatusCode, owwUrl);
+                    "[LiquiMoly] OWW XHR {Status} for {Url}", (int)resp.StatusCode, owwUrl);
                 return null;
             }
 
             var body        = await resp.Content.ReadAsStringAsync(ct);
             var contentType = resp.Content.Headers.ContentType?.MediaType ?? "";
 
-            _logger.LogDebug(
-                "[LiquiMoly] OWW API responded {Status} ({ContentType}, {Bytes} bytes) for {Url}",
+            _logger.LogInformation(
+                "[LiquiMoly] OWW XHR OK {Status} ({ContentType}, {Bytes} bytes): {Url}",
                 (int)resp.StatusCode, contentType, body.Length, owwUrl);
 
             return body;
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "[LiquiMoly] OWW API request failed: {Url}", owwUrl);
+            _logger.LogWarning(ex, "[LiquiMoly] OWW XHR failed: {Url}", owwUrl);
             return null;
         }
     }
