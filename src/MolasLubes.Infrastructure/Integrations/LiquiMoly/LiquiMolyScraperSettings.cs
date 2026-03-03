@@ -15,6 +15,14 @@ public class LiquiMolyScraperSettings
     public int RequestTimeoutSeconds { get; set; } = 30;
 
     /// <summary>
+    /// Optional hard-coded OWW API prefix (e.g. "/api/v2/oww/101/TZA/ENG/1").
+    /// When empty the prefix is auto-detected from the fragment of the first
+    /// oil-guide redirect (e.g. "#oww:/api/v2/oww/101/TZA/ENG/1/...").
+    /// Only needed if auto-detection fails or the server is slow to redirect.
+    /// </summary>
+    public string OwwApiPrefix { get; set; } = string.Empty;
+
+    /// <summary>
     /// Relative paths (from BaseUrl) of product-catalog category pages to scrape.
     /// Key = path, Value = human-readable category name.
     ///
