@@ -12,14 +12,17 @@ namespace MolasLubes.Infrastructure.Integrations.LiquiMoly;
 ///
 /// Strategy — two-phase approach:
 ///
-/// Phase 1 — Per-article catalog search:
+/// Phase 1 — Per-article catalog search with OWW fallback:
 ///   Issues one Magento 2 catalog-search request per target article number
-///   (<c>/en/catalogsearch/result/?q={sku}</c>).  Category listing pages are skipped
-///   because bot-detection redirects them silently to the oil-guide SPA.
-///   The catalog-search endpoint is a different server code-path and less aggressively guarded.
-///   JSON-LD structured data on the results page (or HTML product cards as a fallback)
-///   supplies the product name, canonical URL, and the per-variant <c>sku</c> values
-///   that match CacheProducts ItemCode values.
+///   (<c>/en/catalogsearch/result/?q={sku}</c>).  If the server geo-detects a
+///   non-supported region (e.g. Tanzania → TZA) it silently 302-redirects to the
+///   oil-guide SPA whose Location header fragment encodes the OWW API prefix:
+///     <c>oil-guide.html#oww:/api/v2/oww/101/TZA/ENG/1/en/catalogsearch/result/?q=3044</c>
+///   <see cref="FetchHtmlAsync"/> auto-detects this prefix from the first redirect,
+///   stores it, and transparently retries the same Magento path through the OWW API
+///   (<c>/api/v2/oww/{prefix}{original_path}</c>) which may return HTML or JSON.
+///   JSON-LD structured data (or HTML product cards as a fallback) on the results page
+///   supplies the product name, canonical URL, and the per-variant <c>sku</c> values.
 ///
 /// Phase 2 — Targeted detail enrichment (randomised + human-like delays):
 ///   Visits each matched product's detail page exactly once (multiple variants
@@ -29,7 +32,8 @@ namespace MolasLubes.Infrastructure.Integrations.LiquiMoly;
 ///   Images from per-variant gallery divs (<c>variantswitch-sku-{sku}</c>) using the
 ///   <c>ci-src</c> attribute (direct Liqui-Moly CDN URL).
 ///   Variable inter-request delay (base ± 50 % jitter) plus occasional "reading" pauses.
-///   Oil-guide redirect detection in <see cref="FetchHtmlAsync"/> protects both phases.
+///   OWW redirect detection and retry in <see cref="FetchHtmlAsync"/> is transparent
+///   to all callers — both phases benefit automatically.
 /// </summary>
 public class LiquiMolyProductScraperService
 {
@@ -39,6 +43,19 @@ public class LiquiMolyProductScraperService
 
     // 4-6 digit bare number = packaging variant SKU (e.g. "1035", "20465")
     private static readonly Regex _variantSkuPattern = new(@"^\d{4,6}$", RegexOptions.Compiled);
+
+    // Extracts the OWW API prefix from the fragment of an oil-guide redirect URL.
+    // Fragment format: #oww:/api/v2/oww/{portalId}/{country}/{lang}/{store}/...
+    // We capture everything up to and including the numeric store-view segment.
+    private static readonly Regex _owwPrefixRegex = new(
+        @"^#?oww:(/api/v\d+/oww/\d+/[A-Za-z]{2,3}/[A-Za-z]{2,3}/\d+)",
+        RegexOptions.Compiled);
+
+    /// <summary>
+    /// Auto-detected OWW API prefix (e.g. "/api/v2/oww/101/TZA/ENG/1").
+    /// Populated on the first oil-guide redirect whose Location fragment contains the prefix.
+    /// </summary>
+    private string? _owwApiPrefix;
 
     private static readonly Regex _specGradePattern = new(
         @"\b\d{1,2}W[-–]\d{2,3}\b|\bSAE\s+\d+\b|\bDEXRON\b|\bMERCON\b|\bATF\b|\bDOT\s*[3456]\b",
@@ -867,13 +884,26 @@ public class LiquiMolyProductScraperService
             using var resp = await _http.SendAsync(req, ct);
 
             // Detect silent redirect to the oil-guide SPA (bot detection).
-            // HttpClient follows the 302 and returns 200 from the oil-guide page, so
-            // we compare the final URI rather than the status code.
+            // The server geo-detects the request origin (e.g. Tanzania → TZA) and redirects
+            // ALL requests to oil-guide.html with an #oww:... fragment that encodes the OWW
+            // API prefix and the original path:
+            //   302 → oil-guide.html#oww:/api/v2/oww/101/TZA/ENG/1/en/catalogsearch/result/?q=3044
+            // HttpClient follows the redirect and returns 200 from oil-guide, so we inspect
+            // the final RequestUri (which preserves the fragment from the Location header).
             var finalUri = resp.RequestMessage?.RequestUri;
             if (finalUri != null &&
                 finalUri.AbsolutePath.Contains("oil-guide", StringComparison.OrdinalIgnoreCase))
             {
-                _logger.LogWarning("[LiquiMoly] {Url} redirected to oil-guide (bot detection) — skipping", url);
+                // Capture OWW prefix from the fragment once (e.g. "/api/v2/oww/101/TZA/ENG/1")
+                TryUpdateOwwPrefix(finalUri.Fragment);
+
+                // Retry the original path via the OWW API endpoint
+                var owwContent = await TryFetchViaOwwAsync(url, ct);
+                if (!string.IsNullOrWhiteSpace(owwContent))
+                    return owwContent;
+
+                _logger.LogWarning(
+                    "[LiquiMoly] {Url} redirected to oil-guide — OWW fallback also failed", url);
                 return string.Empty;
             }
 
@@ -884,6 +914,106 @@ public class LiquiMolyProductScraperService
         {
             _logger.LogWarning(ex, "[LiquiMoly] Failed to fetch {Url}", url);
             return string.Empty;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // OWW (Oil World Widget) API fallback
+    // ------------------------------------------------------------------
+
+    private void TryUpdateOwwPrefix(string fragment)
+    {
+        // Only capture once; check setting override first
+        if (!string.IsNullOrWhiteSpace(_settings.OwwApiPrefix))
+        {
+            _owwApiPrefix ??= _settings.OwwApiPrefix;
+            return;
+        }
+
+        if (_owwApiPrefix != null || string.IsNullOrEmpty(fragment)) return;
+
+        var m = _owwPrefixRegex.Match(fragment);
+        if (m.Success)
+        {
+            _owwApiPrefix = m.Groups[1].Value;
+            _logger.LogInformation(
+                "[LiquiMoly] OWW API prefix auto-detected: {Prefix}", _owwApiPrefix);
+        }
+        else
+        {
+            _logger.LogDebug("[LiquiMoly] Could not extract OWW prefix from fragment: {Fragment}", fragment);
+        }
+    }
+
+    /// <summary>
+    /// Re-issues <paramref name="originalUrl"/> through the OWW API proxy.
+    /// The OWW system prepends its routing prefix to the original Magento path so the
+    /// server can serve the correct geo-localised content.
+    ///
+    /// Returns the response body string (HTML or JSON) or <see langword="null"/> if the
+    /// prefix is unknown or the request fails.
+    /// </summary>
+    private async Task<string?> TryFetchViaOwwAsync(string originalUrl, CancellationToken ct)
+    {
+        var prefix = _owwApiPrefix;
+        if (string.IsNullOrEmpty(prefix)) return null;
+
+        string owwUrl;
+        try
+        {
+            var uri  = new Uri(originalUrl);
+            owwUrl   = _settings.BaseUrl.TrimEnd('/') + prefix + uri.PathAndQuery;
+        }
+        catch
+        {
+            return null;
+        }
+
+        _logger.LogDebug("[LiquiMoly] OWW retry: {Url}", owwUrl);
+
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, owwUrl);
+            req.Headers.TryAddWithoutValidation("User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
+                "AppleWebKit/537.36 (KHTML, like Gecko) " +
+                "Chrome/122.0.0.0 Safari/537.36");
+            req.Headers.TryAddWithoutValidation("Accept",
+                "text/html,application/xhtml+xml,application/json,*/*;q=0.8");
+            req.Headers.TryAddWithoutValidation("Accept-Language", "en-US,en;q=0.9");
+            req.Headers.TryAddWithoutValidation("Accept-Encoding", "gzip, deflate, br");
+            req.Headers.TryAddWithoutValidation("Referer", _settings.BaseUrl);
+
+            using var resp = await _http.SendAsync(req, ct);
+
+            // A further oil-guide redirect means even the OWW path is blocked
+            var finalUri = resp.RequestMessage?.RequestUri;
+            if (finalUri?.AbsolutePath.Contains("oil-guide", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                _logger.LogWarning("[LiquiMoly] OWW API also redirected to oil-guide: {Url}", owwUrl);
+                return null;
+            }
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                _logger.LogWarning(
+                    "[LiquiMoly] OWW API {Status} for {Url}", (int)resp.StatusCode, owwUrl);
+                return null;
+            }
+
+            var body        = await resp.Content.ReadAsStringAsync(ct);
+            var contentType = resp.Content.Headers.ContentType?.MediaType ?? "";
+
+            _logger.LogDebug(
+                "[LiquiMoly] OWW API responded {Status} ({ContentType}, {Bytes} bytes) for {Url}",
+                (int)resp.StatusCode, contentType, body.Length, owwUrl);
+
+            return body;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[LiquiMoly] OWW API request failed: {Url}", owwUrl);
+            return null;
         }
     }
 
