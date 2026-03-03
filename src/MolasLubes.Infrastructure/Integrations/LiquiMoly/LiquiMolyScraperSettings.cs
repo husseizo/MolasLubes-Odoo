@@ -15,26 +15,25 @@ public class LiquiMolyScraperSettings
     public int RequestTimeoutSeconds { get; set; } = 30;
 
     /// <summary>
-    /// Relative search path template — {0} is replaced with the article number.
-    /// Used by <c>ScrapeByArticleNumbersAsync</c> to resolve each CacheProduct ItemCode.
-    /// </summary>
-    public string SearchPath { get; set; } = "/en/search?query={0}";
-
-    /// <summary>
     /// Relative paths (from BaseUrl) of product-catalog category pages to scrape.
     /// Key = path, Value = human-readable category name.
+    ///
+    /// The Liqui-Moly website uses Magento 2 with .html suffix routes.
+    /// Each listing page includes JSON-LD structured data where the "sku" field
+    /// contains packaging-variant article numbers (e.g. "1035") that match
+    /// the ItemCode values in CacheProducts.
     /// </summary>
     public Dictionary<string, string> CategoryPaths { get; set; } = new()
     {
-        { "/en/products/engine-oils/",             "Engine Oils"        },
-        { "/en/products/gear-oils/",               "Gear Oils"          },
-        { "/en/products/automatic-transmission/",  "Automatic Trans."   },
-        { "/en/products/coolant-antifreeze/",      "Coolants"           },
-        { "/en/products/brake-fluids/",            "Brake Fluids"       },
-        { "/en/products/power-steering/",          "Power Steering"     },
-        { "/en/products/additives/",               "Additives"          },
-        { "/en/products/motor-cycle/",             "Motorcycle"         },
-        { "/en/products/greases/",                 "Greases"            },
-        { "/en/products/special-lubricants/",      "Special Lubricants" },
+        { "/en/engine-oils.html",                  "Engine Oils"        },
+        { "/en/gear-oils.html",                    "Gear Oils"          },
+        { "/en/automatic-transmission-oils.html",  "Automatic Trans."   },
+        { "/en/coolant.html",                      "Coolants"           },
+        { "/en/brake-fluids.html",                 "Brake Fluids"       },
+        { "/en/power-steering-fluids.html",        "Power Steering"     },
+        { "/en/additives.html",                    "Additives"          },
+        { "/en/motorbike-oils.html",               "Motorcycle"         },
+        { "/en/greases.html",                      "Greases"            },
+        { "/en/lubricants.html",                   "Special Lubricants" },
     };
 }
