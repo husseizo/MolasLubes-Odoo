@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using MolasLubes.Domain.Entities.Cache;
@@ -14,6 +15,11 @@ public class LiquiMolyCacheSyncService
 {
     private readonly MolasCacheDbContext                    _db;
     private readonly ILogger<LiquiMolyCacheSyncService>    _logger;
+
+    private static readonly JsonSerializerOptions _json = new()
+    {
+        WriteIndented = false,
+    };
 
     public LiquiMolyCacheSyncService(
         MolasCacheDbContext db,
@@ -53,34 +59,18 @@ public class LiquiMolyCacheSyncService
         {
             if (existing.TryGetValue(dto.ArticleNumber, out var entity))
             {
-                entity.Name          = dto.Name;
-                entity.Category      = dto.Category;
-                entity.SubCategory   = dto.SubCategory;
-                entity.Description   = dto.Description;
-                entity.SpecGrade     = dto.SpecGrade;
-                entity.PackagingSize = dto.PackagingSize;
-                entity.ImageUrl      = dto.ImageUrl;
-                entity.ProductUrl    = dto.ProductUrl;
-                entity.IsActive      = true;
-                entity.ScrapedAt     = now;
+                MapToEntity(dto, entity, now);
                 updated++;
             }
             else
             {
-                _db.CacheLiquiMolyProducts.Add(new CacheLiquiMolyProduct
+                var newEntity = new CacheLiquiMolyProduct
                 {
                     ArticleNumber = dto.ArticleNumber,
-                    Name          = dto.Name,
-                    Category      = dto.Category,
-                    SubCategory   = dto.SubCategory,
-                    Description   = dto.Description,
-                    SpecGrade     = dto.SpecGrade,
-                    PackagingSize = dto.PackagingSize,
-                    ImageUrl      = dto.ImageUrl,
-                    ProductUrl    = dto.ProductUrl,
                     IsActive      = true,
-                    ScrapedAt     = now,
-                });
+                };
+                MapToEntity(dto, newEntity, now);
+                _db.CacheLiquiMolyProducts.Add(newEntity);
                 inserted++;
             }
         }
@@ -112,5 +102,42 @@ public class LiquiMolyCacheSyncService
 
         _logger.LogInformation(
             "[LiquiMoly][Cache] Deactivated {Count} stale products", stale.Count);
+    }
+
+    // =====================================================
+    // MAPPING HELPER
+    // =====================================================
+    private static void MapToEntity(LiquiMolyProductDto dto, CacheLiquiMolyProduct entity, DateTime now)
+    {
+        entity.Name                  = dto.Name;
+        entity.Category              = dto.Category;
+        entity.SubCategory           = dto.SubCategory;
+        entity.Description           = dto.Description;
+        entity.SpecGrade             = dto.SpecGrade;
+        entity.PackagingSize         = dto.PackagingSize;
+        entity.ImageUrl              = dto.ImageUrl;
+        entity.ProductUrl            = dto.ProductUrl;
+        entity.IsActive              = true;
+        entity.ScrapedAt             = now;
+
+        // Serialise list/dict fields to JSON strings
+        entity.AllPackagingSizes     = dto.AllPackagingSizes.Count > 0
+            ? JsonSerializer.Serialize(dto.AllPackagingSizes, _json)
+            : null;
+
+        entity.AllImageUrls          = dto.AllImageUrls.Count > 0
+            ? JsonSerializer.Serialize(dto.AllImageUrls, _json)
+            : null;
+
+        entity.Approvals             = dto.Approvals.Count > 0
+            ? JsonSerializer.Serialize(dto.Approvals, _json)
+            : null;
+
+        entity.Specifications        = dto.Specifications.Count > 0
+            ? JsonSerializer.Serialize(dto.Specifications, _json)
+            : null;
+
+        entity.ProductInfoPdfUrl     = dto.ProductInfoPdfUrl;
+        entity.SafetyDataSheetPdfUrl = dto.SafetyDataSheetPdfUrl;
     }
 }

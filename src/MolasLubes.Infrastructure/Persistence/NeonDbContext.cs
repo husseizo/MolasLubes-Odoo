@@ -356,12 +356,22 @@ public class NeonDbContext : DbContext
             e.Property(x => x.Name).IsRequired();
             e.Property(x => x.Category).HasMaxLength(100);
             e.Property(x => x.SubCategory).HasMaxLength(100);
-            e.Property(x => x.Description).HasMaxLength(2000);
+            e.Property(x => x.Description);                     // text (no length cap)
             e.Property(x => x.SpecGrade).HasMaxLength(50);
             e.Property(x => x.PackagingSize).HasMaxLength(30);
-            e.Property(x => x.ImageUrl).HasMaxLength(500);
-            e.Property(x => x.ProductUrl).HasMaxLength(500);
 
+            // JSON columns for multi-value fields
+            e.Property(x => x.AllPackagingSizes);               // JSON array of strings
+            e.Property(x => x.ImageUrl).HasMaxLength(500);
+            e.Property(x => x.AllImageUrls);                    // JSON array of strings
+            e.Property(x => x.Approvals);                       // JSON array of strings
+            e.Property(x => x.Specifications);                  // JSON object (key-value)
+
+            // PDF downloads
+            e.Property(x => x.ProductInfoPdfUrl).HasMaxLength(500);
+            e.Property(x => x.SafetyDataSheetPdfUrl).HasMaxLength(500);
+
+            e.Property(x => x.ProductUrl).HasMaxLength(500);
             e.Property(x => x.ScrapedAt).IsRequired();
 
             e.HasIndex(x => x.Category);

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using MolasLubes.Domain.Entities.Neon;
@@ -14,6 +15,11 @@ public class LiquiMolyNeonSyncService
 {
     private readonly NeonDbContext                          _neon;
     private readonly ILogger<LiquiMolyNeonSyncService>     _logger;
+
+    private static readonly JsonSerializerOptions _json = new()
+    {
+        WriteIndented = false,
+    };
 
     public LiquiMolyNeonSyncService(
         NeonDbContext neon,
@@ -59,34 +65,18 @@ public class LiquiMolyNeonSyncService
             {
                 if (existing.TryGetValue(dto.ArticleNumber, out var entity))
                 {
-                    entity.Name          = dto.Name;
-                    entity.Category      = dto.Category;
-                    entity.SubCategory   = dto.SubCategory;
-                    entity.Description   = dto.Description;
-                    entity.SpecGrade     = dto.SpecGrade;
-                    entity.PackagingSize = dto.PackagingSize;
-                    entity.ImageUrl      = dto.ImageUrl;
-                    entity.ProductUrl    = dto.ProductUrl;
-                    entity.IsActive      = true;
-                    entity.ScrapedAt     = now;
+                    MapToEntity(dto, entity, now);
                     updated++;
                 }
                 else
                 {
-                    _neon.LiquiMolyProducts.Add(new NeonLiquiMolyProduct
+                    var newEntity = new NeonLiquiMolyProduct
                     {
                         ArticleNumber = dto.ArticleNumber,
-                        Name          = dto.Name,
-                        Category      = dto.Category,
-                        SubCategory   = dto.SubCategory,
-                        Description   = dto.Description,
-                        SpecGrade     = dto.SpecGrade,
-                        PackagingSize = dto.PackagingSize,
-                        ImageUrl      = dto.ImageUrl,
-                        ProductUrl    = dto.ProductUrl,
                         IsActive      = true,
-                        ScrapedAt     = now,
-                    });
+                    };
+                    MapToEntity(dto, newEntity, now);
+                    _neon.LiquiMolyProducts.Add(newEntity);
                     inserted++;
                 }
             }
@@ -125,5 +115,42 @@ public class LiquiMolyNeonSyncService
             _logger.LogInformation(
                 "[LiquiMoly][Neon] Deactivated {Count} stale products", stale.Count);
         });
+    }
+
+    // =====================================================
+    // MAPPING HELPER
+    // =====================================================
+    private static void MapToEntity(LiquiMolyProductDto dto, NeonLiquiMolyProduct entity, DateTime now)
+    {
+        entity.Name                  = dto.Name;
+        entity.Category              = dto.Category;
+        entity.SubCategory           = dto.SubCategory;
+        entity.Description           = dto.Description;
+        entity.SpecGrade             = dto.SpecGrade;
+        entity.PackagingSize         = dto.PackagingSize;
+        entity.ImageUrl              = dto.ImageUrl;
+        entity.ProductUrl            = dto.ProductUrl;
+        entity.IsActive              = true;
+        entity.ScrapedAt             = now;
+
+        // Serialise list/dict fields to JSON strings
+        entity.AllPackagingSizes     = dto.AllPackagingSizes.Count > 0
+            ? JsonSerializer.Serialize(dto.AllPackagingSizes, _json)
+            : null;
+
+        entity.AllImageUrls          = dto.AllImageUrls.Count > 0
+            ? JsonSerializer.Serialize(dto.AllImageUrls, _json)
+            : null;
+
+        entity.Approvals             = dto.Approvals.Count > 0
+            ? JsonSerializer.Serialize(dto.Approvals, _json)
+            : null;
+
+        entity.Specifications        = dto.Specifications.Count > 0
+            ? JsonSerializer.Serialize(dto.Specifications, _json)
+            : null;
+
+        entity.ProductInfoPdfUrl     = dto.ProductInfoPdfUrl;
+        entity.SafetyDataSheetPdfUrl = dto.SafetyDataSheetPdfUrl;
     }
 }

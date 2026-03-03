@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MolasLubes.Infrastructure.Persistence;
@@ -75,23 +76,50 @@ public class LiquiMolyProductsController : ControllerBase
     {
         var p = await _db.LiquiMolyProducts.AsNoTracking()
             .Where(x => x.ArticleNumber == articleNumber)
-            .Select(x => new
-            {
-                x.ArticleNumber,
-                x.Name,
-                x.Category,
-                x.SubCategory,
-                x.Description,
-                x.SpecGrade,
-                x.PackagingSize,
-                x.IsActive,
-                x.ScrapedAt,
-                x.ProductUrl,
-                x.ImageUrl,
-            })
             .FirstOrDefaultAsync();
 
-        return p is null ? NotFound() : Ok(p);
+        if (p is null) return NotFound();
+
+        // Deserialise JSON-stored fields back to typed objects for the response
+        var response = new
+        {
+            // ── Identity ──────────────────────────────────────────────
+            p.ArticleNumber,
+            p.Name,
+            p.ProductUrl,
+
+            // ── Classification ────────────────────────────────────────
+            p.Category,
+            p.SubCategory,
+
+            // ── Description ───────────────────────────────────────────
+            p.Description,
+
+            // ── Packaging / sizes ─────────────────────────────────────
+            p.PackagingSize,
+            AllPackagingSizes = Deserialise<List<string>>(p.AllPackagingSizes),
+
+            // ── Spec grade ────────────────────────────────────────────
+            p.SpecGrade,
+
+            // ── Media ─────────────────────────────────────────────────
+            p.ImageUrl,
+            AllImageUrls = Deserialise<List<string>>(p.AllImageUrls),
+
+            // ── Approvals & Specifications ────────────────────────────
+            Approvals      = Deserialise<List<string>>(p.Approvals),
+            Specifications = Deserialise<Dictionary<string, string>>(p.Specifications),
+
+            // ── Downloads ─────────────────────────────────────────────
+            p.ProductInfoPdfUrl,
+            p.SafetyDataSheetPdfUrl,
+
+            // ── Meta ──────────────────────────────────────────────────
+            p.IsActive,
+            p.ScrapedAt,
+        };
+
+        return Ok(response);
     }
 
     // GET /api/liquimoly/products/categories
@@ -106,6 +134,15 @@ public class LiquiMolyProductsController : ControllerBase
             .ToListAsync();
 
         return Ok(categories);
+    }
+
+    // ── Private helpers ───────────────────────────────────────────────────────
+
+    private static T? Deserialise<T>(string? json) where T : class
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try { return JsonSerializer.Deserialize<T>(json); }
+        catch { return null; }
     }
 }
 
