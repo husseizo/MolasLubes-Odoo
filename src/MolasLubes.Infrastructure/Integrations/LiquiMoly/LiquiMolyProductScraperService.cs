@@ -84,80 +84,109 @@ public class LiquiMolyProductScraperService
     }
 
     /// <summary>
-    /// Searches Liqui-Moly for each supplied product one at a time, behaving
-    /// like a human browsing the site:
-    /// <list type="bullet">
-    ///   <item>Randomises the order before starting.</item>
-    ///   <item>Derives a clean search term from <c>ItemName</c> (strips the
-    ///         leading article-number prefix and the trailing packaging-size
-    ///         suffix so the text search finds the right product family).</item>
-    ///   <item>Inserts a randomised delay between every request.</item>
-    ///   <item>Adds an occasional longer "reading" pause every 8-12 items.</item>
-    /// </list>
+    /// Two-phase approach that avoids the broken site search (every query redirects
+    /// to the oil-guide SPA) while still visiting only the products we care about:
     ///
-    /// Because the site-search endpoint does not accept bare numeric queries
-    /// (they redirect to the oil guide), the scraper uses the product name as the
-    /// search term.  On the search-results page it looks for an exact article-
-    /// number match in the JSON-LD / HTML; if none is found it inspects the top
-    /// candidate detail pages to locate the matching packaging-variant SKU.
+    /// Phase 1 — Category scan (no detail-page visits):
+    ///   Walks each category listing page and notes the stubs whose article number
+    ///   is in <paramref name="articleNumbers"/>.  Pagination is followed so no
+    ///   product is missed.  Only a lightweight delay between pages.
+    ///
+    /// Phase 2 — Targeted detail enrichment (randomised + human-like delays):
+    ///   Visits the detail page of each matched stub in shuffled order.
+    ///   Variable inter-request delay (base ± 50 % jitter) plus an occasional
+    ///   "reading" pause every 8–12 items.
+    ///
+    /// This means we fetch ~N detail pages (where N = matched products) instead
+    /// of every product on the site.
     /// </summary>
-    /// <param name="items">
-    ///   Pairs of (ArticleNumber, ItemName) — e.g. ("1035", "1035-Hypoid Gear Oil (GL5) 85W90-1L").
-    /// </param>
     public async Task<List<LiquiMolyProductDto>> ScrapeByArticleNumbersAsync(
-        IEnumerable<(string ArticleNumber, string ItemName)> items,
+        IEnumerable<string> articleNumbers,
         CancellationToken cancellationToken = default)
     {
-        // De-duplicate, then shuffle to avoid predictable sequential patterns
-        var work = items
-            .Where(i => !string.IsNullOrWhiteSpace(i.ArticleNumber))
-            .DistinctBy(i => i.ArticleNumber, StringComparer.OrdinalIgnoreCase)
-            .OrderBy(_ => Random.Shared.Next())
-            .ToList();
+        var targets = new HashSet<string>(
+            articleNumbers.Select(n => n.Trim()).Where(n => n.Length > 0),
+            StringComparer.OrdinalIgnoreCase);
 
         _logger.LogInformation(
-            "[LiquiMoly] Starting human-like scrape for {Count} products", work.Count);
+            "[LiquiMoly] Phase 1 — scanning categories for {Count} target products",
+            targets.Count);
 
-        var results    = new List<LiquiMolyProductDto>();
-        int pauseEvery = Random.Shared.Next(8, 13); // longer pause every 8-12 items
+        // ── Phase 1: Scan listing pages, collect matching stubs only ────
+        var stubs = new List<LiquiMolyProductDto>();
 
-        for (int i = 0; i < work.Count; i++)
+        foreach (var (path, category) in _settings.CategoryPaths)
         {
             if (cancellationToken.IsCancellationRequested) break;
 
-            var (articleNumber, itemName) = work[i];
+            try
+            {
+                var found = await ScanCategoryForTargetsAsync(
+                    path, category, targets, cancellationToken);
+
+                stubs.AddRange(found);
+
+                _logger.LogInformation(
+                    "[LiquiMoly] Category '{Category}': {Found} target(s) found so far",
+                    category, stubs.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[LiquiMoly] Failed to scan category '{Category}'", category);
+            }
+
+            // Brief pause between categories (human-like)
+            await DelayAsync(
+                _settings.DelayBetweenCategoriesMs
+                + Random.Shared.Next(0, 1000), cancellationToken);
+        }
+
+        _logger.LogInformation(
+            "[LiquiMoly] Phase 1 complete — {Found}/{Total} targets located in listings",
+            stubs.Count, targets.Count);
+
+        if (stubs.Count == 0) return stubs;
+
+        // ── Phase 2: Enrich matched stubs from detail pages, randomised ─
+        _logger.LogInformation(
+            "[LiquiMoly] Phase 2 — enriching {Count} product detail pages", stubs.Count);
+
+        var results    = new List<LiquiMolyProductDto>(stubs.Count);
+        var shuffled   = stubs.OrderBy(_ => Random.Shared.Next()).ToList();
+        int pauseEvery = Random.Shared.Next(8, 13);
+
+        for (int i = 0; i < shuffled.Count; i++)
+        {
+            if (cancellationToken.IsCancellationRequested) break;
+
+            var stub = shuffled[i];
 
             try
             {
-                var dto = await ScrapeOneByNameAsync(articleNumber, itemName, cancellationToken);
-                if (dto != null)
-                {
-                    results.Add(dto);
-                    _logger.LogInformation(
-                        "[LiquiMoly] [{Done}/{Total}] {Article}: {Name}",
-                        results.Count, work.Count, dto.ArticleNumber, dto.Name);
-                }
-                else
-                {
-                    _logger.LogDebug(
-                        "[LiquiMoly] [{I}/{Total}] No match found for {Article}",
-                        i + 1, work.Count, articleNumber);
-                }
+                if (!string.IsNullOrWhiteSpace(stub.ProductUrl))
+                    await EnrichFromDetailPageAsync(stub, cancellationToken);
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex,
-                    "[LiquiMoly] Error scraping article {Article}", articleNumber);
+                    "[LiquiMoly] Failed to enrich detail for {Article}", stub.ArticleNumber);
             }
 
-            // Human-like variable delay: base ± 50 %
-            int jitter = Random.Shared.Next(0, _settings.DelayBetweenRequestsMs / 2);
-            await DelayAsync(_settings.DelayBetweenRequestsMs + jitter, cancellationToken);
+            results.Add(stub);
+            _logger.LogInformation(
+                "[LiquiMoly] [{Done}/{Total}] {Article}: {Name}",
+                results.Count, shuffled.Count, stub.ArticleNumber, stub.Name);
 
-            // Occasional longer "reading" pause
+            // Variable delay: base ± 50 % jitter
+            int delay = _settings.DelayBetweenRequestsMs
+                        + Random.Shared.Next(0, _settings.DelayBetweenRequestsMs / 2);
+            await DelayAsync(delay, cancellationToken);
+
+            // Occasional "reading" pause
             if ((i + 1) % pauseEvery == 0)
             {
-                pauseEvery = Random.Shared.Next(8, 13); // reset interval
+                pauseEvery = Random.Shared.Next(8, 13);
                 int reading = _settings.DelayBetweenCategoriesMs
                               + Random.Shared.Next(0, 2000);
                 _logger.LogDebug("[LiquiMoly] Reading pause {Ms} ms", reading);
@@ -166,155 +195,53 @@ public class LiquiMolyProductScraperService
         }
 
         _logger.LogInformation(
-            "[LiquiMoly] Scrape complete: {Found}/{Total} matched",
-            results.Count, work.Count);
+            "[LiquiMoly] Phase 2 complete — {Count} products enriched", results.Count);
 
         return results;
     }
 
     // ------------------------------------------------------------------
-    // SINGLE PRODUCT LOOKUP  (search-by-name → detail page)
+    // PHASE 1 HELPER — scan one category, return only target matches
     // ------------------------------------------------------------------
 
-    private async Task<LiquiMolyProductDto?> ScrapeOneByNameAsync(
-        string articleNumber, string itemName, CancellationToken ct)
+    private async Task<List<LiquiMolyProductDto>> ScanCategoryForTargetsAsync(
+        string relativePath,
+        string category,
+        HashSet<string> targets,
+        CancellationToken ct)
     {
-        var term      = BuildSearchTerm(articleNumber, itemName);
-        var searchUrl = BuildAbsolute("/en/search?q=" + Uri.EscapeDataString(term));
+        var found   = new List<LiquiMolyProductDto>();
+        var nextUrl = BuildAbsolute(relativePath);
 
-        var html = await FetchHtmlAsync(searchUrl, ct);
-        if (string.IsNullOrWhiteSpace(html)) return null;
-
-        var doc = new HtmlDocument();
-        doc.LoadHtml(html);
-
-        var candidates = ExtractFromJsonLd(doc, "Liqui-Moly", searchUrl);
-        if (candidates.Count == 0)
-            candidates = ExtractFromHtml(doc, "Liqui-Moly", searchUrl);
-
-        if (candidates.Count == 0) return null;
-
-        // ── Exact match in listing ──────────────────────────────────────
-        var dto = candidates.FirstOrDefault(p =>
-            string.Equals(p.ArticleNumber, articleNumber, StringComparison.OrdinalIgnoreCase));
-
-        if (dto != null)
+        while (!string.IsNullOrEmpty(nextUrl) && !ct.IsCancellationRequested)
         {
-            if (!string.IsNullOrWhiteSpace(dto.ProductUrl))
+            var html = await FetchHtmlAsync(nextUrl, ct);
+            if (string.IsNullOrWhiteSpace(html)) break;
+
+            var doc = new HtmlDocument();
+            doc.LoadHtml(html);
+
+            // Extract stubs — JSON-LD first, then HTML cards
+            var stubs = ExtractFromJsonLd(doc, category, nextUrl);
+            if (stubs.Count == 0)
+                stubs = ExtractFromHtml(doc, category, nextUrl);
+
+            // Keep only the stubs whose article number we're looking for
+            foreach (var stub in stubs)
             {
+                if (targets.Contains(stub.ArticleNumber))
+                    found.Add(stub);
+            }
+
+            nextUrl = FindNextPageUrl(doc);
+
+            if (!string.IsNullOrEmpty(nextUrl))
                 await DelayAsync(
                     _settings.DelayBetweenRequestsMs
-                    + Random.Shared.Next(0, 800), ct);
-                await EnrichFromDetailPageAsync(dto, ct);
-            }
-            return dto;
+                    + Random.Shared.Next(0, 500), ct);
         }
 
-        // ── No exact match: check top candidate detail pages for variant SKU ─
-        foreach (var candidate in candidates.Take(3))
-        {
-            if (string.IsNullOrWhiteSpace(candidate.ProductUrl)) continue;
-
-            await DelayAsync(
-                _settings.DelayBetweenRequestsMs
-                + Random.Shared.Next(0, 800), ct);
-
-            var detailHtml = await FetchHtmlAsync(candidate.ProductUrl, ct);
-            if (string.IsNullOrWhiteSpace(detailHtml)) continue;
-
-            var detailDoc = new HtmlDocument();
-            detailDoc.LoadHtml(detailHtml);
-
-            if (!PageContainsVariantSku(detailDoc, articleNumber)) continue;
-
-            // Found our variant on this product page — enrich in-place
-            candidate.ArticleNumber = articleNumber;
-            EnrichImages(candidate, detailDoc);
-            EnrichPackagingSizes(candidate, detailDoc);
-            EnrichDescription(candidate, detailDoc);
-            EnrichApprovalsAndSpecs(candidate, detailDoc);
-            EnrichDownloads(candidate, detailDoc);
-            return candidate;
-        }
-
-        return null;
-    }
-
-    // ------------------------------------------------------------------
-    // HELPERS — SEARCH TERM + VARIANT SKU CHECK
-    // ------------------------------------------------------------------
-
-    /// <summary>
-    /// Builds a clean text search term from the SAP ItemName.
-    /// e.g. "1035-Hypoid Gear Oil (GL5) 85W90-1L"  →  "Hypoid Gear Oil GL5 85W90"
-    /// </summary>
-    private static string BuildSearchTerm(string articleNumber, string itemName)
-    {
-        var name = string.IsNullOrWhiteSpace(itemName) ? articleNumber : itemName.Trim();
-
-        // Strip leading "{code}-" prefix
-        if (name.StartsWith(articleNumber + "-", StringComparison.OrdinalIgnoreCase))
-            name = name[(articleNumber.Length + 1)..].Trim();
-
-        // Strip trailing packaging-size suffix  e.g. "-1L", "- 20 l", "-500ml"
-        name = Regex.Replace(
-            name,
-            @"\s*[-–]\s*\d+(?:[.,]\d+)?\s*(?:ml|l|L|kg|g)\s*$",
-            string.Empty,
-            RegexOptions.IgnoreCase).Trim();
-
-        // Remove brackets so the search engine treats contents as keywords
-        name = name.Replace("(", " ").Replace(")", " ");
-        name = Regex.Replace(name, @"\s{2,}", " ").Trim();
-
-        return name;
-    }
-
-    /// <summary>
-    /// Returns true when the product detail page references <paramref name="sku"/>
-    /// as a standalone token — i.e. it appears surrounded by non-digit characters.
-    /// Checks both JSON-LD structured data and the plain-text page content.
-    /// </summary>
-    private static bool PageContainsVariantSku(HtmlDocument doc, string sku)
-    {
-        // JSON-LD first (fastest + most precise)
-        var scripts = doc.DocumentNode.SelectNodes("//script[@type='application/ld+json']");
-        if (scripts != null)
-        {
-            foreach (var script in scripts)
-            {
-                try
-                {
-                    using var root = JsonDocument.Parse(script.InnerText.Trim());
-                    if (JsonLdContainsSku(root.RootElement, sku)) return true;
-                }
-                catch { /* malformed JSON — skip */ }
-            }
-        }
-
-        // Word-boundary check in visible page text
-        var pattern = $@"(?<!\d){Regex.Escape(sku)}(?!\d)";
-        return Regex.IsMatch(doc.DocumentNode.InnerText, pattern);
-    }
-
-    private static bool JsonLdContainsSku(JsonElement el, string sku)
-    {
-        switch (el.ValueKind)
-        {
-            case JsonValueKind.Object:
-                if (el.TryGetProperty("sku", out var skuEl) &&
-                    string.Equals(skuEl.GetString(), sku, StringComparison.OrdinalIgnoreCase))
-                    return true;
-                foreach (var prop in el.EnumerateObject())
-                    if (JsonLdContainsSku(prop.Value, sku)) return true;
-                break;
-
-            case JsonValueKind.Array:
-                foreach (var item in el.EnumerateArray())
-                    if (JsonLdContainsSku(item, sku)) return true;
-                break;
-        }
-        return false;
+        return found;
     }
 
     // ------------------------------------------------------------------
