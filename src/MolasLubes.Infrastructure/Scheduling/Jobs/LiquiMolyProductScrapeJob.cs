@@ -12,11 +12,13 @@ namespace MolasLubes.Infrastructure.Scheduling.Jobs;
 
 /// <summary>
 /// Quartz job that:
-///   1. Reads distinct active (ItemCode, ItemName) pairs from CacheProducts.
+///   1. Reads distinct active ItemCodes from CacheProducts.
 ///   2. Passes them to <see cref="LiquiMolyProductScraperService.ScrapeByArticleNumbersAsync"/>
-///      which searches Liqui-Moly one product at a time in randomised order,
-///      using the product name (not the bare number) as the search term so the
-///      site does not redirect to the oil-guide page.
+///      which uses a 2-phase approach:
+///        Phase 1 — scan category listing pages to locate the matching product stubs
+///                  (no detail-page visits, just pagination + filtering).
+///        Phase 2 — visit each matched product's detail page in shuffled order
+///                  with human-like variable delays.
 ///   3. Upserts found products into SQL Server cache via LiquiMolyCacheSyncService.
 ///   4. Upserts found products into Neon PostgreSQL via LiquiMolyNeonSyncService.
 ///   5. Marks products no longer found on the website as inactive in both stores.
@@ -52,29 +54,26 @@ public class LiquiMolyProductScrapeJob : IJob
             var cacheSync = scope.ServiceProvider.GetRequiredService<LiquiMolyCacheSyncService>();
             var neonSync  = scope.ServiceProvider.GetRequiredService<LiquiMolyNeonSyncService>();
 
-            // ── Step 1: Resolve distinct (ItemCode, ItemName) from CacheProducts ─
-            // GroupBy ItemCode so that each article number appears once, taking
-            // the MAX ItemName — the value is identical across warehouse rows.
-            var items = await cacheDb.CacheProducts
+            // ── Step 1: Distinct active ItemCodes from CacheProducts ─────────
+            var articleNumbers = await cacheDb.CacheProducts
                 .Where(p => p.IsActive)
-                .GroupBy(p => p.ItemCode)
-                .Select(g => new { Code = g.Key, Name = g.Max(p => p.ItemName) })
+                .Select(p => p.ItemCode)
+                .Distinct()
                 .ToListAsync(context.CancellationToken);
 
             _logger.LogInformation(
-                "[LiquiMoly] Resolved {Count} distinct products from CacheProducts",
-                items.Count);
+                "[LiquiMoly] Resolved {Count} distinct article numbers from CacheProducts",
+                articleNumbers.Count);
 
-            if (items.Count == 0)
+            if (articleNumbers.Count == 0)
             {
                 _logger.LogWarning("[LiquiMoly] No active products in CacheProducts — skipping");
                 return;
             }
 
-            // ── Step 2: Scrape Liqui-Moly one product at a time ─────────────
+            // ── Step 2: Scrape (category scan → targeted detail enrichment) ──
             var products = await scraper.ScrapeByArticleNumbersAsync(
-                items.Select(i => (i.Code, i.Name ?? i.Code)),
-                context.CancellationToken);
+                articleNumbers, context.CancellationToken);
 
             if (products.Count == 0)
             {
@@ -95,7 +94,7 @@ public class LiquiMolyProductScrapeJob : IJob
             sw.Stop();
             _logger.LogInformation(
                 "[LiquiMoly] Job complete | Found={Found}/{Total} | DurationMs={Ms}",
-                products.Count, items.Count, sw.ElapsedMilliseconds);
+                products.Count, articleNumbers.Count, sw.ElapsedMilliseconds);
         }
         catch (Exception ex)
         {
