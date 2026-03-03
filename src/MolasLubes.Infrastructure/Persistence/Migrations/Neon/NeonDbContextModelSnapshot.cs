@@ -352,13 +352,21 @@ namespace MolasLubes.Infrastructure.Persistence.Migrations.Neon
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)");
 
+                    b.Property<string>("AllImageUrls")
+                        .HasColumnType("text");
+
+                    b.Property<string>("AllPackagingSizes")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Approvals")
+                        .HasColumnType("text");
+
                     b.Property<string>("Category")
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
 
                     b.Property<string>("Description")
-                        .HasMaxLength(2000)
-                        .HasColumnType("character varying(2000)");
+                        .HasColumnType("text");
 
                     b.Property<string>("ImageUrl")
                         .HasMaxLength(500)
@@ -375,12 +383,23 @@ namespace MolasLubes.Infrastructure.Persistence.Migrations.Neon
                         .HasMaxLength(30)
                         .HasColumnType("character varying(30)");
 
+                    b.Property<string>("ProductInfoPdfUrl")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
                     b.Property<string>("ProductUrl")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<string>("SafetyDataSheetPdfUrl")
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)");
 
                     b.Property<DateTime>("ScrapedAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Specifications")
+                        .HasColumnType("text");
 
                     b.Property<string>("SpecGrade")
                         .HasMaxLength(50)
