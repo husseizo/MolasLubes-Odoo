@@ -24,6 +24,7 @@ public class NeonDbContext : DbContext
     public DbSet<NeonInvoice> Invoices => Set<NeonInvoice>();
     public DbSet<NeonInvoiceLine> InvoiceLines => Set<NeonInvoiceLine>();
     public DbSet<NeonPayment> Payments => Set<NeonPayment>();
+    public DbSet<NeonLiquiMolyProduct> LiquiMolyProducts => Set<NeonLiquiMolyProduct>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -340,6 +341,32 @@ public class NeonDbContext : DbContext
 
             // 🔍 Fast joins
             e.HasIndex(x => x.InvoiceEntry);
+        });
+
+        // =====================================================
+        // LIQUI-MOLY SCRAPED PRODUCTS
+        // =====================================================
+        modelBuilder.Entity<NeonLiquiMolyProduct>(e =>
+        {
+            e.ToTable("NeonLiquiMolyProducts");
+
+            e.HasKey(x => x.ArticleNumber);
+
+            e.Property(x => x.ArticleNumber).HasMaxLength(20).IsRequired();
+            e.Property(x => x.Name).IsRequired();
+            e.Property(x => x.Category).HasMaxLength(100);
+            e.Property(x => x.SubCategory).HasMaxLength(100);
+            e.Property(x => x.Description).HasMaxLength(2000);
+            e.Property(x => x.SpecGrade).HasMaxLength(50);
+            e.Property(x => x.PackagingSize).HasMaxLength(30);
+            e.Property(x => x.ImageUrl).HasMaxLength(500);
+            e.Property(x => x.ProductUrl).HasMaxLength(500);
+
+            e.Property(x => x.ScrapedAt).IsRequired();
+
+            e.HasIndex(x => x.Category);
+            e.HasIndex(x => x.IsActive);
+            e.HasIndex(x => x.ScrapedAt);
         });
 
         base.OnModelCreating(modelBuilder);
