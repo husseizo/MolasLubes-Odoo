@@ -23,6 +23,7 @@ public class MolasCacheDbContext : DbContext
     public DbSet<CacheInvoiceLine> CacheInvoiceLines => Set<CacheInvoiceLine>();
     public DbSet<CachePayment> CachePayment => Set<CachePayment>(); // 🔴 singular by design
     public DbSet<CacheStockReservation> CacheStockReservations => Set<CacheStockReservation>();
+    public DbSet<CacheLiquiMolyProduct> CacheLiquiMolyProducts => Set<CacheLiquiMolyProduct>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -335,6 +336,32 @@ public class MolasCacheDbContext : DbContext
 
             entity.HasIndex(x => x.OdooPaymentId);
             entity.HasIndex(x => x.OdooStatus);
+        });
+
+        // =====================================================
+        // LIQUI-MOLY SCRAPED PRODUCTS
+        // =====================================================
+        modelBuilder.Entity<CacheLiquiMolyProduct>(entity =>
+        {
+            entity.ToTable("CacheLiquiMolyProducts");
+
+            entity.HasKey(x => x.ArticleNumber);
+
+            entity.Property(x => x.ArticleNumber).HasMaxLength(20).IsRequired();
+            entity.Property(x => x.Name).IsRequired();
+            entity.Property(x => x.Category).HasMaxLength(100);
+            entity.Property(x => x.SubCategory).HasMaxLength(100);
+            entity.Property(x => x.Description).HasMaxLength(2000);
+            entity.Property(x => x.SpecGrade).HasMaxLength(50);
+            entity.Property(x => x.PackagingSize).HasMaxLength(30);
+            entity.Property(x => x.ImageUrl).HasMaxLength(500);
+            entity.Property(x => x.ProductUrl).HasMaxLength(500);
+
+            entity.Property(x => x.ScrapedAt).IsRequired();
+
+            entity.HasIndex(x => x.Category);
+            entity.HasIndex(x => x.IsActive);
+            entity.HasIndex(x => x.ScrapedAt);
         });
 
         // =====================================================

@@ -12,6 +12,7 @@ using MolasLubes.Infrastructure.Services.Stock;
 using MolasLubes.Infrastructure.Services.Sync;
 using MolasLubes.Infrastructure.Services.Background;
 using MolasLubes.Infrastructure.Security;
+using MolasLubes.Infrastructure.Integrations.LiquiMoly;
 using Quartz;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -129,6 +130,22 @@ builder.Services.AddScoped<PriceListNeonSyncService>();
 builder.Services.AddHostedService<NeonKeepAliveService>();
 
 // =====================================================
+// LIQUI-MOLY SCRAPER
+// =====================================================
+builder.Services.Configure<LiquiMolyScraperSettings>(
+    builder.Configuration.GetSection("LiquiMolyScraper"));
+
+builder.Services.AddHttpClient<LiquiMolyProductScraperService>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(
+        builder.Configuration.GetValue("LiquiMolyScraper:RequestTimeoutSeconds", 30));
+});
+
+builder.Services.AddScoped<LiquiMolyProductScraperService>();
+builder.Services.AddScoped<MolasLubes.Infrastructure.Services.Sync.LiquiMolyCacheSyncService>();
+builder.Services.AddScoped<MolasLubes.Infrastructure.Services.Sync.LiquiMolyNeonSyncService>();
+
+// =====================================================
 // ODOO PUSH SERVICES
 // =====================================================
 builder.Services.AddHttpClient<OdooApiClient>(client =>
@@ -169,6 +186,7 @@ builder.Services.AddTransient<NeonDeliverySyncJob>();
 builder.Services.AddTransient<NeonSalesOrderSyncJob>();
 builder.Services.AddTransient<NeonSalesOrderLineSyncJob>();
 builder.Services.AddTransient<NeonPriceListSyncJob>();
+builder.Services.AddTransient<LiquiMolyProductScrapeJob>();
 
 // =====================================================
 // QUARTZ CONFIGURATION
@@ -252,6 +270,17 @@ builder.Services.AddQuartz(q =>
 
     // Price list sync: every 6 hours (also manually triggerable via admin endpoint)
     RegisterJob<NeonPriceListSyncJob>("NeonPriceListSyncJob", "0 30 */6 ? * *");
+
+    // Liqui-Moly product catalog scrape: once daily at 02:00 UTC
+    // Also manually triggerable via POST /api/admin/liquimoly/scrape
+    q.AddJob<LiquiMolyProductScrapeJob>(opts =>
+        opts.WithIdentity("LiquiMolyProductScrapeJob")
+            .StoreDurably());
+
+    q.AddTrigger(t => t
+        .ForJob(new JobKey("LiquiMolyProductScrapeJob"))
+        .WithIdentity("LiquiMolyProductScrapeJob-trigger")
+        .WithCronSchedule("0 0 2 ? * *")); // daily at 02:00 UTC
 });
 
 builder.Services.AddQuartzHostedService(o =>
