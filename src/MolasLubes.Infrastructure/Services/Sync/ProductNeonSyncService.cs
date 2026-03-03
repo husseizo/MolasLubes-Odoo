@@ -63,35 +63,47 @@ public class ProductNeonSyncService
             //    • Stale zero-stock rows stay dormant in Neon (not
             //      deleted) so history and Odoo UDFs are preserved.
             // -------------------------------------------------
-            var products = await _cacheDb.CacheProducts
+            // CacheProducts has a composite PK (ItemCode + Warehouse), so the same
+            // ItemCode can appear in multiple rows (one per warehouse location).
+            // Step 1: fetch the raw rows; Step 2: aggregate in-memory per ItemCode.
+            var rawProducts = await _cacheDb.CacheProducts
                 .AsNoTracking()
                 .Where(x =>
                     x.IsActive &&
                     x.LastSapSyncAt > lastSync)
-                .Select(x => new NeonProduct
-                {
-                    ItemCode = x.ItemCode,
-                    ItemName = x.ItemName,
-
-                    OnHandSap = x.OnHandSap,
-                    AvailableCache = x.AvailableCache,
-
-                    // ✅ HYBRID: orderable only when stock > 0
-                    IsActive = x.IsActive && x.AvailableCache > 0,
-
-                    Barcode = x.Barcode,
-
-                    // 🔗 ODOO UDFS
-                    OdooProductId = x.OdooProductId,
-                    OdooStatus = x.OdooStatus,
-                    OdooSyncDir = x.OdooSyncDir,
-                    OdooErrorMsg = x.OdooErrorMsg,
-                    OdooLastSync = x.OdooLastSync.AsUtc(),
-
-                    // ✅ ALWAYS UTC
-                    SyncedAt = DateTime.UtcNow
-                })
                 .ToListAsync();
+
+            var products = rawProducts
+                .GroupBy(x => x.ItemCode)
+                .Select(g =>
+                {
+                    var first = g.First();
+                    var totalAvailable = g.Sum(x => x.AvailableCache);
+                    return new NeonProduct
+                    {
+                        ItemCode = g.Key,
+                        ItemName = first.ItemName,
+
+                        OnHandSap      = g.Sum(x => x.OnHandSap),
+                        AvailableCache = totalAvailable,
+
+                        // ✅ HYBRID: orderable only when aggregate stock > 0
+                        IsActive = totalAvailable > 0,
+
+                        Barcode = first.Barcode,
+
+                        // 🔗 ODOO UDFS — taken from the first warehouse row
+                        OdooProductId = first.OdooProductId,
+                        OdooStatus    = first.OdooStatus,
+                        OdooSyncDir   = first.OdooSyncDir,
+                        OdooErrorMsg  = first.OdooErrorMsg,
+                        OdooLastSync  = first.OdooLastSync.AsUtc(),
+
+                        // ✅ ALWAYS UTC
+                        SyncedAt = DateTime.UtcNow
+                    };
+                })
+                .ToList();
 
             int upserted = 0, deactivated = 0, reactivated = 0;
 

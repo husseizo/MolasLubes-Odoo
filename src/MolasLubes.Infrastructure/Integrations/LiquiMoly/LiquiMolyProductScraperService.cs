@@ -10,23 +10,26 @@ namespace MolasLubes.Infrastructure.Integrations.LiquiMoly;
 /// Scrapes the Liqui-Moly public product catalog (Magento 2) and returns a flat list of
 /// <see cref="LiquiMolyProductDto"/> objects.
 ///
-/// Strategy — two-phase approach that avoids the broken site search
-/// (all queries redirect to the oil-guide SPA):
+/// Strategy — two-phase approach:
 ///
-/// Phase 1 — Category scan (no detail-page visits):
-///   Walks each category listing page and notes stubs whose article number is in the
-///   target set.  Magento 2 JSON-LD embeds a <c>Product</c> entry per product; the
-///   <c>offers</c> array inside it contains one entry per packaging variant whose
-///   <c>sku</c> field is the 4-digit variant article number (= CacheProducts ItemCode).
-///   Pagination is followed via the static "Next" link (?p=N query string).
+/// Phase 1 — Per-article catalog search:
+///   Issues one Magento 2 catalog-search request per target article number
+///   (<c>/en/catalogsearch/result/?q={sku}</c>).  Category listing pages are skipped
+///   because bot-detection redirects them silently to the oil-guide SPA.
+///   The catalog-search endpoint is a different server code-path and less aggressively guarded.
+///   JSON-LD structured data on the results page (or HTML product cards as a fallback)
+///   supplies the product name, canonical URL, and the per-variant <c>sku</c> values
+///   that match CacheProducts ItemCode values.
 ///
 /// Phase 2 — Targeted detail enrichment (randomised + human-like delays):
 ///   Visits each matched product's detail page exactly once (multiple variants
 ///   sharing the same product URL are enriched in a single visit).
 ///   Packaging sizes come from the Magento 2 x-magento-init swatch-renderer config.
 ///   Description and approvals/specs from server-rendered tab divs.
-///   Images from gallery containers and JSON-LD.
+///   Images from per-variant gallery divs (<c>variantswitch-sku-{sku}</c>) using the
+///   <c>ci-src</c> attribute (direct Liqui-Moly CDN URL).
 ///   Variable inter-request delay (base ± 50 % jitter) plus occasional "reading" pauses.
+///   Oil-guide redirect detection in <see cref="FetchHtmlAsync"/> protects both phases.
 /// </summary>
 public class LiquiMolyProductScraperService
 {
@@ -76,38 +79,46 @@ public class LiquiMolyProductScraperService
             StringComparer.OrdinalIgnoreCase);
 
         _logger.LogInformation(
-            "[LiquiMoly] Phase 1 — scanning {Categories} categories for {Targets} target article numbers",
-            _settings.CategoryPaths.Count, targets.Count);
+            "[LiquiMoly] Phase 1 — searching catalog for {Targets} target article numbers",
+            targets.Count);
 
-        // ── Phase 1: Scan listing pages, collect matching stubs ────────
+        // ── Phase 1: Per-article catalog search ────────────────────────
+        // Category listing pages are blocked by bot-detection (redirect to oil-guide).
+        // Instead, use the standard Magento 2 catalog search (?q=<sku>) which is a
+        // different server code-path and less aggressively guarded.
         var stubs = new List<LiquiMolyProductDto>();
 
-        foreach (var (path, category) in _settings.CategoryPaths)
+        // Shuffle for human-like access pattern
+        var shuffledTargets = targets.OrderBy(_ => Random.Shared.Next()).ToList();
+        int located = 0;
+
+        foreach (var articleNumber in shuffledTargets)
         {
             if (cancellationToken.IsCancellationRequested) break;
 
             try
             {
-                var found = await ScanCategoryForTargetsAsync(path, category, targets, cancellationToken);
+                var found = await SearchForArticleAsync(articleNumber, cancellationToken);
                 stubs.AddRange(found);
+                if (found.Count > 0) located++;
 
-                _logger.LogInformation(
-                    "[LiquiMoly] Category '{Category}': {Found} variant stub(s) found",
-                    category, found.Count);
+                _logger.LogDebug(
+                    "[LiquiMoly] Search '{Article}': {Found} stub(s)",
+                    articleNumber, found.Count);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[LiquiMoly] Failed to scan category '{Category}'", category);
+                _logger.LogError(ex, "[LiquiMoly] Failed to search for article '{Article}'", articleNumber);
             }
 
             await DelayAsync(
-                _settings.DelayBetweenCategoriesMs + Random.Shared.Next(0, 1000),
+                _settings.DelayBetweenRequestsMs + Random.Shared.Next(0, 500),
                 cancellationToken);
         }
 
         _logger.LogInformation(
-            "[LiquiMoly] Phase 1 complete — {Found}/{Total} target(s) located across all categories",
-            stubs.Count, targets.Count);
+            "[LiquiMoly] Phase 1 complete — {Located}/{Total} target(s) located",
+            located, targets.Count);
 
         if (stubs.Count == 0) return stubs;
 
@@ -188,45 +199,33 @@ public class LiquiMolyProductScraperService
     }
 
     // ------------------------------------------------------------------
-    // PHASE 1: Scan one category, return only target stubs
+    // PHASE 1: Search catalog for a single article number
     // ------------------------------------------------------------------
 
-    private async Task<List<LiquiMolyProductDto>> ScanCategoryForTargetsAsync(
-        string relativePath,
-        string category,
-        HashSet<string> targets,
+    /// <summary>
+    /// Uses the Magento 2 catalog search endpoint to find the product page for a given
+    /// article number.  Returns at most one stub (the offer whose SKU matches exactly).
+    /// </summary>
+    private async Task<List<LiquiMolyProductDto>> SearchForArticleAsync(
+        string articleNumber,
         CancellationToken ct)
     {
-        var found   = new List<LiquiMolyProductDto>();
-        var nextUrl = BuildAbsolute(relativePath);
+        var url  = BuildAbsolute($"/en/catalogsearch/result/?q={Uri.EscapeDataString(articleNumber)}");
+        var html = await FetchHtmlAsync(url, ct);
+        if (string.IsNullOrWhiteSpace(html)) return new();
 
-        while (!string.IsNullOrEmpty(nextUrl) && !ct.IsCancellationRequested)
-        {
-            var html = await FetchHtmlAsync(nextUrl, ct);
-            if (string.IsNullOrWhiteSpace(html)) break;
+        var doc = new HtmlDocument();
+        doc.LoadHtml(html);
 
-            var doc = new HtmlDocument();
-            doc.LoadHtml(html);
+        // JSON-LD first (server-rendered, most reliable); fall back to HTML cards
+        var stubs = ExtractFromJsonLd(doc, null, url);
+        if (stubs.Count == 0)
+            stubs = ExtractFromHtml(doc, null, url);
 
-            // JSON-LD is more reliable (server-rendered for SEO); fall back to HTML cards
-            var stubs = ExtractFromJsonLd(doc, category, nextUrl);
-            if (stubs.Count == 0)
-                stubs = ExtractFromHtml(doc, category, nextUrl);
-
-            foreach (var stub in stubs)
-            {
-                if (targets.Contains(stub.ArticleNumber))
-                    found.Add(stub);
-            }
-
-            nextUrl = FindNextPageUrl(doc);
-
-            if (!string.IsNullOrEmpty(nextUrl))
-                await DelayAsync(
-                    _settings.DelayBetweenRequestsMs + Random.Shared.Next(0, 500), ct);
-        }
-
-        return found;
+        // Only keep results that exactly match our target article number
+        return stubs
+            .Where(s => string.Equals(s.ArticleNumber, articleNumber, StringComparison.OrdinalIgnoreCase))
+            .ToList();
     }
 
     // ------------------------------------------------------------------
@@ -257,21 +256,25 @@ public class LiquiMolyProductScraperService
         var seen   = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var images = new List<string>();
 
-        // Magento 2 gallery containers
-        var imgNodes = doc.DocumentNode.SelectNodes(
-            "//div[@data-gallery-role='gallery']//img"             +
-            "|//div[contains(@class,'fotorama')]//img"             +
-            "|//div[contains(@class,'gallery-placeholder')]//img"  +
-            "|//div[contains(@class,'product-image-container')]//img" +
-            "|//div[contains(@class,'product-media')]//img");
+        // ── Primary: variant-specific gallery (Liqui-Moly Magento 2) ──
+        // Each packaging variant has its own gallery div:
+        //   <div class="variantswitch-sku variantswitch-sku-{sku} [d-none]">
+        //     <div id="gallery-preview-{sku}">
+        //       <div class="product-gallery-preview-media">
+        //         <img ci-src="https://www.liqui-moly.com/..." data-src="...cloudimg...">
+        //
+        // ci-src = direct Liqui-Moly URL (preferred)
+        // data-src = CloudImg CDN proxy URL
+        var variantXPath = $"//div[contains(@class,'variantswitch-sku-{dto.ArticleNumber}')]//img";
+        var variantImgs  = doc.DocumentNode.SelectNodes(variantXPath);
 
-        if (imgNodes != null)
+        if (variantImgs != null)
         {
-            foreach (var img in imgNodes)
+            foreach (var img in variantImgs)
             {
-                var src = img.GetAttributeValue("src",       null)
-                       ?? img.GetAttributeValue("data-src",  null)
-                       ?? img.GetAttributeValue("data-lazy", null);
+                var src = img.GetAttributeValue("ci-src",   null)
+                       ?? img.GetAttributeValue("data-src", null)
+                       ?? img.GetAttributeValue("src",      null);
 
                 var url = BuildAbsoluteOrNull(src);
                 if (url != null && seen.Add(url))
@@ -279,7 +282,32 @@ public class LiquiMolyProductScraperService
             }
         }
 
-        // Fallback: JSON-LD image array on the detail page (always server-rendered)
+        // ── Fallback: generic Magento 2 gallery containers ─────────────
+        if (images.Count == 0)
+        {
+            var imgNodes = doc.DocumentNode.SelectNodes(
+                "//div[@data-gallery-role='gallery']//img"              +
+                "|//div[contains(@class,'fotorama')]//img"              +
+                "|//div[contains(@class,'gallery-placeholder')]//img"   +
+                "|//div[contains(@class,'product-image-container')]//img" +
+                "|//div[contains(@class,'product-media')]//img");
+
+            if (imgNodes != null)
+            {
+                foreach (var img in imgNodes)
+                {
+                    var src = img.GetAttributeValue("ci-src",   null)
+                           ?? img.GetAttributeValue("data-src", null)
+                           ?? img.GetAttributeValue("src",      null);
+
+                    var url = BuildAbsoluteOrNull(src);
+                    if (url != null && seen.Add(url))
+                        images.Add(url);
+                }
+            }
+        }
+
+        // ── Fallback: JSON-LD image array (always server-rendered) ─────
         var scriptNodes = doc.DocumentNode.SelectNodes("//script[@type='application/ld+json']");
         if (scriptNodes != null)
         {
@@ -829,8 +857,26 @@ public class LiquiMolyProductScraperService
             req.Headers.TryAddWithoutValidation("Accept-Encoding", "gzip, deflate, br");
             req.Headers.TryAddWithoutValidation("Cache-Control", "no-cache");
             req.Headers.TryAddWithoutValidation("Referer", _settings.BaseUrl);
+            // Sec-Fetch headers that browsers always send for top-level navigation
+            req.Headers.TryAddWithoutValidation("Sec-Fetch-Dest", "document");
+            req.Headers.TryAddWithoutValidation("Sec-Fetch-Mode", "navigate");
+            req.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "none");
+            req.Headers.TryAddWithoutValidation("Sec-Fetch-User", "?1");
+            req.Headers.TryAddWithoutValidation("Upgrade-Insecure-Requests", "1");
 
             using var resp = await _http.SendAsync(req, ct);
+
+            // Detect silent redirect to the oil-guide SPA (bot detection).
+            // HttpClient follows the 302 and returns 200 from the oil-guide page, so
+            // we compare the final URI rather than the status code.
+            var finalUri = resp.RequestMessage?.RequestUri;
+            if (finalUri != null &&
+                finalUri.AbsolutePath.Contains("oil-guide", StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogWarning("[LiquiMoly] {Url} redirected to oil-guide (bot detection) — skipping", url);
+                return string.Empty;
+            }
+
             resp.EnsureSuccessStatusCode();
             return await resp.Content.ReadAsStringAsync(ct);
         }
