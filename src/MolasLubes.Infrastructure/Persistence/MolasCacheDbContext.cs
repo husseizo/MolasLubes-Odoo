@@ -351,12 +351,22 @@ public class MolasCacheDbContext : DbContext
             entity.Property(x => x.Name).IsRequired();
             entity.Property(x => x.Category).HasMaxLength(100);
             entity.Property(x => x.SubCategory).HasMaxLength(100);
-            entity.Property(x => x.Description).HasMaxLength(2000);
+            entity.Property(x => x.Description).HasMaxLength(4000);
             entity.Property(x => x.SpecGrade).HasMaxLength(50);
             entity.Property(x => x.PackagingSize).HasMaxLength(30);
-            entity.Property(x => x.ImageUrl).HasMaxLength(500);
-            entity.Property(x => x.ProductUrl).HasMaxLength(500);
 
+            // JSON columns for multi-value fields
+            entity.Property(x => x.AllPackagingSizes);          // JSON array of strings
+            entity.Property(x => x.ImageUrl).HasMaxLength(500);
+            entity.Property(x => x.AllImageUrls);               // JSON array of strings
+            entity.Property(x => x.Approvals);                  // JSON array of strings
+            entity.Property(x => x.Specifications);             // JSON object (key-value)
+
+            // PDF downloads
+            entity.Property(x => x.ProductInfoPdfUrl).HasMaxLength(500);
+            entity.Property(x => x.SafetyDataSheetPdfUrl).HasMaxLength(500);
+
+            entity.Property(x => x.ProductUrl).HasMaxLength(500);
             entity.Property(x => x.ScrapedAt).IsRequired();
 
             entity.HasIndex(x => x.Category);
