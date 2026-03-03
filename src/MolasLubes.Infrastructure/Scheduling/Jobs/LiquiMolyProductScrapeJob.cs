@@ -12,16 +12,17 @@ namespace MolasLubes.Infrastructure.Scheduling.Jobs;
 
 /// <summary>
 /// Quartz job that:
-///   1. Reads distinct active ItemCodes from <see cref="MolasCacheDbContext.CacheProducts"/>.
-///   2. Looks up each article number on the Liqui-Moly website via the search page.
-///   3. Upserts results into the local SQL Server cache via
-///      <see cref="LiquiMolyCacheSyncService"/>.
-///   4. Upserts results into Neon PostgreSQL via
-///      <see cref="LiquiMolyNeonSyncService"/>.
+///   1. Reads distinct active (ItemCode, ItemName) pairs from CacheProducts.
+///   2. Passes them to <see cref="LiquiMolyProductScraperService.ScrapeByArticleNumbersAsync"/>
+///      which searches Liqui-Moly one product at a time in randomised order,
+///      using the product name (not the bare number) as the search term so the
+///      site does not redirect to the oil-guide page.
+///   3. Upserts found products into SQL Server cache via LiquiMolyCacheSyncService.
+///   4. Upserts found products into Neon PostgreSQL via LiquiMolyNeonSyncService.
 ///   5. Marks products no longer found on the website as inactive in both stores.
 ///
-/// Scheduled (default) every 24 hours via Program.cs configuration.
-/// Can also be triggered manually via the admin API.
+/// Scheduled (default) every 24 hours via Program.cs.
+/// Can also be triggered manually via POST /api/admin/liquimoly/scrape.
 /// </summary>
 [DisallowConcurrentExecution]
 public class LiquiMolyProductScrapeJob : IJob
@@ -51,26 +52,29 @@ public class LiquiMolyProductScrapeJob : IJob
             var cacheSync = scope.ServiceProvider.GetRequiredService<LiquiMolyCacheSyncService>();
             var neonSync  = scope.ServiceProvider.GetRequiredService<LiquiMolyNeonSyncService>();
 
-            // ── Step 1: Resolve article numbers from local cache ────────
-            var articleNumbers = await cacheDb.CacheProducts
+            // ── Step 1: Resolve distinct (ItemCode, ItemName) from CacheProducts ─
+            // GroupBy ItemCode so that each article number appears once, taking
+            // the MAX ItemName — the value is identical across warehouse rows.
+            var items = await cacheDb.CacheProducts
                 .Where(p => p.IsActive)
-                .Select(p => p.ItemCode)
-                .Distinct()
+                .GroupBy(p => p.ItemCode)
+                .Select(g => new { Code = g.Key, Name = g.Max(p => p.ItemName) })
                 .ToListAsync(context.CancellationToken);
 
             _logger.LogInformation(
-                "[LiquiMoly] Resolved {Count} distinct article numbers from CacheProducts",
-                articleNumbers.Count);
+                "[LiquiMoly] Resolved {Count} distinct products from CacheProducts",
+                items.Count);
 
-            if (articleNumbers.Count == 0)
+            if (items.Count == 0)
             {
-                _logger.LogWarning("[LiquiMoly] No active products in CacheProducts — skipping scrape");
+                _logger.LogWarning("[LiquiMoly] No active products in CacheProducts — skipping");
                 return;
             }
 
-            // ── Step 2: Scrape Liqui-Moly by article number ─────────────
+            // ── Step 2: Scrape Liqui-Moly one product at a time ─────────────
             var products = await scraper.ScrapeByArticleNumbersAsync(
-                articleNumbers, context.CancellationToken);
+                items.Select(i => (i.Code, i.Name ?? i.Code)),
+                context.CancellationToken);
 
             if (products.Count == 0)
             {
@@ -80,18 +84,18 @@ public class LiquiMolyProductScrapeJob : IJob
 
             var scrapedNumbers = products.Select(p => p.ArticleNumber).ToList();
 
-            // ── Step 3: Save to local cache (SQL Server) ────────────────
+            // ── Step 3: Save to local cache (SQL Server) ────────────────────
             await cacheSync.UpsertAsync(products);
             await cacheSync.DeactivateStaleAsync(scrapedNumbers);
 
-            // ── Step 4: Save to Neon (PostgreSQL) ──────────────────────
+            // ── Step 4: Save to Neon (PostgreSQL) ──────────────────────────
             await neonSync.UpsertAsync(products);
             await neonSync.DeactivateStaleAsync(scrapedNumbers);
 
             sw.Stop();
             _logger.LogInformation(
-                "[LiquiMoly] Scrape job completed | Found={Found}/{Total} | DurationMs={Ms}",
-                products.Count, articleNumbers.Count, sw.ElapsedMilliseconds);
+                "[LiquiMoly] Job complete | Found={Found}/{Total} | DurationMs={Ms}",
+                products.Count, items.Count, sw.ElapsedMilliseconds);
         }
         catch (Exception ex)
         {
