@@ -1,5 +1,8 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using MolasLubes.Api.Security;
+using Serilog;
+using Serilog.Events;
+using Serilog.Sinks.SystemConsole.Themes;
 using MolasLubes.Infrastructure.Common;
 using MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 using MolasLubes.Infrastructure.Persistence;
@@ -16,6 +19,43 @@ using MolasLubes.Infrastructure.Integrations.LiquiMoly;
 using Quartz;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// =====================================================
+// 📄 LOGGING — SERILOG (Console + File)
+// =====================================================
+builder.Host.UseSerilog((ctx, lc) => lc
+    .ReadFrom.Configuration(ctx.Configuration)   // allow appsettings overrides
+
+    // App-level minimum
+    .MinimumLevel.Information()
+
+    // Suppress noisy framework namespaces (keep at Warning only)
+    .MinimumLevel.Override("Microsoft",                       LogEventLevel.Warning)
+    .MinimumLevel.Override("Microsoft.AspNetCore",            LogEventLevel.Warning)
+    .MinimumLevel.Override("Microsoft.EntityFrameworkCore",   LogEventLevel.Warning)
+    .MinimumLevel.Override("System.Net.Http.HttpClient",      LogEventLevel.Warning)
+    .MinimumLevel.Override("Quartz",                          LogEventLevel.Warning)
+
+    .Enrich.FromLogContext()
+
+    // ── Console ────────────────────────────────────────────────────────
+    .WriteTo.Console(
+        outputTemplate:
+            "{Timestamp:HH:mm:ss.fff} [{Level:u3}] {SourceContext} {Message:lj}{NewLine}{Exception}",
+        theme: AnsiConsoleTheme.Code)
+
+    // ── Rolling file — C:\Dev\Sapscrapodoo\ ────────────────────────────
+    // File: molaslubes-20260303.log  (new file each day)
+    // Retention: 31 days; max 50 MB per file before rolling to the next
+    .WriteTo.File(
+        path: @"C:\Dev\Sapscrapodoo\molaslubes-.log",
+        rollingInterval:        RollingInterval.Day,
+        retainedFileCountLimit: 31,
+        fileSizeLimitBytes:     50_000_000,
+        rollOnFileSizeLimit:    true,
+        shared:                 true,           // safe for multi-process write
+        outputTemplate:
+            "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {SourceContext} {Message:lj}{NewLine}{Exception}"));
 
 // =====================================================
 // 🔧 SYNC SETTINGS
