@@ -461,18 +461,43 @@ public class LiquiMolyProductScraperService
     private static void EnrichDescription(LiquiMolyProductDto dto, HtmlDocument doc)
     {
         var descNode =
-            // Magento 2 custom tab IDs used by Liqui-Moly
+            // Liqui-Moly Magento 2: tab content (most detailed, may not be server-rendered)
             doc.DocumentNode.SelectSingleNode("//div[@id='tab-detail-description']") ??
+            // Liqui-Moly Magento 2: visible overview block above the tabs
+            // <div class="product attribute overview"><span class="value">…</span></div>
+            doc.DocumentNode.SelectSingleNode(
+                "//div[contains(@class,'product') and contains(@class,'attribute') and contains(@class,'overview')]//*[@class='value']") ??
             // Magento 2 standard selectors
             doc.DocumentNode.SelectSingleNode("//div[contains(@class,'product-info-description')]") ??
-            doc.DocumentNode.SelectSingleNode("//div[contains(@class,'product.description')]")     ??
             doc.DocumentNode.SelectSingleNode("//div[@itemprop='description']");
 
-        if (descNode == null) return;
+        if (descNode != null)
+        {
+            var text = HtmlEntity.DeEntitize(descNode.InnerText).Trim();
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                dto.Description = text;
+                return;
+            }
+        }
 
-        var text = HtmlEntity.DeEntitize(descNode.InnerText).Trim();
-        if (!string.IsNullOrWhiteSpace(text))
-            dto.Description = text;
+        // Fallback: compile product feature bullet-points from the check-list
+        // <div class="product attribute properties"><ul class="check-list"><li class="value"><span>…</span></li>
+        var liNodes = doc.DocumentNode.SelectNodes(
+            "//div[contains(@class,'attribute') and contains(@class,'properties')]//li[contains(@class,'value')]");
+        if (liNodes == null) return;
+
+        var props = liNodes
+            .Select(li =>
+            {
+                var span = li.SelectSingleNode(".//span");
+                return HtmlEntity.DeEntitize(span?.InnerText ?? li.InnerText).Trim();
+            })
+            .Where(t => !string.IsNullOrWhiteSpace(t) && t.Length < 300)
+            .ToList();
+
+        if (props.Count > 0)
+            dto.Description = string.Join(". ", props);
     }
 
     // ── Approvals & Specifications ────────────────────────────────────
@@ -580,6 +605,28 @@ public class LiquiMolyProductScraperService
                            .Select(s => s.Trim())
                            .Where(s => s.Length > 0 && s.Length < 200));
                 }
+            }
+        }
+
+        // Liqui-Moly inline compact specs (visible in the product info area above tabs):
+        // <div class="pb-2 fs-10"><p><strong>Specifications / Approvals:</strong> BMW LL-04, MB 229.31 …</p></div>
+        // Used as fallback when the tab panel content is not server-rendered.
+        if (approvals.Count == 0 && specs.Count == 0)
+        {
+            var inlineP = doc.DocumentNode.SelectSingleNode(
+                "//p[.//strong[contains(text(),'Specifications') or contains(text(),'Approvals')]]");
+
+            if (inlineP != null)
+            {
+                var raw = HtmlEntity.DeEntitize(inlineP.InnerText).Trim();
+                // Strip "Specifications / Approvals:" label prefix (everything up to the first colon)
+                var idx = raw.IndexOf(':');
+                if (idx >= 0) raw = raw[(idx + 1)..].Trim();
+
+                approvals.AddRange(
+                    raw.Split(new[] { ',', ';', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
+                       .Select(s => s.Trim())
+                       .Where(s => s.Length > 0 && s.Length < 200));
             }
         }
 
