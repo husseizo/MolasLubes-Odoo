@@ -15,6 +15,12 @@ public class LiquiMolyScraperSettings
     public int RequestTimeoutSeconds { get; set; } = 30;
 
     /// <summary>
+    /// Relative search path template — {0} is replaced with the article number.
+    /// Used by <c>ScrapeByArticleNumbersAsync</c> to resolve each CacheProduct ItemCode.
+    /// </summary>
+    public string SearchPath { get; set; } = "/en/search?query={0}";
+
+    /// <summary>
     /// Relative paths (from BaseUrl) of product-catalog category pages to scrape.
     /// Key = path, Value = human-readable category name.
     /// </summary>
