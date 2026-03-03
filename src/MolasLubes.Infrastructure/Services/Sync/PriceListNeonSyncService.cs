@@ -38,8 +38,11 @@ public class PriceListNeonSyncService
 
             // -------------------------------------------------
             // 1️⃣ READ SOURCE FROM CACHE (STRONGLY TYPED)
+            // CacheProducts has a composite PK (ItemCode + Warehouse) — multiple rows
+            // per ItemCode exist (one per warehouse). Prices are product-level, not
+            // warehouse-level, so we deduplicate by ItemCode after fetching.
             // -------------------------------------------------
-            var source = await _cacheDb.CacheProducts
+            var source = (await _cacheDb.CacheProducts
                 .AsNoTracking()
                 .Select(p => new PriceSourceRow
                 {
@@ -54,7 +57,9 @@ public class PriceListNeonSyncService
                     OdooErrorMsg = p.OdooErrorMsg,
                     OdooLastSync = p.OdooLastSync
                 })
-                .ToListAsync();
+                .ToListAsync())
+                .DistinctBy(p => p.ItemCode)
+                .ToList();
 
             if (source.Count == 0)
             {
