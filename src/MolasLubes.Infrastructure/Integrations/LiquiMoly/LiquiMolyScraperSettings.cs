@@ -8,10 +8,12 @@ public class LiquiMolyScraperSettings
 
     public int DelayBetweenRequestsMs { get; set; } = 250;
 
-<<<<<<< HEAD
-    // Optional:
+    /// <summary>
+    /// Optional: per-request HTTP timeout in seconds.
+    /// Default: 30.
+    /// </summary>
     public int HttpTimeoutSeconds { get; set; } = 30;
-=======
+
     /// <summary>
     /// Number of article numbers to scrape per batch.
     /// Smaller batches reduce peak memory usage and allow incremental saves.
@@ -21,19 +23,18 @@ public class LiquiMolyScraperSettings
 
     /// <summary>
     /// Maximum number of concurrent HTTP requests during the detail-page enrichment
-    /// phase.  Higher values speed up enrichment at the cost of being more detectable
-    /// as a bot.  Default: 1 (fully sequential, safest).
+    /// phase. Higher values speed up enrichment at the cost of being more detectable
+    /// as a bot. Default: 1 (fully sequential, safest).
     /// </summary>
     public int MaxConcurrency { get; set; } = 1;
 
     /// <summary>
     /// Optional hard-coded OWW API prefix (e.g. "/api/v2/oww/101/TZA/ENG/1").
     /// When empty the prefix is auto-detected from the fragment of the first
-    /// oil-guide redirect (e.g. "#oww:/api/v2/oww/101/TZA/ENG/1/...").
+    /// oil-guide redirect (e.g. "#oww:/api/v2/oww/101/TZA/ENG/1/...")
     /// Only needed if auto-detection fails or the server is slow to redirect.
     /// </summary>
     public string OwwApiPrefix { get; set; } = string.Empty;
->>>>>>> 99f3eb24f872212a976f7e39a2b48bfc706b672f
 
     public Dictionary<string, string> CategoryPaths { get; set; } = new()
     {
