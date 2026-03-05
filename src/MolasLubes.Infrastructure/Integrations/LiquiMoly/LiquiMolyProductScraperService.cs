@@ -1,73 +1,32 @@
-using System.Text.Json;
-using System.Text.RegularExpressions;
 using HtmlAgilityPack;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using System.Collections.Concurrent;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace MolasLubes.Infrastructure.Integrations.LiquiMoly;
 
-/// <summary>
-/// Scrapes the Liqui-Moly public product catalog (Magento 2) and returns a flat list of
-/// <see cref="LiquiMolyProductDto"/> objects.
-///
-/// Strategy — two-phase approach:
-///
-/// Phase 1 — Per-article catalog search with OWW fallback:
-///   Issues one Magento 2 catalog-search request per target article number
-///   (<c>/en/catalogsearch/result/?q={sku}</c>).  If the server geo-detects a
-///   non-supported region (e.g. Tanzania → TZA) it silently 302-redirects to the
-///   oil-guide SPA whose Location header fragment encodes the OWW API prefix:
-///     <c>oil-guide.html#oww:/api/v2/oww/101/TZA/ENG/1/en/catalogsearch/result/?q=3044</c>
-///   <see cref="FetchHtmlAsync"/> auto-detects this prefix from the first redirect,
-///   stores it, and transparently retries the same Magento path through the OWW API
-///   (<c>/api/v2/oww/{prefix}{original_path}</c>) which may return HTML or JSON.
-///   JSON-LD structured data (or HTML product cards as a fallback) on the results page
-///   supplies the product name, canonical URL, and the per-variant <c>sku</c> values.
-///
-/// Phase 2 — Targeted detail enrichment (randomised + human-like delays):
-///   Visits each matched product's detail page exactly once (multiple variants
-///   sharing the same product URL are enriched in a single visit).
-///   Packaging sizes come from the Magento 2 x-magento-init swatch-renderer config.
-///   Description and approvals/specs from server-rendered tab divs.
-///   Images from per-variant gallery divs (<c>variantswitch-sku-{sku}</c>) using the
-///   <c>ci-src</c> attribute (direct Liqui-Moly CDN URL).
-///   Variable inter-request delay (base ± 50 % jitter) plus occasional "reading" pauses.
-///   OWW redirect detection and retry in <see cref="FetchHtmlAsync"/> is transparent
-///   to all callers — both phases benefit automatically.
-/// </summary>
 public class LiquiMolyProductScraperService
 {
-    private readonly HttpClient                              _http;
-    private readonly LiquiMolyScraperSettings                _settings;
+    private readonly HttpClient _http;
+    private readonly LiquiMolyScraperSettings _settings;
     private readonly ILogger<LiquiMolyProductScraperService> _logger;
 
-    // 4-6 digit bare number = packaging variant SKU (e.g. "1035", "20465")
-    private static readonly Regex _variantSkuPattern = new(@"^\d{4,6}$", RegexOptions.Compiled);
 
-    // Extracts the OWW API prefix from the fragment of an oil-guide redirect URL.
-    // Fragment format: #oww:/api/v2/oww/{portalId}/{country}/{lang}/{store}/...
-    // We capture everything up to and including the numeric store-view segment.
-    private static readonly Regex _owwPrefixRegex = new(
-        @"^#?oww:(/api/v\d+/oww/\d+/[A-Za-z]{2,3}/[A-Za-z]{2,3}/\d+)",
-        RegexOptions.Compiled);
+    private static Dictionary<string, string>? _cachedIndex;
 
-    /// <summary>
-    /// Auto-detected OWW API prefix (e.g. "/api/v2/oww/101/TZA/ENG/1").
-    /// Populated on the first oil-guide redirect whose Location fragment contains the prefix.
-    /// </summary>
-    private string? _owwApiPrefix;
+    private Dictionary<string, string>? _productIndex;
 
-    private static readonly Regex _specGradePattern = new(
-        @"\b\d{1,2}W[-–]\d{2,3}\b|\bSAE\s+\d+\b|\bDEXRON\b|\bMERCON\b|\bATF\b|\bDOT\s*[3456]\b",
+    private static readonly Regex VariantSkuPattern =
+        new(@"^\d{4,6}$", RegexOptions.Compiled);
+
+    private static readonly Regex SizePattern =
+        new(@"\b(\d+(?:[.,]\d+)?\s*(?:ml|l|kg|g))\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    private static readonly Regex _sizePattern = new(
-        @"\b(\d+(?:[.,]\d+)?\s*(?:ml|l|L|kg|g|oz|lb))\b",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
-    // Matches absolute PDF URLs hosted on Liqui-Moly's PIM CDN (may appear in JS strings)
-    private static readonly Regex _pimPdfPattern = new(
-        @"https://pim\.liqui-moly\.com/[^\s""'<>]+\.pdf",
+    private static readonly Regex SpecGradePattern =
+        new(@"\b\d{1,2}W[-–]\d{2,3}\b|\bSAE\s+\d+\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     public LiquiMolyProductScraperService(
@@ -75,1029 +34,384 @@ public class LiquiMolyProductScraperService
         IOptions<LiquiMolyScraperSettings> settings,
         ILogger<LiquiMolyProductScraperService> logger)
     {
-        _http     = httpClient;
+        _http = httpClient;
         _settings = settings.Value;
-        _logger   = logger;
+        _logger = logger;
+
+        _http.DefaultRequestHeaders.TryAddWithoutValidation(
+            "User-Agent",
+            "Mozilla/5.0");
     }
 
-    // ------------------------------------------------------------------
-    // PUBLIC API
-    // ------------------------------------------------------------------
+    // ======================================================
+    // MAIN ENTRY
+    // ======================================================
 
-    /// <summary>
-    /// Two-phase scrape: scan category listings → enrich matched product detail pages.
-    /// </summary>
     public async Task<List<LiquiMolyProductDto>> ScrapeByArticleNumbersAsync(
-        IEnumerable<string> articleNumbers,
-        CancellationToken cancellationToken = default)
+     IEnumerable<string> articleNumbers,
+     CancellationToken ct = default)
     {
+        var raw = articleNumbers?.ToList() ?? new List<string>();
+
+        _logger.LogInformation(
+            "[LiquiMoly] Raw SKU input count: {Count}",
+            raw.Count);
+
+        if (raw.Count > 0)
+        {
+            _logger.LogInformation(
+                "[LiquiMoly] First 10 raw SKUs: {Skus}",
+                string.Join(", ", raw.Take(10)));
+        }
+
+        // Filter only valid numeric SKUs
         var targets = new HashSet<string>(
-            articleNumbers.Select(n => n.Trim()).Where(n => n.Length > 0),
+            raw
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(x => x.Trim())
+                .Where(x => Regex.IsMatch(x, @"^\d{3,6}$")),
             StringComparer.OrdinalIgnoreCase);
 
         _logger.LogInformation(
-            "[LiquiMoly] Phase 1 — searching catalog for {Targets} target article numbers",
+            "[LiquiMoly] Valid numeric SKUs after filtering: {Count}",
             targets.Count);
 
-        // ── Phase 1: Per-article catalog search ────────────────────────
-        // Category listing pages are blocked by bot-detection (redirect to oil-guide).
-        // Instead, use the standard Magento 2 catalog search (?q=<sku>) which is a
-        // different server code-path and less aggressively guarded.
-        var stubs = new List<LiquiMolyProductDto>();
-
-        // Shuffle for human-like access pattern
-        var shuffledTargets = targets.OrderBy(_ => Random.Shared.Next()).ToList();
-        int located = 0;
-
-        foreach (var articleNumber in shuffledTargets)
+        if (targets.Count > 0)
         {
-            if (cancellationToken.IsCancellationRequested) break;
+            _logger.LogInformation(
+                "[LiquiMoly] First 10 cleaned SKUs: {Skus}",
+                string.Join(", ", targets.Take(10)));
+        }
+        if (_productIndex == null || _productIndex.Count == 0)
+        {
+            _logger.LogInformation("[LiquiMoly] Building product index...");
+            _productIndex = await BuildProductIndexAsync(ct);
+        }
 
-            try
+        _logger.LogInformation(
+            "[LiquiMoly] Product index size: {Count}",
+            _productIndex.Count);
+
+        var results = new ConcurrentBag<LiquiMolyProductDto>();
+
+        int found = 0;
+        int missing = 0;
+
+        await ForEachBoundedAsync(
+            targets,
+            _settings.MaxParallelRequests,
+            async sku =>
             {
-                var found = await SearchForArticleAsync(articleNumber, cancellationToken);
-                stubs.AddRange(found);
-                if (found.Count > 0) located++;
+                if (!_productIndex.TryGetValue(sku, out var url))
+                {
+                    Interlocked.Increment(ref missing);
+
+                    _logger.LogWarning(
+                        "[LiquiMoly] SKU {Sku} not found in index",
+                        sku);
+
+                    return;
+                }
+
+                Interlocked.Increment(ref found);
 
                 _logger.LogDebug(
-                    "[LiquiMoly] Search '{Article}': {Found} stub(s)",
-                    articleNumber, found.Count);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[LiquiMoly] Failed to search for article '{Article}'", articleNumber);
-            }
+                    "[LiquiMoly] SKU {Sku} resolved → {Url}",
+                    sku,
+                    url);
 
-            await DelayAsync(
-                _settings.DelayBetweenRequestsMs + Random.Shared.Next(0, 500),
-                cancellationToken);
-        }
+                var dto = await ScrapeProductPageForSkuAsync(sku, url, ct);
+
+                if (dto != null)
+                    results.Add(dto);
+
+            }, ct);
 
         _logger.LogInformation(
-            "[LiquiMoly] Phase 1 complete — {Located}/{Total} target(s) located",
-            located, targets.Count);
+            "[LiquiMoly] Scrape summary | Requested={Requested} | FoundInIndex={Found} | Missing={Missing} | Scraped={Scraped}",
+            targets.Count,
+            found,
+            missing,
+            results.Count);
 
-        if (stubs.Count == 0) return stubs;
+        return results.ToList();
+    }
 
-        // ── Phase 2: Enrich, grouping by product URL to avoid duplicate visits ─
-        _logger.LogInformation(
-            "[LiquiMoly] Phase 2 — enriching detail pages ({Stubs} stubs, {Urls} unique URL(s))",
-            stubs.Count,
-            stubs.Select(s => s.ProductUrl ?? s.ArticleNumber)
-                 .Distinct(StringComparer.OrdinalIgnoreCase).Count());
+    // ======================================================
+    // BUILD PRODUCT INDEX FROM SITEMAP
+    // ======================================================
 
-        // Group by product URL so each page is fetched only once
-        var groups = stubs
-            .GroupBy(s => s.ProductUrl ?? s.ArticleNumber, StringComparer.OrdinalIgnoreCase)
-            .OrderBy(_ => Random.Shared.Next()) // shuffle for human-like ordering
-            .ToList();
-
-        var results    = new List<LiquiMolyProductDto>(stubs.Count);
-        int pauseEvery = Random.Shared.Next(8, 13);
-
-        for (int i = 0; i < groups.Count; i++)
+    private async Task<Dictionary<string, string>> BuildProductIndexAsync(CancellationToken ct)
+    {
+        if (_cachedIndex != null && _cachedIndex.Count > 0)
         {
-            if (cancellationToken.IsCancellationRequested) break;
-
-            var groupStubs     = groups[i].ToList();
-            var representative = groupStubs[0]; // All stubs share the same product URL
-
-            try
-            {
-                if (!string.IsNullOrWhiteSpace(representative.ProductUrl))
-                    await EnrichFromDetailPageAsync(representative, cancellationToken);
-
-                // Copy the enriched detail data to every other stub sharing this URL
-                foreach (var stub in groupStubs.Skip(1))
-                {
-                    stub.AllImageUrls          = representative.AllImageUrls;
-                    stub.AllPackagingSizes     = representative.AllPackagingSizes;
-                    stub.Approvals             = representative.Approvals;
-                    stub.Specifications        = representative.Specifications;
-                    stub.ProductInfoPdfUrl     = representative.ProductInfoPdfUrl;
-                    stub.SafetyDataSheetPdfUrl = representative.SafetyDataSheetPdfUrl;
-                    stub.Description           ??= representative.Description;
-                    stub.ImageUrl              ??= representative.ImageUrl;
-                    if (string.IsNullOrWhiteSpace(stub.PackagingSize))
-                        stub.PackagingSize = representative.PackagingSize;
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex,
-                    "[LiquiMoly] Failed to enrich detail page {Url}", representative.ProductUrl);
-            }
-
-            results.AddRange(groupStubs);
-
             _logger.LogInformation(
-                "[LiquiMoly] [{Done}/{Total}] {Name} — {Variants} variant(s)",
-                results.Count, stubs.Count, representative.Name, groupStubs.Count);
+                "[LiquiMoly] Using cached index | {Count} SKUs",
+                _cachedIndex.Count);
 
-            // Variable delay: base ± 50 % jitter
-            int delay = _settings.DelayBetweenRequestsMs
-                      + Random.Shared.Next(0, _settings.DelayBetweenRequestsMs / 2);
-            await DelayAsync(delay, cancellationToken);
-
-            // Occasional "reading" pause every 8–12 products
-            if ((i + 1) % pauseEvery == 0)
-            {
-                pauseEvery = Random.Shared.Next(8, 13);
-                int reading = _settings.DelayBetweenCategoriesMs + Random.Shared.Next(0, 2000);
-                _logger.LogDebug("[LiquiMoly] Reading pause {Ms} ms", reading);
-                await DelayAsync(reading, cancellationToken);
-            }
+            return _cachedIndex;
         }
+
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        var sitemapUrl = $"{_settings.BaseUrl}/sitemap.xml";
 
         _logger.LogInformation(
-            "[LiquiMoly] Phase 2 complete — {Count} product records produced", results.Count);
+            "[LiquiMoly] Loading sitemap index {Url}",
+            sitemapUrl);
 
-        return results;
-    }
+        string xml;
 
-    // ------------------------------------------------------------------
-    // PHASE 1: Search catalog for a single article number
-    // ------------------------------------------------------------------
+        try
+        {
+            xml = await _http.GetStringAsync(sitemapUrl, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[LiquiMoly] Failed loading sitemap");
+            return map;
+        }
 
-    /// <summary>
-    /// Uses the Magento 2 catalog search endpoint to find the product page for a given
-    /// article number.  Returns at most one stub (the offer whose SKU matches exactly).
-    /// </summary>
-    private async Task<List<LiquiMolyProductDto>> SearchForArticleAsync(
-        string articleNumber,
-        CancellationToken ct)
-    {
-        var url  = BuildAbsolute($"/en/catalogsearch/result/?q={Uri.EscapeDataString(articleNumber)}");
-        var html = await FetchHtmlAsync(url, ct);
-        if (string.IsNullOrWhiteSpace(html)) return new();
+        if (string.IsNullOrWhiteSpace(xml))
+        {
+            _logger.LogWarning("[LiquiMoly] Sitemap XML empty");
+            return map;
+        }
 
-        var doc = new HtmlDocument();
-        doc.LoadHtml(html);
+        var locMatches = Regex.Matches(xml, @"<loc>(.*?)</loc>", RegexOptions.IgnoreCase);
 
-        // JSON-LD first (server-rendered, most reliable); fall back to HTML cards
-        var stubs = ExtractFromJsonLd(doc, null, url);
-        if (stubs.Count == 0)
-            stubs = ExtractFromHtml(doc, null, url);
-
-        // Only keep results that exactly match our target article number
-        return stubs
-            .Where(s => string.Equals(s.ArticleNumber, articleNumber, StringComparison.OrdinalIgnoreCase))
+        var locUrls = locMatches
+            .Cast<Match>()
+            .Select(m => m.Groups[1].Value)
             .ToList();
-    }
 
-    // ------------------------------------------------------------------
-    // PRODUCT DETAIL PAGE ENRICHMENT
-    // ------------------------------------------------------------------
+        _logger.LogInformation(
+            "[LiquiMoly] Sitemap LOC entries found: {Count}",
+            locUrls.Count);
 
-    private async Task EnrichFromDetailPageAsync(
-        LiquiMolyProductDto dto,
-        CancellationToken ct)
-    {
-        var html = await FetchHtmlAsync(dto.ProductUrl!, ct);
-        if (string.IsNullOrWhiteSpace(html)) return;
+        var sitemapUrls = locUrls
+            .Where(x => x.Contains("sitemap"))
+            .ToList();
 
-        var doc = new HtmlDocument();
-        doc.LoadHtml(html);
-
-        EnrichImages(dto, doc);
-        EnrichFromMagentoConfig(dto, doc);   // Packaging sizes from x-magento-init
-        EnrichDescription(dto, doc);
-        EnrichApprovalsAndSpecs(dto, doc);
-        EnrichDownloads(dto, doc, html);     // Pass raw HTML for regex PDF URL extraction
-    }
-
-    // ── Gallery images ────────────────────────────────────────────────
-
-    private void EnrichImages(LiquiMolyProductDto dto, HtmlDocument doc)
-    {
-        var seen   = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var images = new List<string>();
-
-        // ── Primary: variant-specific gallery (Liqui-Moly Magento 2) ──
-        // Each packaging variant has its own gallery div:
-        //   <div class="variantswitch-sku variantswitch-sku-{sku} [d-none]">
-        //     <div id="gallery-preview-{sku}">
-        //       <div class="product-gallery-preview-media">
-        //         <img ci-src="https://www.liqui-moly.com/..." data-src="...cloudimg...">
-        //
-        // ci-src = direct Liqui-Moly URL (preferred)
-        // data-src = CloudImg CDN proxy URL
-        var variantXPath = $"//div[contains(@class,'variantswitch-sku-{dto.ArticleNumber}')]//img";
-        var variantImgs  = doc.DocumentNode.SelectNodes(variantXPath);
-
-        if (variantImgs != null)
+        if (sitemapUrls.Count > 0)
         {
-            foreach (var img in variantImgs)
-            {
-                var src = img.GetAttributeValue("ci-src",   null)
-                       ?? img.GetAttributeValue("data-src", null)
-                       ?? img.GetAttributeValue("src",      null);
+            _logger.LogInformation(
+                "[LiquiMoly] Found {Count} child sitemaps",
+                sitemapUrls.Count);
 
-                var url = BuildAbsoluteOrNull(src);
-                if (url != null && seen.Add(url))
-                    images.Add(url);
-            }
-        }
-
-        // ── Fallback: generic Magento 2 gallery containers ─────────────
-        if (images.Count == 0)
-        {
-            var imgNodes = doc.DocumentNode.SelectNodes(
-                "//div[@data-gallery-role='gallery']//img"              +
-                "|//div[contains(@class,'fotorama')]//img"              +
-                "|//div[contains(@class,'gallery-placeholder')]//img"   +
-                "|//div[contains(@class,'product-image-container')]//img" +
-                "|//div[contains(@class,'product-media')]//img");
-
-            if (imgNodes != null)
-            {
-                foreach (var img in imgNodes)
-                {
-                    var src = img.GetAttributeValue("ci-src",   null)
-                           ?? img.GetAttributeValue("data-src", null)
-                           ?? img.GetAttributeValue("src",      null);
-
-                    var url = BuildAbsoluteOrNull(src);
-                    if (url != null && seen.Add(url))
-                        images.Add(url);
-                }
-            }
-        }
-
-        // ── Fallback: JSON-LD image array (always server-rendered) ─────
-        var scriptNodes = doc.DocumentNode.SelectNodes("//script[@type='application/ld+json']");
-        if (scriptNodes != null)
-        {
-            foreach (var script in scriptNodes)
+            foreach (var sm in sitemapUrls)
             {
                 try
                 {
-                    using var root = JsonDocument.Parse(script.InnerText.Trim());
-                    ExtractJsonLdImages(root.RootElement, seen, images);
-                }
-                catch { /* malformed JSON – skip */ }
-            }
-        }
+                    var smXml = await _http.GetStringAsync(sm, ct);
 
-        if (images.Count > 0)
-        {
-            dto.AllImageUrls = images;
-            if (string.IsNullOrWhiteSpace(dto.ImageUrl))
-                dto.ImageUrl = images[0];
-        }
-    }
+                    var urls = Regex.Matches(
+                            smXml,
+                            @"https://(?:www\.)?liqui-moly\.com/en/[^<]+\.html",
+                            RegexOptions.IgnoreCase)
+                        .Cast<Match>()
+                        .Select(m => m.Value);
 
-    private void ExtractJsonLdImages(JsonElement el, HashSet<string> seen, List<string> images)
-    {
-        if (el.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in el.EnumerateArray())
-                ExtractJsonLdImages(item, seen, images);
-            return;
-        }
-
-        if (el.ValueKind != JsonValueKind.Object) return;
-
-        if (el.TryGetProperty("image", out var imgEl))
-        {
-            if (imgEl.ValueKind == JsonValueKind.String)
-            {
-                var url = BuildAbsoluteOrNull(imgEl.GetString());
-                if (url != null && seen.Add(url)) images.Add(url);
-            }
-            else if (imgEl.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var item in imgEl.EnumerateArray())
-                {
-                    var url = item.ValueKind == JsonValueKind.String
-                        ? BuildAbsoluteOrNull(item.GetString())
-                        : item.TryGetProperty("url", out var u)
-                            ? BuildAbsoluteOrNull(u.GetString())
-                            : null;
-
-                    if (url != null && seen.Add(url)) images.Add(url);
-                }
-            }
-        }
-
-        if (el.TryGetProperty("@graph", out var graph) && graph.ValueKind == JsonValueKind.Array)
-            foreach (var g in graph.EnumerateArray())
-                ExtractJsonLdImages(g, seen, images);
-    }
-
-    // ── Packaging sizes from Magento 2 x-magento-init config ─────────
-
-    private void EnrichFromMagentoConfig(LiquiMolyProductDto dto, HtmlDocument doc)
-    {
-        var scripts = doc.DocumentNode.SelectNodes("//script[@type='text/x-magento-init']");
-        if (scripts == null) return;
-
-        foreach (var script in scripts)
-        {
-            try
-            {
-                using var root = JsonDocument.Parse(script.InnerText.Trim());
-
-                // Navigate: {selector} → "Magento_Swatches/js/swatch-renderer" → "jsonConfig"
-                foreach (var selector in root.RootElement.EnumerateObject())
-                {
-                    if (!selector.Value.TryGetProperty(
-                            "Magento_Swatches/js/swatch-renderer", out var renderer)) continue;
-                    if (!renderer.TryGetProperty("jsonConfig", out var jsonConfig)) continue;
-
-                    ExtractPackagingSizesFromConfig(dto, jsonConfig);
-                    return; // Done — only one swatch-renderer block expected
-                }
-            }
-            catch { /* malformed JSON – skip */ }
-        }
-    }
-
-    private void ExtractPackagingSizesFromConfig(LiquiMolyProductDto dto, JsonElement jsonConfig)
-    {
-        if (!jsonConfig.TryGetProperty("attributes", out var attrs) ||
-            attrs.ValueKind != JsonValueKind.Object) return;
-
-        foreach (var attr in attrs.EnumerateObject())
-        {
-            // Identify the packaging/volume attribute by its code or label
-            var code  = attr.Value.TryGetProperty("code",  out var c) ? c.GetString()?.ToLower() ?? "" : "";
-            var label = attr.Value.TryGetProperty("label", out var l) ? l.GetString()?.ToLower() ?? "" : "";
-
-            bool isVolumeAttr =
-                code.Contains("gebinde") || code.Contains("inhalt") ||
-                code.Contains("volume")  || code.Contains("pack")   || code.Contains("size") ||
-                label.Contains("container") || label.Contains("volume") ||
-                label.Contains("pack")      || label.Contains("liter")  || label.Contains("size");
-
-            if (!isVolumeAttr) continue;
-            if (!attr.Value.TryGetProperty("options", out var opts) ||
-                opts.ValueKind != JsonValueKind.Array) continue;
-
-            var seen  = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var sizes = new List<string>();
-
-            foreach (var opt in opts.EnumerateArray())
-            {
-                var lbl = opt.TryGetProperty("label", out var lb) ? lb.GetString()?.Trim() : null;
-                if (string.IsNullOrWhiteSpace(lbl)) continue;
-
-                var m  = _sizePattern.Match(lbl);
-                var sz = m.Success ? m.Groups[1].Value.Trim() : lbl;
-                if (seen.Add(sz)) sizes.Add(sz);
-            }
-
-            if (sizes.Count > 0)
-            {
-                dto.AllPackagingSizes = sizes;
-                dto.PackagingSize   ??= sizes[0];
-            }
-            break; // Only one packaging attribute expected
-        }
-    }
-
-    // ── Description ───────────────────────────────────────────────────
-
-    private static void EnrichDescription(LiquiMolyProductDto dto, HtmlDocument doc)
-    {
-        var descNode =
-            // Liqui-Moly Magento 2: tab content (most detailed, may not be server-rendered)
-            doc.DocumentNode.SelectSingleNode("//div[@id='tab-detail-description']") ??
-            // Liqui-Moly Magento 2: visible overview block above the tabs
-            // <div class="product attribute overview"><span class="value">…</span></div>
-            doc.DocumentNode.SelectSingleNode(
-                "//div[contains(@class,'product') and contains(@class,'attribute') and contains(@class,'overview')]//*[@class='value']") ??
-            // Magento 2 standard selectors
-            doc.DocumentNode.SelectSingleNode("//div[contains(@class,'product-info-description')]") ??
-            doc.DocumentNode.SelectSingleNode("//div[@itemprop='description']");
-
-        if (descNode != null)
-        {
-            var text = HtmlEntity.DeEntitize(descNode.InnerText).Trim();
-            if (!string.IsNullOrWhiteSpace(text))
-            {
-                dto.Description = text;
-                return;
-            }
-        }
-
-        // Fallback: compile product feature bullet-points from the check-list
-        // <div class="product attribute properties"><ul class="check-list"><li class="value"><span>…</span></li>
-        var liNodes = doc.DocumentNode.SelectNodes(
-            "//div[contains(@class,'attribute') and contains(@class,'properties')]//li[contains(@class,'value')]");
-        if (liNodes == null) return;
-
-        var props = liNodes
-            .Select(li =>
-            {
-                var span = li.SelectSingleNode(".//span");
-                return HtmlEntity.DeEntitize(span?.InnerText ?? li.InnerText).Trim();
-            })
-            .Where(t => !string.IsNullOrWhiteSpace(t) && t.Length < 300)
-            .ToList();
-
-        if (props.Count > 0)
-            dto.Description = string.Join(". ", props);
-    }
-
-    // ── Approvals & Specifications ────────────────────────────────────
-
-    private static void EnrichApprovalsAndSpecs(LiquiMolyProductDto dto, HtmlDocument doc)
-    {
-        var specs     = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var approvals = new List<string>();
-
-        // Magento 2 custom: combined approvals + specs tab (Liqui-Moly)
-        var combinedNode = doc.DocumentNode.SelectSingleNode(
-            "//div[@id='tab-detail-approvalsandspecifications']");
-
-        if (combinedNode != null)
-        {
-            // Try structured dl/dt/dd pattern
-            var dtNodes = combinedNode.SelectNodes(".//dt");
-            var ddNodes = combinedNode.SelectNodes(".//dd");
-            if (dtNodes != null && ddNodes != null)
-            {
-                int len = Math.Min(dtNodes.Count, ddNodes.Count);
-                for (int i = 0; i < len; i++)
-                {
-                    var key = HtmlEntity.DeEntitize(dtNodes[i].InnerText).Trim();
-                    var val = HtmlEntity.DeEntitize(ddNodes[i].InnerText).Trim();
-                    if (!string.IsNullOrWhiteSpace(key) && !string.IsNullOrWhiteSpace(val))
-                        specs[key] = val;
-                }
-            }
-
-            // Try table row (th/td) pattern
-            var rows = combinedNode.SelectNodes(".//tr");
-            if (rows != null)
-            {
-                foreach (var row in rows)
-                {
-                    var cells = row.SelectNodes(".//th|.//td");
-                    if (cells is { Count: >= 2 })
+                    foreach (var url in urls)
                     {
-                        var key = HtmlEntity.DeEntitize(cells[0].InnerText).Trim();
-                        var val = HtmlEntity.DeEntitize(cells[1].InnerText).Trim();
-                        if (!string.IsNullOrWhiteSpace(key) && !string.IsNullOrWhiteSpace(val))
-                            specs[key] = val;
+                        var sku = ExtractSku(url);
+
+                        if (sku != null && !map.ContainsKey(sku))
+                            map[sku] = url;
                     }
                 }
-            }
-
-            // No structured data — treat the whole block as a comma/semicolon list of approvals
-            if (specs.Count == 0)
-            {
-                var raw = HtmlEntity.DeEntitize(combinedNode.InnerText).Trim();
-                approvals.AddRange(
-                    raw.Split(new[] { ',', ';', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
-                       .Select(s => s.Trim())
-                       .Where(s => s.Length > 0 && s.Length < 200));
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex,
+                        "[LiquiMoly] Failed reading child sitemap {Url}",
+                        sm);
+                }
             }
         }
         else
         {
-            // Generic fallback selectors
-            var specsNode = doc.DocumentNode.SelectSingleNode(
-                "//div[contains(@class,'product-specifications')]" +
-                "|//section[contains(@class,'specifications')]"    +
-                "|//div[contains(@class,'technical-data')]");
+            _logger.LogWarning(
+                "[LiquiMoly] No child sitemaps detected → assuming product URLs directly");
 
-            if (specsNode != null)
+            foreach (var url in locUrls)
             {
-                var dt = specsNode.SelectNodes(".//dt");
-                var dd = specsNode.SelectNodes(".//dd");
-                if (dt != null && dd != null)
-                {
-                    int len = Math.Min(dt.Count, dd.Count);
-                    for (int i = 0; i < len; i++)
-                    {
-                        var key = HtmlEntity.DeEntitize(dt[i].InnerText).Trim();
-                        var val = HtmlEntity.DeEntitize(dd[i].InnerText).Trim();
-                        if (!string.IsNullOrWhiteSpace(key) && !string.IsNullOrWhiteSpace(val))
-                            specs[key] = val;
-                    }
-                }
-            }
-
-            var approvalsNode = doc.DocumentNode.SelectSingleNode(
-                "//div[contains(@class,'product-approvals')]" +
-                "|//section[contains(@class,'approvals')]");
-
-            if (approvalsNode != null)
-            {
-                var liNodes = approvalsNode.SelectNodes(".//li");
-                if (liNodes != null)
-                {
-                    foreach (var li in liNodes)
-                    {
-                        var text = HtmlEntity.DeEntitize(li.InnerText).Trim();
-                        if (!string.IsNullOrWhiteSpace(text) && text.Length < 200)
-                            approvals.Add(text);
-                    }
-                }
-
-                if (approvals.Count == 0)
-                {
-                    var raw = HtmlEntity.DeEntitize(approvalsNode.InnerText).Trim();
-                    approvals.AddRange(
-                        raw.Split(new[] { ',', ';', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
-                           .Select(s => s.Trim())
-                           .Where(s => s.Length > 0 && s.Length < 200));
-                }
-            }
-        }
-
-        // Liqui-Moly inline compact specs (visible in the product info area above tabs):
-        // <div class="pb-2 fs-10"><p><strong>Specifications / Approvals:</strong> BMW LL-04, MB 229.31 …</p></div>
-        // Used as fallback when the tab panel content is not server-rendered.
-        if (approvals.Count == 0 && specs.Count == 0)
-        {
-            var inlineP = doc.DocumentNode.SelectSingleNode(
-                "//p[.//strong[contains(text(),'Specifications') or contains(text(),'Approvals')]]");
-
-            if (inlineP != null)
-            {
-                var raw = HtmlEntity.DeEntitize(inlineP.InnerText).Trim();
-                // Strip "Specifications / Approvals:" label prefix (everything up to the first colon)
-                var idx = raw.IndexOf(':');
-                if (idx >= 0) raw = raw[(idx + 1)..].Trim();
-
-                approvals.AddRange(
-                    raw.Split(new[] { ',', ';', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
-                       .Select(s => s.Trim())
-                       .Where(s => s.Length > 0 && s.Length < 200));
-            }
-        }
-
-        if (specs.Count > 0)     dto.Specifications = specs;
-        if (approvals.Count > 0) dto.Approvals       = approvals;
-    }
-
-    // ── Downloads (PDFs) ──────────────────────────────────────────────
-
-    private void EnrichDownloads(LiquiMolyProductDto dto, HtmlDocument doc, string rawHtml)
-    {
-        // Try direct anchor links first (works if PDFs are in static HTML)
-        var pdfLinks = doc.DocumentNode.SelectNodes(
-            "//a[contains(@href,'.pdf')]" +
-            "|//a[contains(@href,'pim.liqui-moly.com')]");
-
-        if (pdfLinks != null)
-        {
-            foreach (var link in pdfLinks)
-            {
-                var href = link.GetAttributeValue("href", null);
-                if (string.IsNullOrWhiteSpace(href)) continue;
-
-                var url = BuildAbsoluteOrNull(href);
-                if (url == null) continue;
-
-                var label = (link.GetAttributeValue("title", null) ?? link.InnerText ?? "")
-                    .Trim().ToLowerInvariant();
-
-                AssignPdfUrl(dto, url, label, href.ToLowerInvariant());
-            }
-        }
-
-        // Fallback: scan raw HTML for pim.liqui-moly.com PDF URLs embedded in JS strings
-        if (dto.ProductInfoPdfUrl == null || dto.SafetyDataSheetPdfUrl == null)
-        {
-            foreach (Match m in _pimPdfPattern.Matches(rawHtml))
-            {
-                var url   = m.Value;
-                var lower = url.ToLowerInvariant();
-                AssignPdfUrl(dto, url, lower, lower);
-            }
-        }
-    }
-
-    private static void AssignPdfUrl(
-        LiquiMolyProductDto dto, string url, string label, string href)
-    {
-        bool isProductInfo =
-            label.Contains("product information") || label.Contains("pi en")       ||
-            label.Contains("prod info")           || label.Contains("technical data") ||
-            (href.Contains("/pi") && (href.Contains("/en") || href.Contains("_en"))) ||
-            (href.Contains("_pi") && href.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase));
-
-        bool isSds =
-            label.Contains("safety data") || label.Contains("sds") || label.Contains("msds") ||
-            href.Contains("/sds")  || href.Contains("_sds")  ||
-            href.Contains("/msds") || href.Contains("_msds");
-
-        if (dto.ProductInfoPdfUrl    == null && isProductInfo) dto.ProductInfoPdfUrl    = url;
-        if (dto.SafetyDataSheetPdfUrl == null && isSds)         dto.SafetyDataSheetPdfUrl = url;
-    }
-
-    // ------------------------------------------------------------------
-    // JSON-LD EXTRACTION (Magento 2)
-    // ------------------------------------------------------------------
-
-    private List<LiquiMolyProductDto> ExtractFromJsonLd(
-        HtmlDocument doc, string category, string pageUrl)
-    {
-        var results = new List<LiquiMolyProductDto>();
-
-        var scriptNodes = doc.DocumentNode
-            .SelectNodes("//script[@type='application/ld+json']");
-
-        if (scriptNodes == null) return results;
-
-        foreach (var script in scriptNodes)
-        {
-            try
-            {
-                var json = script.InnerText.Trim();
-                using var root = JsonDocument.Parse(json);
-                var el         = root.RootElement;
-
-                if (el.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var item in el.EnumerateArray())
-                        TryAddJsonLdProduct(item, category, pageUrl, results);
-                }
-                else
-                {
-                    TryAddJsonLdProduct(el, category, pageUrl, results);
-
-                    if (el.TryGetProperty("@graph", out var graph) &&
-                        graph.ValueKind == JsonValueKind.Array)
-                    {
-                        foreach (var item in graph.EnumerateArray())
-                            TryAddJsonLdProduct(item, category, pageUrl, results);
-                    }
-                }
-            }
-            catch { /* malformed JSON – skip */ }
-        }
-
-        return results;
-    }
-
-    private void TryAddJsonLdProduct(
-        JsonElement el, string category, string pageUrl,
-        List<LiquiMolyProductDto> results)
-    {
-        if (!el.TryGetProperty("@type", out var typeEl)) return;
-        if (!typeEl.GetString()?.Equals("Product", StringComparison.OrdinalIgnoreCase) ?? true) return;
-
-        var name = el.TryGetProperty("name", out var nameEl)
-            ? nameEl.GetString()?.Trim()
-            : null;
-
-        if (string.IsNullOrWhiteSpace(name)) return;
-
-        var description = el.TryGetProperty("description", out var descEl)
-            ? HtmlEntity.DeEntitize(descEl.GetString()?.Trim() ?? "")
-            : null;
-
-        var imageUrl = el.TryGetProperty("image", out var imgEl)
-            ? (imgEl.ValueKind == JsonValueKind.String
-                ? BuildAbsoluteOrNull(imgEl.GetString())
-                : imgEl.TryGetProperty("url", out var imgUrlEl)
-                    ? BuildAbsoluteOrNull(imgUrlEl.GetString())
-                    : null)
-            : null;
-
-        var productUrl = el.TryGetProperty("url", out var urlEl)
-            ? urlEl.GetString() ?? pageUrl
-            : pageUrl;
-
-        // Magento 2: the offers[] array has one entry per packaging variant;
-        // each offer.sku is a 4-digit variant article number (= CacheProducts ItemCode)
-        if (el.TryGetProperty("offers", out var offersEl) &&
-            offersEl.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var offer in offersEl.EnumerateArray())
-            {
-                var offerSku = offer.TryGetProperty("sku", out var oSkuEl)
-                    ? oSkuEl.GetString()?.Trim()
-                    : null;
-
-                if (string.IsNullOrWhiteSpace(offerSku) || !_variantSkuPattern.IsMatch(offerSku))
+                if (!url.Contains("/en/"))
                     continue;
 
-                var offerUrl = offer.TryGetProperty("url", out var oUrlEl)
-                    ? oUrlEl.GetString() ?? productUrl
-                    : productUrl;
+                if (!url.EndsWith(".html"))
+                    continue;
 
-                results.Add(new LiquiMolyProductDto
-                {
-                    ArticleNumber = offerSku,
-                    Name          = HtmlEntity.DeEntitize(name),
-                    Category      = category,
-                    Description   = description,
-                    SpecGrade     = ExtractSpecGrade(name),
-                    ImageUrl      = imageUrl,
-                    ProductUrl    = offerUrl,
-                });
+                var sku = ExtractSku(url);
+
+                if (sku != null && !map.ContainsKey(sku))
+                    map[sku] = url;
             }
-            return; // Offers processed — do not also add the product-level P-code
         }
 
-        // Fallback: no offers array — only add if the top-level sku looks like a variant code
-        var topSku =
-            (el.TryGetProperty("sku",       out var skuEl) ? skuEl.GetString()?.Trim() : null) ??
-            (el.TryGetProperty("productID", out var pidEl) ? pidEl.GetString()?.Trim() : null) ??
-            (el.TryGetProperty("mpn",       out var mpnEl) ? mpnEl.GetString()?.Trim() : null);
+        _logger.LogInformation(
+            "[LiquiMoly] Index complete | SKUs={Count}",
+            map.Count);
 
-        if (!string.IsNullOrWhiteSpace(topSku) && _variantSkuPattern.IsMatch(topSku))
+        if (map.Count > 0)
         {
-            results.Add(new LiquiMolyProductDto
-            {
-                ArticleNumber = topSku,
-                Name          = HtmlEntity.DeEntitize(name),
-                Category      = category,
-                Description   = description,
-                SpecGrade     = ExtractSpecGrade(name),
-                ImageUrl      = imageUrl,
-                ProductUrl    = productUrl,
-            });
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // HTML EXTRACTION (Magento 2 product cards — fallback)
-    // ------------------------------------------------------------------
-
-    private List<LiquiMolyProductDto> ExtractFromHtml(
-        HtmlDocument doc, string category, string pageUrl)
-    {
-        var results = new List<LiquiMolyProductDto>();
-
-        // Magento 2 standard product listing items
-        var cards = doc.DocumentNode.SelectNodes(
-            "//li[contains(@class,'product-item')]" +
-            "|//div[contains(@class,'product-item')]");
-
-        if (cards == null) return results;
-
-        foreach (var card in cards)
-        {
-            var dto = TryExtractFromCard(card, category, pageUrl);
-            if (dto != null) results.Add(dto);
-        }
-
-        return results;
-    }
-
-    private LiquiMolyProductDto? TryExtractFromCard(
-        HtmlNode card, string category, string pageUrl)
-    {
-        // Article number must come from a data attribute — can't safely derive from text
-        var rawSku =
-            card.GetAttributeValue("data-article-number", null) ??
-            card.GetAttributeValue("data-product-number", null) ??
-            card.GetAttributeValue("data-sku",            null) ??
-            card.SelectSingleNode(".//*[@data-article-number]")
-                ?.GetAttributeValue("data-article-number", null);
-
-        var articleNumber = rawSku?.Trim();
-        if (string.IsNullOrWhiteSpace(articleNumber) || !_variantSkuPattern.IsMatch(articleNumber))
-            return null;
-
-        // Magento 2 product card name selectors
-        var nameNode =
-            card.SelectSingleNode(".//*[contains(@class,'product-item-name')]//a") ??
-            card.SelectSingleNode(".//*[contains(@class,'product-item-link')]")    ??
-            card.SelectSingleNode(".//h2|.//h3|.//h4");
-
-        var name = nameNode?.InnerText?.Trim();
-        if (string.IsNullOrWhiteSpace(name)) return null;
-
-        var linkHref   = nameNode?.GetAttributeValue("href", null)
-                      ?? card.SelectSingleNode(".//a[@href]")?.GetAttributeValue("href", null);
-        var productUrl = BuildAbsoluteOrNull(linkHref);
-
-        var imgNode  = card.SelectSingleNode(".//*[contains(@class,'product-image-photo')]")
-                    ?? card.SelectSingleNode(".//img");
-        var imageUrl = BuildAbsoluteOrNull(
-            imgNode?.GetAttributeValue("src",      null) ??
-            imgNode?.GetAttributeValue("data-src", null));
-
-        return new LiquiMolyProductDto
-        {
-            ArticleNumber = articleNumber,
-            Name          = HtmlEntity.DeEntitize(name),
-            Category      = category,
-            SpecGrade     = ExtractSpecGrade(name),
-            ImageUrl      = imageUrl,
-            ProductUrl    = productUrl ?? pageUrl,
-        };
-    }
-
-    // ------------------------------------------------------------------
-    // PAGINATION
-    // ------------------------------------------------------------------
-
-    private static string? FindNextPageUrl(HtmlDocument doc)
-    {
-        // Magento 2: pagination uses ?p=N with a visible "Next" link (no <link rel="next">)
-        var nextLink =
-            doc.DocumentNode.SelectSingleNode("//a[normalize-space(text())='Next']")             ??
-            doc.DocumentNode.SelectSingleNode("//a[@title='Next' or @aria-label='Next']")        ??
-            doc.DocumentNode.SelectSingleNode("//li[contains(@class,'pages-item-next')]//a");
-
-        return nextLink?.GetAttributeValue("href", null);
-    }
-
-    // ------------------------------------------------------------------
-    // HTTP
-    // ------------------------------------------------------------------
-
-    private async Task<string> FetchHtmlAsync(string url, CancellationToken ct)
-    {
-        try
-        {
-            using var req = new HttpRequestMessage(HttpMethod.Get, url);
-            req.Headers.TryAddWithoutValidation("User-Agent",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
-                "AppleWebKit/537.36 (KHTML, like Gecko) " +
-                "Chrome/122.0.0.0 Safari/537.36");
-            req.Headers.TryAddWithoutValidation("Accept",
-                "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
-            req.Headers.TryAddWithoutValidation("Accept-Language", "en-US,en;q=0.9");
-            req.Headers.TryAddWithoutValidation("Accept-Encoding", "gzip, deflate, br");
-            req.Headers.TryAddWithoutValidation("Cache-Control", "no-cache");
-            req.Headers.TryAddWithoutValidation("Referer", _settings.BaseUrl);
-            // Sec-Fetch headers that browsers always send for top-level navigation
-            req.Headers.TryAddWithoutValidation("Sec-Fetch-Dest", "document");
-            req.Headers.TryAddWithoutValidation("Sec-Fetch-Mode", "navigate");
-            req.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "none");
-            req.Headers.TryAddWithoutValidation("Sec-Fetch-User", "?1");
-            req.Headers.TryAddWithoutValidation("Upgrade-Insecure-Requests", "1");
-
-            using var resp = await _http.SendAsync(req, ct);
-
-            // Detect silent redirect to the oil-guide SPA (bot detection).
-            // The server geo-detects the request origin (e.g. Tanzania → TZA) and redirects
-            // ALL requests to oil-guide.html with an #oww:... fragment that encodes the OWW
-            // API prefix and the original path:
-            //   302 → oil-guide.html#oww:/api/v2/oww/101/TZA/ENG/1/en/catalogsearch/result/?q=3044
-            // HttpClient follows the redirect and returns 200 from oil-guide, so we inspect
-            // the final RequestUri (which preserves the fragment from the Location header).
-            var finalUri = resp.RequestMessage?.RequestUri;
-            if (finalUri != null &&
-                finalUri.AbsolutePath.Contains("oil-guide", StringComparison.OrdinalIgnoreCase))
-            {
-                // Capture OWW prefix from the fragment once (e.g. "/api/v2/oww/101/TZA/ENG/1")
-                TryUpdateOwwPrefix(finalUri.Fragment);
-
-                // Retry the original path via the OWW API endpoint
-                var owwContent = await TryFetchViaOwwAsync(url, ct);
-                if (!string.IsNullOrWhiteSpace(owwContent))
-                    return owwContent;
-
-                _logger.LogWarning(
-                    "[LiquiMoly] {Url} redirected to oil-guide — OWW fallback also failed", url);
-                return string.Empty;
-            }
-
-            resp.EnsureSuccessStatusCode();
-            return await resp.Content.ReadAsStringAsync(ct);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "[LiquiMoly] Failed to fetch {Url}", url);
-            return string.Empty;
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // OWW (Oil World Widget) API fallback
-    // ------------------------------------------------------------------
-
-    private void TryUpdateOwwPrefix(string fragment)
-    {
-        // Only capture once; check setting override first
-        if (!string.IsNullOrWhiteSpace(_settings.OwwApiPrefix))
-        {
-            _owwApiPrefix ??= _settings.OwwApiPrefix;
-            return;
-        }
-
-        if (_owwApiPrefix != null || string.IsNullOrEmpty(fragment)) return;
-
-        var m = _owwPrefixRegex.Match(fragment);
-        if (m.Success)
-        {
-            _owwApiPrefix = m.Groups[1].Value;
             _logger.LogInformation(
-                "[LiquiMoly] OWW API prefix auto-detected: {Prefix}", _owwApiPrefix);
+                "[LiquiMoly] Sample SKUs: {Skus}",
+                string.Join(", ", map.Keys.Take(10)));
+
+            _cachedIndex = map;
         }
         else
         {
-            _logger.LogDebug("[LiquiMoly] Could not extract OWW prefix from fragment: {Fragment}", fragment);
+            _logger.LogError(
+                "[LiquiMoly] Product index EMPTY → sitemap structure likely changed");
         }
+
+        return map;
     }
 
-    /// <summary>
-    /// Re-issues <paramref name="originalUrl"/> through the OWW API proxy.
-    ///
-    /// The OWW API only responds with data (HTML or JSON) when the request looks like
-    /// a same-origin XHR sent by the oil-guide SPA.  A plain browser-navigation request
-    /// (even to the /api/v2/oww/... path) is geo-redirected right back to oil-guide.
-    /// We therefore set AJAX-style headers that distinguish XHR from navigation:
-    ///   • X-Requested-With: XMLHttpRequest   – standard jQuery/Axios AJAX marker
-    ///   • Origin + Referer = oil-guide page  – simulates the SPA calling its own API
-    ///   • Sec-Fetch-Mode: cors               – browser's XHR Sec-Fetch signal
-    ///   • Accept: application/json           – API, not an HTML page
-    /// </summary>
-    private async Task<string?> TryFetchViaOwwAsync(string originalUrl, CancellationToken ct)
+
+
+
+    private string? ExtractSku(string url)
     {
-        var prefix = _owwApiPrefix;
-        if (string.IsNullOrEmpty(prefix)) return null;
+        var match = Regex.Match(url, @"p0*(\d+)\.html", RegexOptions.IgnoreCase);
 
-        string owwUrl;
-        try
-        {
-            var uri  = new Uri(originalUrl);
-            owwUrl   = _settings.BaseUrl.TrimEnd('/') + prefix + uri.PathAndQuery;
-        }
-        catch
-        {
+        if (!match.Success)
             return null;
-        }
 
-        _logger.LogDebug("[LiquiMoly] OWW XHR: {Url}", owwUrl);
-
-        var oilGuideReferer = _settings.BaseUrl.TrimEnd('/') + "/en/service/oil-guide.html";
-
-        try
-        {
-            using var req = new HttpRequestMessage(HttpMethod.Get, owwUrl);
-
-            // Mimic an XHR from the oil-guide SPA
-            req.Headers.TryAddWithoutValidation("User-Agent",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
-                "AppleWebKit/537.36 (KHTML, like Gecko) " +
-                "Chrome/122.0.0.0 Safari/537.36");
-            req.Headers.TryAddWithoutValidation("X-Requested-With", "XMLHttpRequest");
-            req.Headers.TryAddWithoutValidation("Accept",            "application/json, text/plain, */*");
-            req.Headers.TryAddWithoutValidation("Accept-Language",   "en-US,en;q=0.9");
-            req.Headers.TryAddWithoutValidation("Accept-Encoding",   "gzip, deflate, br");
-            req.Headers.TryAddWithoutValidation("Origin",            _settings.BaseUrl);
-            req.Headers.TryAddWithoutValidation("Referer",           oilGuideReferer);
-            // Sec-Fetch headers for XHR (not top-level navigation)
-            req.Headers.TryAddWithoutValidation("Sec-Fetch-Dest",    "empty");
-            req.Headers.TryAddWithoutValidation("Sec-Fetch-Mode",    "cors");
-            req.Headers.TryAddWithoutValidation("Sec-Fetch-Site",    "same-origin");
-
-            using var resp = await _http.SendAsync(req, ct);
-
-            // If even the XHR gets geo-redirected, the API is fully locked for this IP
-            var finalUri = resp.RequestMessage?.RequestUri;
-            if (finalUri?.AbsolutePath.Contains("oil-guide", StringComparison.OrdinalIgnoreCase) == true)
-            {
-                _logger.LogWarning("[LiquiMoly] OWW XHR also redirected to oil-guide — IP fully geo-blocked: {Url}", owwUrl);
-                return null;
-            }
-
-            if (!resp.IsSuccessStatusCode)
-            {
-                _logger.LogWarning(
-                    "[LiquiMoly] OWW XHR {Status} for {Url}", (int)resp.StatusCode, owwUrl);
-                return null;
-            }
-
-            var body        = await resp.Content.ReadAsStringAsync(ct);
-            var contentType = resp.Content.Headers.ContentType?.MediaType ?? "";
-
-            _logger.LogInformation(
-                "[LiquiMoly] OWW XHR OK {Status} ({ContentType}, {Bytes} bytes): {Url}",
-                (int)resp.StatusCode, contentType, body.Length, owwUrl);
-
-            return body;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "[LiquiMoly] OWW XHR failed: {Url}", owwUrl);
-            return null;
-        }
+        return match.Groups[1].Value;
     }
 
-    // ------------------------------------------------------------------
-    // HELPERS
-    // ------------------------------------------------------------------
 
-    private string BuildAbsolute(string path)
-        => path.StartsWith("http", StringComparison.OrdinalIgnoreCase)
-            ? path
-            : _settings.BaseUrl.TrimEnd('/') + "/" + path.TrimStart('/');
 
-    private string? BuildAbsoluteOrNull(string? path)
+
+    // ======================================================
+    // SCRAPE PRODUCT PAGE
+    // ======================================================
+
+    private async Task<LiquiMolyProductDto?> ScrapeProductPageForSkuAsync(
+        string requestedSku,
+        string productUrl,
+        CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(path)) return null;
-        return BuildAbsolute(path);
+        var html = await FetchHtmlAsync(productUrl, ct);
+
+        if (string.IsNullOrWhiteSpace(html))
+            return null;
+
+        var doc = new HtmlDocument();
+        doc.LoadHtml(html);
+
+        var name = ExtractName(doc);
+        var desc = ExtractDescription(doc);
+
+        var img =
+            doc.DocumentNode.SelectSingleNode("//img[contains(@class,'product')]");
+
+        var dto = new LiquiMolyProductDto
+        {
+            ArticleNumber = requestedSku,
+            Name = name,
+            Description = desc,
+            ProductUrl = productUrl,
+            ImageUrl = BuildAbsoluteOrNull(
+                img?.GetAttributeValue("src", null))
+        };
+
+        var sizeMatch = SizePattern.Match(name ?? "");
+
+        if (sizeMatch.Success)
+            dto.PackagingSize = sizeMatch.Groups[1].Value;
+
+        dto.SpecGrade = ExtractSpecGrade(name ?? "");
+
+        return dto;
+    }
+
+    // ======================================================
+    // EXTRACTION HELPERS
+    // ======================================================
+
+    private static string? ExtractName(HtmlDocument doc)
+    {
+        var node = doc.DocumentNode.SelectSingleNode("//h1");
+        return HtmlEntity.DeEntitize(node?.InnerText.Trim() ?? "");
+    }
+
+    private static string ExtractDescription(HtmlDocument doc)
+    {
+        var node =
+            doc.DocumentNode.SelectSingleNode("//div[@itemprop='description']");
+        return HtmlEntity.DeEntitize(node?.InnerText.Trim() ?? "");
     }
 
     private static string? ExtractSpecGrade(string text)
     {
-        var m = _specGradePattern.Match(text);
-        return m.Success ? m.Value.Trim() : null;
+        var m = SpecGradePattern.Match(text ?? "");
+        return m.Success ? m.Value : null;
     }
 
-    private static Task DelayAsync(int ms, CancellationToken ct)
-        => ms > 0 ? Task.Delay(ms, ct) : Task.CompletedTask;
+    // ======================================================
+    // HTTP
+    // ======================================================
+
+    private async Task<string> FetchHtmlAsync(string? url, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+            return "";
+
+        try
+        {
+            var resp = await _http.GetAsync(url, ct);
+
+            if (!resp.IsSuccessStatusCode)
+                return "";
+
+            return await resp.Content.ReadAsStringAsync(ct);
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
+    // ======================================================
+    // HELPERS
+    // ======================================================
+
+    private string BuildAbsolute(string path)
+    {
+        if (path.StartsWith("http"))
+            return path;
+
+        return _settings.BaseUrl.TrimEnd('/') + "/" + path.TrimStart('/');
+    }
+
+    private string? BuildAbsoluteOrNull(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return null;
+
+        return BuildAbsolute(path);
+    }
+
+    private static async Task ForEachBoundedAsync<T>(
+        IEnumerable<T> items,
+        int maxParallel,
+        Func<T, Task> action,
+        CancellationToken ct)
+    {
+        using var sem = new SemaphoreSlim(maxParallel);
+
+        var tasks = items.Select(async item =>
+        {
+            await sem.WaitAsync(ct);
+
+            try { await action(item); }
+            finally { sem.Release(); }
+
+        });
+
+        await Task.WhenAll(tasks);
+    }
 }

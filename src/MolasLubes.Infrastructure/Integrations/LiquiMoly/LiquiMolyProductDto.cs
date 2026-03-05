@@ -49,4 +49,9 @@ public class LiquiMolyProductDto
 
     /// <summary>Direct URL to the English Safety Data Sheet PDF.</summary>
     public string? SafetyDataSheetPdfUrl { get; set; }
+
+    // Optional if you want:
+    public string? SpecificationsText { get; set; }
+
+
 }

@@ -178,10 +178,35 @@ builder.Services.Configure<LiquiMolyScraperSettings>(
 builder.Services.AddHttpClient<LiquiMolyProductScraperService>(client =>
 {
     client.Timeout = TimeSpan.FromSeconds(
-        builder.Configuration.GetValue("LiquiMolyScraper:RequestTimeoutSeconds", 30));
+        builder.Configuration.GetValue("LiquiMolyScraper:RequestTimeoutSeconds", 180));
 });
 
-builder.Services.AddScoped<LiquiMolyProductScraperService>();
+
+// =====================================================
+// LIQUI-MOLY SCRAPER
+// =====================================================
+
+builder.Services.Configure<LiquiMolyScraperSettings>(
+    builder.Configuration.GetSection("LiquiMolyScraper"));
+
+builder.Services.AddHttpClient<LiquiMolyProductScraperService>((sp, client) =>
+{
+    var config = sp.GetRequiredService<IConfiguration>();
+
+    client.Timeout = TimeSpan.FromSeconds(
+        config.GetValue("LiquiMolyScraper:RequestTimeoutSeconds", 30));
+
+    client.DefaultRequestHeaders.TryAddWithoutValidation(
+        "User-Agent",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36");
+
+    client.DefaultRequestHeaders.TryAddWithoutValidation(
+        "Accept-Language", "en-US,en;q=0.9");
+
+    client.DefaultRequestHeaders.TryAddWithoutValidation(
+        "Origin", "https://www.liqui-moly.com");
+});
+
 builder.Services.AddScoped<MolasLubes.Infrastructure.Services.Sync.LiquiMolyCacheSyncService>();
 builder.Services.AddScoped<MolasLubes.Infrastructure.Services.Sync.LiquiMolyNeonSyncService>();
 

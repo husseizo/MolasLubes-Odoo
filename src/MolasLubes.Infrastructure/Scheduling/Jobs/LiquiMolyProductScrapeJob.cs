@@ -105,5 +105,10 @@ public class LiquiMolyProductScrapeJob : IJob
 
             await QuartzRetryHelper.HandleRetryAsync(context, ex);
         }
+
+
+
+
+
     }
 }
