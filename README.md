@@ -15,6 +15,7 @@ A C# / ASP.NET Core API that bridges SAP B1 → local SQL Server cache → Neon 
    - [API endpoints](#api-endpoints)
 4. [Admin Endpoints](#admin-endpoints)
 5. [Development Setup](#development-setup)
+6. [Security & Configuration](#security--configuration)
 
 ---
 
@@ -164,3 +165,21 @@ dotnet test tests/MolasLubes.Tests/MolasLubes.Tests.csproj
 > **Note:** The test project only references `MolasLubes.Domain` to avoid the
 > Windows-only COM dependency in `MolasLubes.Infrastructure`.  Unit tests cover
 > entity defaults, JSON field round-trips, mapping logic, and batch-split arithmetic.
+
+---
+
+## Security & Configuration
+
+> **⚠️ Credentials previously committed to this repository must be rotated immediately.**  
+> See [docs/configuration.md](docs/configuration.md) for the full list and rotation instructions.
+
+The `appsettings.json` and `appsettings.Development.json` files in this repository
+contain only placeholder values (`CHANGE_ME_USE_USER_SECRETS_OR_ENV_VAR`).
+**Never** replace these placeholders with real secrets and commit the result.
+
+Refer to [docs/configuration.md](docs/configuration.md) for:
+
+- All required configuration keys and their descriptions
+- How to supply secrets via **.NET User Secrets** (recommended for local dev)
+- How to supply secrets via **environment variables** (CI/CD and production)
+- How to use a git-ignored **local override file** as an alternative
