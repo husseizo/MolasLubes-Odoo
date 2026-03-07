@@ -354,7 +354,7 @@ public class LiquiMolyProductScraperService
 
         var name        = ExtractName(doc);
         var desc        = ExtractDescription(doc);
-        var images      = ExtractAllImages(doc);
+        var images      = ExtractAllImages(doc, requestedSku);
         var (cat, sub)  = ExtractCategories(doc);
         var approvals   = ExtractApprovals(doc);
         var (currentSize, allSizes) = ExtractPackagingSizes(doc, requestedSku, name);
@@ -413,20 +413,25 @@ public class LiquiMolyProductScraperService
     /// <summary>
     /// All product images from the gallery panel.
     ///
-    /// The site renders each gallery image inside a
-    /// <c>div.product-gallery-preview-media</c> (or <c>div[id^='gallery-image-']</c>).
+    /// The outer gallery container is <c>#gallery-preview-{sku}</c>; inside it the
+    /// preview images live in <c>div.product-gallery-preview-media</c> panels and
+    /// thumbnails in <c>div.product-gallery-preview-thumbnails</c>.
     /// Product images always have <c>/media/catalog/product/</c> in their URL;
-    /// logos, footers and icons do not — so that substring is used as a filter
-    /// to avoid picking up the site logo and decorative SVGs which also go through
-    /// the cloudimg.io CDN.
+    /// logos, footers and icons do not — so that substring is used as a filter.
     /// </summary>
-    private static List<string> ExtractAllImages(HtmlDocument doc)
+    private static List<string> ExtractAllImages(HtmlDocument doc, string requestedSku)
     {
         var urls = new List<string>();
 
-        // Primary: images inside the product gallery preview panels
+        // Primary: SKU-specific gallery container → preview panels → images
+        // Selector equivalent: #gallery-preview-{sku} div.product-gallery-preview-media img
         var nodes = doc.DocumentNode.SelectNodes(
+                        $"//div[@id='gallery-preview-{requestedSku}']" +
                         "//div[contains(@class,'product-gallery-preview-media')]//img")
+                 // Fallback A: any preview-media panel on the page
+                 ?? doc.DocumentNode.SelectNodes(
+                        "//div[contains(@class,'product-gallery-preview-media')]//img")
+                 // Fallback B: gallery-image-* divs
                  ?? doc.DocumentNode.SelectNodes(
                         "//div[starts-with(@id,'gallery-image-')]//img");
 
@@ -611,12 +616,18 @@ public class LiquiMolyProductScraperService
         var allSizes = new List<string>();
 
         // ── 1. Swatch options ────────────────────────────────────────────────
-        // Liqui-Moly renders "Container contents" as <a class="swatch-option text">
-        // or <div class="swatch-option text"> with option-label="5 l".
-        var swatchOpts = doc.DocumentNode.SelectNodes(
-                "//*[contains(@class,'swatch-option') and contains(@class,'text')]")
-             ?? doc.DocumentNode.SelectNodes(
-                "//*[contains(@class,'swatch-option')]");
+        // The swatches live inside div.product-add-form
+        // (CSS: div.product-info-main > div.product-add-form).
+        // Liqui-Moly renders them as <a class="swatch-option text" option-label="5 l">
+        // or <div class="swatch-option text">.
+        var formRoot = doc.DocumentNode.SelectSingleNode(
+                           "//div[contains(@class,'product-add-form')]")
+                    ?? doc.DocumentNode;
+
+        var swatchOpts = formRoot.SelectNodes(
+                ".//*[contains(@class,'swatch-option') and contains(@class,'text')]")
+             ?? formRoot.SelectNodes(
+                ".//*[contains(@class,'swatch-option')]");
 
         if (swatchOpts != null)
         {
@@ -704,32 +715,74 @@ public class LiquiMolyProductScraperService
     }
 
     /// <summary>
-    /// Extracts PDF download links (product information sheet and safety data sheet).
+    /// Extracts the product information PDF URL and the safety data sheet URL
+    /// from the Downloads tab.
+    ///
+    /// Product information sheets are served from
+    /// <c>pim.liqui-moly.de/ws/pi/article/{id}?language=en</c> (not a .pdf extension).
+    /// Safety data sheets are served from <c>sichdatonline.chemical-check.de</c>.
+    /// English versions are preferred for both.
     /// </summary>
-    private (string? pdfUrl, string? sdsUrl) ExtractDownloads(HtmlDocument doc)
+    private static (string? pdfUrl, string? sdsUrl) ExtractDownloads(HtmlDocument doc)
     {
         string? pdfUrl = null;
         string? sdsUrl = null;
 
-        var links = doc.DocumentNode.SelectNodes("//a[contains(@href,'.pdf')]");
-        if (links == null) return (null, null);
+        // ── Product Information (pim.liqui-moly.de) ──────────────────────────
+        var piLinks = doc.DocumentNode
+            .SelectNodes("//a[contains(@href,'pim.liqui-moly.de')]");
 
-        foreach (var link in links)
+        if (piLinks != null)
         {
-            var href = link.GetAttributeValue("href", null);
-            if (string.IsNullOrWhiteSpace(href)) continue;
+            // Prefer English (language=en), fall back to first link found
+            var pick = piLinks.FirstOrDefault(n =>
+                n.GetAttributeValue("href", "")
+                 .Contains("language=en", StringComparison.OrdinalIgnoreCase))
+                ?? piLinks[0];
 
-            var abs = BuildAbsoluteOrNull(href);
-            var text = link.InnerText.ToLowerInvariant();
-            var hrefLower = href.ToLowerInvariant();
+            pdfUrl = BuildAbsoluteOrNull(pick.GetAttributeValue("href", null));
+        }
 
-            bool isSds = text.Contains("safety") || text.Contains("sds") || text.Contains("msds")
-                      || hrefLower.Contains("safety") || hrefLower.Contains("sds");
+        // ── Safety Data Sheet (sichdatonline.chemical-check.de) ──────────────
+        var sdsLinks = doc.DocumentNode
+            .SelectNodes("//a[contains(@href,'chemical-check.de')]");
 
-            if (isSds && sdsUrl == null) sdsUrl = abs;
-            else if (!isSds && pdfUrl == null) pdfUrl = abs;
+        if (sdsLinks != null)
+        {
+            // Prefer the link whose surrounding row text says "English"
+            var pick = sdsLinks.FirstOrDefault(n =>
+            {
+                var rowText = n.ParentNode?.InnerText ?? "";
+                return rowText.Contains("English", StringComparison.OrdinalIgnoreCase);
+            }) ?? sdsLinks[0];
 
-            if (pdfUrl != null && sdsUrl != null) break;
+            sdsUrl = BuildAbsoluteOrNull(pick.GetAttributeValue("href", null));
+        }
+
+        // ── Fallback: generic .pdf scan ───────────────────────────────────────
+        if (pdfUrl == null || sdsUrl == null)
+        {
+            var links = doc.DocumentNode.SelectNodes("//a[contains(@href,'.pdf')]");
+            if (links != null)
+            {
+                foreach (var link in links)
+                {
+                    var href = link.GetAttributeValue("href", null);
+                    if (string.IsNullOrWhiteSpace(href)) continue;
+
+                    var abs      = BuildAbsoluteOrNull(href);
+                    var hrefL    = href.ToLowerInvariant();
+                    var textL    = link.InnerText.ToLowerInvariant();
+                    bool isSds   = textL.Contains("safety") || textL.Contains("sds")
+                                || hrefL.Contains("safety") || hrefL.Contains("sds")
+                                || hrefL.Contains("chemical-check");
+
+                    if (isSds  && sdsUrl == null) sdsUrl = abs;
+                    else if (!isSds && pdfUrl == null) pdfUrl = abs;
+
+                    if (pdfUrl != null && sdsUrl != null) break;
+                }
+            }
         }
 
         return (pdfUrl, sdsUrl);
