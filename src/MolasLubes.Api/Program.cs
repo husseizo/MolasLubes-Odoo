@@ -360,13 +360,29 @@ var app = builder.Build();
 
 using (var scope = app.Services.CreateScope())
 {
-    scope.ServiceProvider
-        .GetRequiredService<MolasCacheDbContext>()
-        .Database.Migrate();
+    var sqlConn = builder.Configuration.GetConnectionString("MolasCacheDb");
+    if (!string.IsNullOrWhiteSpace(sqlConn) && !sqlConn.StartsWith("CHANGE_ME"))
+    {
+        scope.ServiceProvider
+            .GetRequiredService<MolasCacheDbContext>()
+            .Database.Migrate();
+    }
+    else
+    {
+        Log.Warning("MolasCacheDb connection string is not configured — skipping SQL Server migration.");
+    }
 
-    scope.ServiceProvider
-        .GetRequiredService<NeonDbContext>()
-        .Database.Migrate();
+    var neonConn = builder.Configuration.GetConnectionString("NeonDb");
+    if (!string.IsNullOrWhiteSpace(neonConn) && !neonConn.StartsWith("CHANGE_ME"))
+    {
+        scope.ServiceProvider
+            .GetRequiredService<NeonDbContext>()
+            .Database.Migrate();
+    }
+    else
+    {
+        Log.Warning("NeonDb connection string is not configured — skipping PostgreSQL migration.");
+    }
 }
 
 if (app.Environment.IsDevelopment())
