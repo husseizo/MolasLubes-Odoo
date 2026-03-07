@@ -679,7 +679,7 @@ public class LiquiMolyProductScraperService
         {
             try
             {
-                var resp = await _http.GetAsync(url, ct);
+                var resp = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
 
                 if (resp.IsSuccessStatusCode)
                     return await resp.Content.ReadAsStringAsync(ct);
