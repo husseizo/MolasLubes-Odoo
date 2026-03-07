@@ -357,7 +357,7 @@ public class LiquiMolyProductScraperService
         var images      = ExtractAllImages(doc);
         var (cat, sub)  = ExtractCategories(doc);
         var approvals   = ExtractApprovals(doc);
-        var sizes       = ExtractAllPackagingSizes(doc, requestedSku, name);
+        var (currentSize, allSizes) = ExtractPackagingSizes(doc, requestedSku, name);
         var (pdf, sds)  = ExtractDownloads(doc);
 
         // SpecGrade: name first, then description
@@ -372,8 +372,8 @@ public class LiquiMolyProductScraperService
             ProductUrl            = productUrlWithHash,
             ImageUrl              = images.FirstOrDefault(),
             AllImageUrls          = images,
-            PackagingSize         = sizes.FirstOrDefault(),
-            AllPackagingSizes     = sizes,
+            PackagingSize         = currentSize,
+            AllPackagingSizes     = allSizes,
             Category              = cat,
             SubCategory           = sub,
             Specifications        = new Dictionary<string, string>(),
@@ -591,24 +591,32 @@ public class LiquiMolyProductScraperService
     }
 
     /// <summary>
-    /// Extracts all available packaging sizes.
+    /// Returns the packaging size for the requested SKU variant (currentSize) and
+    /// all available sizes across every variant of this product (allSizes).
     ///
-    /// Magento 2 swatch renderer shows container contents (gebindeinhalt) as
-    /// <c>div.swatch-option.text</c> elements with <c>option-label="1 l"</c> etc.
-    /// Also checks the current variant's <c>variantswitch-sku-{sku}</c> div and
-    /// falls back to the product name.
+    /// Strategy:
+    /// 1. Swatch options — works for both &lt;div&gt; and &lt;a&gt; elements.
+    ///    The element with class "selected" or "active" is the current variant.
+    /// 2. Description table — the row whose first cell matches the requested SKU;
+    ///    the "Container contents" cell provides currentSize.
+    /// 3. <c>variantswitch-sku-{sku}</c> div inner text.
+    /// 4. Fallback: product name.
     /// </summary>
-    private static List<string> ExtractAllPackagingSizes(
+    private static (string? currentSize, List<string> allSizes) ExtractPackagingSizes(
         HtmlDocument doc,
         string requestedSku,
         string? name)
     {
-        var sizes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        string? currentSize = null;
+        var allSizes = new List<string>();
 
-        // Magento 2 swatch text options (container contents attribute)
-        var swatchOpts = doc.DocumentNode
-            .SelectNodes("//div[contains(@class,'swatch-option') and contains(@class,'text')]")
-         ?? doc.DocumentNode.SelectNodes("//div[contains(@class,'swatch-option')]");
+        // ── 1. Swatch options ────────────────────────────────────────────────
+        // Liqui-Moly renders "Container contents" as <a class="swatch-option text">
+        // or <div class="swatch-option text"> with option-label="5 l".
+        var swatchOpts = doc.DocumentNode.SelectNodes(
+                "//*[contains(@class,'swatch-option') and contains(@class,'text')]")
+             ?? doc.DocumentNode.SelectNodes(
+                "//*[contains(@class,'swatch-option')]");
 
         if (swatchOpts != null)
         {
@@ -618,28 +626,81 @@ public class LiquiMolyProductScraperService
                          ?? opt.GetAttributeValue("data-option-label", null)
                          ?? HtmlEntity.DeEntitize(opt.InnerText.Trim());
 
-                if (!string.IsNullOrWhiteSpace(label))
-                    foreach (Match m in SizePattern.Matches(label))
-                        sizes.Add(m.Groups[1].Value);
+                if (string.IsNullOrWhiteSpace(label)) continue;
+
+                foreach (Match m in SizePattern.Matches(label))
+                {
+                    var size = m.Groups[1].Value;
+                    if (!allSizes.Contains(size, StringComparer.OrdinalIgnoreCase))
+                        allSizes.Add(size);
+
+                    // The selected/active swatch is this SKU's size
+                    if (currentSize == null)
+                    {
+                        var cls = opt.GetAttributeValue("class", "");
+                        if (cls.Contains("selected", StringComparison.OrdinalIgnoreCase)
+                         || cls.Contains("active",   StringComparison.OrdinalIgnoreCase))
+                            currentSize = size;
+                    }
+                }
             }
         }
 
-        // Current variant's dedicated section
-        var variantDiv = doc.DocumentNode
-            .SelectSingleNode($"//div[contains(@class,'variantswitch-sku-{requestedSku}')]");
-
-        if (variantDiv != null)
+        // ── 2. Description table — row whose first cell = requestedSku ───────
+        // The page has a table: SKU | Container type | Container contents | …
+        if (currentSize == null)
         {
-            foreach (Match m in SizePattern.Matches(HtmlEntity.DeEntitize(variantDiv.InnerText)))
-                sizes.Add(m.Groups[1].Value);
+            var skuCell = doc.DocumentNode.SelectSingleNode(
+                $"//td[normalize-space(.)='{requestedSku}'" +
+                $" or .//a[contains(@href,'#{requestedSku}')]]");
+
+            var row = skuCell?.ParentNode; // <tr>
+            if (row != null)
+            {
+                foreach (var cell in row.SelectNodes("td") ?? Enumerable.Empty<HtmlNode>())
+                {
+                    var m = SizePattern.Match(HtmlEntity.DeEntitize(cell.InnerText.Trim()));
+                    if (!m.Success) continue;
+
+                    currentSize = m.Groups[1].Value;
+                    if (!allSizes.Contains(currentSize, StringComparer.OrdinalIgnoreCase))
+                        allSizes.Add(currentSize);
+                    break;
+                }
+            }
         }
 
-        // Fallback: product name
-        if (sizes.Count == 0 && !string.IsNullOrWhiteSpace(name))
-            foreach (Match m in SizePattern.Matches(name))
-                sizes.Add(m.Groups[1].Value);
+        // ── 3. variantswitch-sku-{sku} div ───────────────────────────────────
+        if (currentSize == null)
+        {
+            var variantDiv = doc.DocumentNode
+                .SelectSingleNode($"//div[contains(@class,'variantswitch-sku-{requestedSku}')]");
 
-        return sizes.ToList();
+            if (variantDiv != null)
+            {
+                var m = SizePattern.Match(HtmlEntity.DeEntitize(variantDiv.InnerText));
+                if (m.Success)
+                {
+                    currentSize = m.Groups[1].Value;
+                    if (!allSizes.Contains(currentSize, StringComparer.OrdinalIgnoreCase))
+                        allSizes.Add(currentSize);
+                }
+            }
+        }
+
+        // ── 4. Fallback: product name ─────────────────────────────────────────
+        if (currentSize == null && !string.IsNullOrWhiteSpace(name))
+        {
+            var m = SizePattern.Match(name);
+            if (m.Success)
+            {
+                currentSize = m.Groups[1].Value;
+                if (!allSizes.Contains(currentSize, StringComparer.OrdinalIgnoreCase))
+                    allSizes.Add(currentSize);
+            }
+        }
+
+        return (currentSize, allSizes);
     }
 
     /// <summary>
