@@ -175,26 +175,12 @@ builder.Services.AddHostedService<NeonKeepAliveService>();
 builder.Services.Configure<LiquiMolyScraperSettings>(
     builder.Configuration.GetSection("LiquiMolyScraper"));
 
-builder.Services.AddHttpClient<LiquiMolyProductScraperService>(client =>
-{
-    client.Timeout = TimeSpan.FromSeconds(
-        builder.Configuration.GetValue("LiquiMolyScraper:RequestTimeoutSeconds", 180));
-});
-
-
-// =====================================================
-// LIQUI-MOLY SCRAPER
-// =====================================================
-
-builder.Services.Configure<LiquiMolyScraperSettings>(
-    builder.Configuration.GetSection("LiquiMolyScraper"));
-
 builder.Services.AddHttpClient<LiquiMolyProductScraperService>((sp, client) =>
 {
     var config = sp.GetRequiredService<IConfiguration>();
 
     client.Timeout = TimeSpan.FromSeconds(
-        config.GetValue("LiquiMolyScraper:RequestTimeoutSeconds", 30));
+        config.GetValue("LiquiMolyScraper:RequestTimeoutSeconds", 120));
 
     client.DefaultRequestHeaders.TryAddWithoutValidation(
         "User-Agent",
