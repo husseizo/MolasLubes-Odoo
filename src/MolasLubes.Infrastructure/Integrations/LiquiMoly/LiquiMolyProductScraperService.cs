@@ -740,7 +740,8 @@ public class LiquiMolyProductScraperService
                  .Contains("language=en", StringComparison.OrdinalIgnoreCase))
                 ?? piLinks[0];
 
-            pdfUrl = BuildAbsoluteOrNull(pick.GetAttributeValue("href", null));
+            var h = pick.GetAttributeValue("href", null);
+            if (!string.IsNullOrWhiteSpace(h)) pdfUrl = h;
         }
 
         // ── Safety Data Sheet (sichdatonline.chemical-check.de) ──────────────
@@ -756,7 +757,8 @@ public class LiquiMolyProductScraperService
                 return rowText.Contains("English", StringComparison.OrdinalIgnoreCase);
             }) ?? sdsLinks[0];
 
-            sdsUrl = BuildAbsoluteOrNull(pick.GetAttributeValue("href", null));
+            var h = pick.GetAttributeValue("href", null);
+            if (!string.IsNullOrWhiteSpace(h)) sdsUrl = h;
         }
 
         // ── Fallback: generic .pdf scan ───────────────────────────────────────
@@ -770,15 +772,14 @@ public class LiquiMolyProductScraperService
                     var href = link.GetAttributeValue("href", null);
                     if (string.IsNullOrWhiteSpace(href)) continue;
 
-                    var abs      = BuildAbsoluteOrNull(href);
                     var hrefL    = href.ToLowerInvariant();
                     var textL    = link.InnerText.ToLowerInvariant();
                     bool isSds   = textL.Contains("safety") || textL.Contains("sds")
                                 || hrefL.Contains("safety") || hrefL.Contains("sds")
                                 || hrefL.Contains("chemical-check");
 
-                    if (isSds  && sdsUrl == null) sdsUrl = abs;
-                    else if (!isSds && pdfUrl == null) pdfUrl = abs;
+                    if (isSds  && sdsUrl == null) sdsUrl = href;
+                    else if (!isSds && pdfUrl == null) pdfUrl = href;
 
                     if (pdfUrl != null && sdsUrl != null) break;
                 }
