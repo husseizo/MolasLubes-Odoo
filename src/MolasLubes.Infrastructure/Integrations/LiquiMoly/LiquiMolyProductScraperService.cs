@@ -411,30 +411,42 @@ public class LiquiMolyProductScraperService
     }
 
     /// <summary>
-    /// All product images.
-    /// Liqui-Moly serves images through <c>liquimoly.cloudimg.io</c>; falls back to
-    /// Magento gallery and itemprop selectors.
+    /// All product images from the gallery panel.
+    ///
+    /// The site renders each gallery image inside a
+    /// <c>div.product-gallery-preview-media</c> (or <c>div[id^='gallery-image-']</c>).
+    /// Product images always have <c>/media/catalog/product/</c> in their URL;
+    /// logos, footers and icons do not — so that substring is used as a filter
+    /// to avoid picking up the site logo and decorative SVGs which also go through
+    /// the cloudimg.io CDN.
     /// </summary>
-    private List<string> ExtractAllImages(HtmlDocument doc)
+    private static List<string> ExtractAllImages(HtmlDocument doc)
     {
         var urls = new List<string>();
 
-        // Images go through liquimoly.cloudimg.io CDN
-        var nodes = doc.DocumentNode.SelectNodes("//img[contains(@src,'cloudimg.io')]")
-                 ?? doc.DocumentNode.SelectNodes("//img[contains(@src,'liqui-moly.com')]")
-                 ?? doc.DocumentNode.SelectNodes("//div[contains(@class,'gallery')]//img")
-                 ?? doc.DocumentNode.SelectNodes("//img[contains(@class,'gallery-placeholder__image')]");
+        // Primary: images inside the product gallery preview panels
+        var nodes = doc.DocumentNode.SelectNodes(
+                        "//div[contains(@class,'product-gallery-preview-media')]//img")
+                 ?? doc.DocumentNode.SelectNodes(
+                        "//div[starts-with(@id,'gallery-image-')]//img");
 
-        if (nodes != null)
+        if (nodes == null) return urls;
+
+        foreach (var node in nodes)
         {
-            foreach (var node in nodes)
-            {
-                var src = node.GetAttributeValue("src", null)
-                       ?? node.GetAttributeValue("data-src", null);
-                var abs = BuildAbsoluteOrNull(src);
-                if (abs != null && !urls.Contains(abs))
-                    urls.Add(abs);
-            }
+            // src is already resolved by the browser (class="lazyloaded");
+            // fall back to data-src for pages where lazy-load hasn't fired.
+            var src = node.GetAttributeValue("src", null)
+                   ?? node.GetAttributeValue("data-src", null);
+
+            if (string.IsNullOrWhiteSpace(src)) continue;
+
+            // Accept only actual product catalog images — filters out logo.svg,
+            // footer SVGs, GHS icons and any other non-product assets.
+            if (!src.Contains("/media/catalog/product/")) continue;
+
+            if (!urls.Contains(src))
+                urls.Add(src);
         }
 
         return urls;
