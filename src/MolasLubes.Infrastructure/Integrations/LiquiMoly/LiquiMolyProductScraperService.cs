@@ -18,14 +18,6 @@ public class LiquiMolyProductScraperService
     private static DateTimeOffset _cacheBuiltAt = DateTimeOffset.MinValue;
     private static readonly TimeSpan CacheLifetime = TimeSpan.FromHours(23);
 
-    // Magento 2 variant SKU class pattern embedded in page HTML
-    private static readonly Regex VariantClassPattern =
-        new(@"\bvariantswitch-sku-(\d{3,6})\b", RegexOptions.Compiled);
-
-    // Swatch JSON "sku":"NNNNN" fallback
-    private static readonly Regex SwatchSkuPattern =
-        new(@"""sku""\s*:\s*""(\d{3,6})""", RegexOptions.Compiled);
-
     // Valid numeric SKU: 3–6 digits
     private static readonly Regex ValidSkuPattern =
         new(@"^\d{3,6}$", RegexOptions.Compiled);
@@ -132,101 +124,74 @@ public class LiquiMolyProductScraperService
     /// <summary>
     /// Builds the SKU → product URL index.
     ///
-    /// The Liqui-Moly site uses Magento 2 configurable products:
-    ///   • sitemap.xml is blocked (returns the homepage instead of XML).
-    ///   • Category listing pages ARE accessible and contain all product URLs.
-    ///   • Each product detail page embeds ALL variant SKUs as CSS class names:
-    ///       <c>variantswitch-sku-{sku}</c>
-    ///   • URLs are stored as  productPageUrl#{sku}  so the browser can
-    ///     highlight the correct variant; the base page URL (without hash)
-    ///     is what we fetch from the server.
+    /// The Liqui-Moly site now embeds SKUs directly in the URL fragment of every
+    /// variant link on category listing pages:
+    ///   <c>&lt;a class="product-variation ..." href="...product-url.html#1024"&gt;</c>
+    ///
+    /// This means the entire index can be built in a single category-page crawl —
+    /// no separate product-page visits are needed for variant discovery.
     ///
     /// Process:
     ///   1. Fetch each category from <see cref="LiquiMolyScraperSettings.CategoryPaths"/>
     ///      (all pagination pages).
-    ///   2. Collect every unique product page URL.
-    ///   3. Fetch each product page; scan its raw HTML for
-    ///      <c>variantswitch-sku-(\d+)</c> to discover ALL variant SKUs.
-    ///   4. Map every discovered variant SKU → <c>pageUrl#{sku}</c>.
+    ///   2. Parse every <c>a.product-variation</c> link; extract SKU from the URL
+    ///      fragment (e.g. <c>#1024</c>) and map it directly to the href.
+    ///   3. For any product URL whose fragment is absent or non-numeric (rare
+    ///      single-variant products), fetch the product page and extract the SKU
+    ///      from <c>&lt;span itemprop="sku"&gt;</c>.
     /// </summary>
     private async Task<Dictionary<string, string>> BuildProductIndexAsync(CancellationToken ct)
     {
-        // Step 1 — collect product page URLs from category listings
-        var productUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var map = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var needsProductFetch = new ConcurrentBag<string>();
 
+        // Phase 1 — crawl category pages; extract SKU→URL directly from href fragments
         foreach (var (path, categoryName) in _settings.CategoryPaths)
         {
             if (ct.IsCancellationRequested) break;
 
-            var urls = await CollectProductUrlsFromCategoryAsync(
-                _settings.BaseUrl.TrimEnd('/') + path, categoryName, ct);
-
-            foreach (var u in urls)
-                productUrls.Add(u);
+            await CollectSkuUrlsFromCategoryAsync(
+                _settings.BaseUrl.TrimEnd('/') + path, categoryName, map, needsProductFetch, ct);
 
             await Task.Delay(_settings.DelayBetweenCategoriesMs, ct);
         }
 
         _logger.LogInformation(
-            "[LiquiMoly] Collected {Count} unique product page URLs from category listings",
-            productUrls.Count);
+            "[LiquiMoly] Category crawl complete | Direct SKU mappings={Direct} | Need product page fetch={Fetch}",
+            map.Count, needsProductFetch.Count);
 
-        if (productUrls.Count == 0)
+        if (map.Count == 0 && needsProductFetch.IsEmpty)
         {
             _logger.LogError(
                 "[LiquiMoly] No product URLs found — category pages may be blocked or have changed structure");
             return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         }
 
-        // Step 2 — fetch each product page; scan raw HTML for variant SKUs
-        var map = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-        await ForEachBoundedAsync(productUrls, _settings.MaxParallelRequests, async productUrl =>
+        // Phase 2 (rare) — for products whose URL had no numeric SKU fragment,
+        // fetch the product page and read <span itemprop="sku">
+        if (!needsProductFetch.IsEmpty)
         {
-            try
+            await ForEachBoundedAsync(needsProductFetch, _settings.MaxParallelRequests, async productUrl =>
             {
-                var html = await FetchHtmlAsync(productUrl, ct);
-                if (string.IsNullOrWhiteSpace(html)) return;
-
-                // Primary: variantswitch-sku-{n} CSS class occurrences
-                var variantSkus = VariantClassPattern.Matches(html)
-                    .Cast<Match>()
-                    .Select(m => m.Groups[1].Value)
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToList();
-
-                // Fallback: "sku":"NNNNN" inside Magento swatch/GA4 JSON
-                if (variantSkus.Count == 0)
+                try
                 {
-                    variantSkus = SwatchSkuPattern.Matches(html)
-                        .Cast<Match>()
-                        .Select(m => m.Groups[1].Value)
-                        .Distinct(StringComparer.OrdinalIgnoreCase)
-                        .ToList();
-                }
+                    var html = await FetchHtmlAsync(productUrl, ct);
+                    if (string.IsNullOrWhiteSpace(html)) return;
 
-                if (variantSkus.Count > 0)
-                {
-                    foreach (var sku in variantSkus)
-                        map.TryAdd(sku, productUrl + "#" + sku);
-                }
-                else
-                {
-                    // Single-variant: try to read the SKU element on the page
                     var doc = new HtmlDocument();
                     doc.LoadHtml(html);
                     var pageSku = ExtractSkuFromPage(doc);
                     if (!string.IsNullOrWhiteSpace(pageSku))
                         map.TryAdd(pageSku, productUrl + "#" + pageSku);
-                }
 
-                await Task.Delay(_settings.DelayBetweenRequestsMs, ct);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "[LiquiMoly] Failed extracting variant SKUs from {Url}", productUrl);
-            }
-        }, ct);
+                    await Task.Delay(_settings.DelayBetweenRequestsMs, ct);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[LiquiMoly] Failed extracting SKU from {Url}", productUrl);
+                }
+            }, ct);
+        }
 
         var result = new Dictionary<string, string>(map, StringComparer.OrdinalIgnoreCase);
 
@@ -254,27 +219,31 @@ public class LiquiMolyProductScraperService
     // ======================================================
 
     /// <summary>
-    /// Fetches all paginated pages of a Magento 2 category and returns
-    /// every unique product detail page URL found in <c>a.product-item-link</c> elements.
+    /// Crawls all paginated pages of a category and populates <paramref name="map"/>
+    /// with SKU → URL entries extracted directly from
+    /// <c>&lt;a class="product-variation" href="...url.html#SKU"&gt;</c> links.
+    ///
+    /// If a product link has no numeric SKU fragment (rare single-variant products),
+    /// the base URL is added to <paramref name="needsProductFetch"/> for a follow-up
+    /// product-page fetch.
     /// </summary>
-    private async Task<List<string>> CollectProductUrlsFromCategoryAsync(
+    private async Task CollectSkuUrlsFromCategoryAsync(
         string categoryUrl,
         string categoryName,
+        ConcurrentDictionary<string, string> map,
+        ConcurrentBag<string> needsProductFetch,
         CancellationToken ct)
     {
-        var urls = new ConcurrentBag<string>();
-
-        // Fetch page 1 first to determine total pages
         var firstHtml = await FetchHtmlAsync(categoryUrl, ct);
         if (string.IsNullOrWhiteSpace(firstHtml))
         {
             _logger.LogWarning("[LiquiMoly] Category '{Category}' returned empty response", categoryName);
-            return new List<string>();
+            return;
         }
 
         var firstDoc = new HtmlDocument();
         firstDoc.LoadHtml(firstHtml);
-        ExtractProductLinksFromListingPage(firstDoc, urls);
+        ExtractSkuMappingsFromPage(firstDoc, map, needsProductFetch);
 
         int totalPages = Math.Min(ExtractTotalPages(firstDoc), MaxCategoryPages);
 
@@ -282,7 +251,6 @@ public class LiquiMolyProductScraperService
             "[LiquiMoly] Category '{Category}' has {Pages} page(s)",
             categoryName, totalPages);
 
-        // Fetch remaining pages with bounded parallelism
         if (totalPages > 1)
         {
             await ForEachBoundedAsync(
@@ -290,7 +258,6 @@ public class LiquiMolyProductScraperService
                 _settings.MaxParallelRequests,
                 async page =>
                 {
-                    // Stagger requests slightly to avoid hammering the server
                     await Task.Delay(_settings.DelayBetweenRequestsMs * (page - 1), ct);
 
                     var html = await FetchHtmlAsync($"{categoryUrl}?p={page}", ct);
@@ -298,38 +265,51 @@ public class LiquiMolyProductScraperService
 
                     var doc = new HtmlDocument();
                     doc.LoadHtml(html);
-                    ExtractProductLinksFromListingPage(doc, urls);
+                    ExtractSkuMappingsFromPage(doc, map, needsProductFetch);
                 }, ct);
         }
 
-        var list = urls
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
         _logger.LogInformation(
-            "[LiquiMoly] Category '{Category}' → {Count} product URLs collected",
-            categoryName, list.Count);
-
-        return list;
+            "[LiquiMoly] Category '{Category}' → index now has {Count} SKU mappings",
+            categoryName, map.Count);
     }
 
-    private static void ExtractProductLinksFromListingPage(
+    /// <summary>
+    /// Parses all <c>a.product-variation</c> links on a listing page.
+    /// Each href is expected to look like <c>https://…/product-name-pNNNNNN.html#SKU</c>
+    /// where the fragment is the numeric article number.
+    /// </summary>
+    private static void ExtractSkuMappingsFromPage(
         HtmlDocument doc,
-        ConcurrentBag<string> urls)
+        ConcurrentDictionary<string, string> map,
+        ConcurrentBag<string> needsProductFetch)
     {
-        // Magento 2: product links are in <a class="product-item-link"> inside .products-grid
-        var links = doc.DocumentNode.SelectNodes(
-                        "//a[contains(@class,'product-item-link')]")
-                 ?? doc.DocumentNode.SelectNodes(
-                        "//a[contains(@class,'product-photo-link')]");
-
+        var links = doc.DocumentNode.SelectNodes("//a[contains(@class,'product-variation')]");
         if (links == null) return;
+
+        var seenBaseUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var link in links)
         {
             var href = link.GetAttributeValue("href", null)?.Trim();
-            if (!string.IsNullOrWhiteSpace(href) && href.StartsWith("http"))
-                urls.Add(href);
+            if (string.IsNullOrWhiteSpace(href) || !href.StartsWith("http")) continue;
+
+            var hashIdx = href.IndexOf('#');
+            if (hashIdx > 0 && hashIdx < href.Length - 1)
+            {
+                var fragment = href[(hashIdx + 1)..];
+                if (ValidSkuPattern.IsMatch(fragment))
+                {
+                    // Fragment IS the SKU — map it directly
+                    map.TryAdd(fragment, href);
+                    continue;
+                }
+            }
+
+            // No numeric SKU fragment — queue the base product page for a separate fetch
+            var baseUrl = hashIdx > 0 ? href[..hashIdx] : href;
+            if (baseUrl.Contains(".html") && seenBaseUrls.Add(baseUrl))
+                needsProductFetch.Add(baseUrl);
         }
     }
 
