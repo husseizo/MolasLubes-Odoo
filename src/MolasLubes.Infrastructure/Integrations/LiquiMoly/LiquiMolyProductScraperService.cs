@@ -434,22 +434,61 @@ public class LiquiMolyProductScraperService
 
         foreach (var node in nodes)
         {
-            // src is already resolved by the browser (class="lazyloaded");
-            // fall back to data-src for pages where lazy-load hasn't fired.
-            var src = node.GetAttributeValue("src", null)
+            // Prefer the highest-resolution URL from data-srcset (format: "url 1x, url 1.5x, url 2x").
+            // Fall back to src / data-src when srcset is absent.
+            var url = BestUrlFromSrcset(node.GetAttributeValue("data-srcset", null))
+                   ?? node.GetAttributeValue("src", null)
                    ?? node.GetAttributeValue("data-src", null);
 
-            if (string.IsNullOrWhiteSpace(src)) continue;
+            if (string.IsNullOrWhiteSpace(url)) continue;
 
             // Accept only actual product catalog images — filters out logo.svg,
             // footer SVGs, GHS icons and any other non-product assets.
-            if (!src.Contains("/media/catalog/product/")) continue;
+            if (!url.Contains("/media/catalog/product/")) continue;
 
-            if (!urls.Contains(src))
-                urls.Add(src);
+            if (!urls.Contains(url))
+                urls.Add(url);
         }
 
         return urls;
+    }
+
+    /// Parses an HTML srcset attribute and returns the URL with the highest
+    /// pixel-density descriptor (e.g. "2x"), giving the largest available image.
+    /// Returns null if <paramref name="srcset"/> is null or unparseable.
+    ///
+    /// Example input: "https://…?w=365 1x, https://…?w=548 1.5x, https://…?w=730 2x"
+    /// Returns the "https://…?w=730" URL.
+    private static string? BestUrlFromSrcset(string? srcset)
+    {
+        if (string.IsNullOrWhiteSpace(srcset)) return null;
+
+        string? bestUrl = null;
+        double bestDensity = -1;
+
+        foreach (var entry in srcset.Split(',', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var parts = entry.Trim().Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 1) continue;
+
+            var url = parts[0].Trim();
+            double density = 1.0;
+
+            if (parts.Length == 2)
+            {
+                var descriptor = parts[1].Trim().TrimEnd('x');
+                double.TryParse(descriptor, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out density);
+            }
+
+            if (density > bestDensity)
+            {
+                bestDensity = density;
+                bestUrl = url;
+            }
+        }
+
+        return bestUrl;
     }
 
     /// <summary>
