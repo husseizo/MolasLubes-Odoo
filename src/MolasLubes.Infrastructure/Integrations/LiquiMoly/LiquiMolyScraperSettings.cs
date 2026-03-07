@@ -38,10 +38,10 @@ public class LiquiMolyScraperSettings
 
     public Dictionary<string, string> CategoryPaths { get; set; } = new()
     {
-        { "/en/engine-oils.html","Engine Oils"},
-        { "/en/gear-oils.html","Gear Oils"},
-        { "/en/additives.html","Additives"},
-        { "/en/brake-fluids.html","Brake Fluids"},
-        { "/en/coolant.html","Coolant"}
+        { "/en/engine-oils.html",        "Engine Oils"     },
+        { "/en/gear-oils.html",          "Gear Oils"       },
+        { "/en/additives.html",          "Additives"       },
+        { "/en/vehicle-care.html",       "Vehicle Care"    },
+        { "/en/service-products.html",   "Service Products"},
     };
 }
