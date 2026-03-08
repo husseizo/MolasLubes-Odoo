@@ -16,6 +16,7 @@ using MolasLubes.Infrastructure.Services.Sync;
 using MolasLubes.Infrastructure.Services.Background;
 using MolasLubes.Infrastructure.Security;
 using MolasLubes.Infrastructure.Integrations.LiquiMoly;
+using MolasLubes.Infrastructure.Integrations.Meguin;
 using Quartz;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -195,6 +196,30 @@ builder.Services.AddHttpClient<LiquiMolyProductScraperService>((sp, client) =>
 
 builder.Services.AddScoped<MolasLubes.Infrastructure.Services.Sync.LiquiMolyCacheSyncService>();
 builder.Services.AddScoped<MolasLubes.Infrastructure.Services.Sync.LiquiMolyNeonSyncService>();
+
+// =====================================================
+// MEGUIN SCRAPER
+// =====================================================
+builder.Services.Configure<MeguinScraperSettings>(
+    builder.Configuration.GetSection("MeguinScraper"));
+
+builder.Services.AddHttpClient<MeguinProductScraperService>((sp, client) =>
+{
+    var config = sp.GetRequiredService<IConfiguration>();
+
+    client.Timeout = TimeSpan.FromSeconds(
+        config.GetValue("MeguinScraper:RequestTimeoutSeconds", 120));
+
+    client.DefaultRequestHeaders.TryAddWithoutValidation(
+        "User-Agent",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36");
+
+    client.DefaultRequestHeaders.TryAddWithoutValidation(
+        "Accept-Language", "en-US,en;q=0.9");
+
+    client.DefaultRequestHeaders.TryAddWithoutValidation(
+        "Origin", "https://www.meguin.com");
+});
 
 // =====================================================
 // ODOO PUSH SERVICES
