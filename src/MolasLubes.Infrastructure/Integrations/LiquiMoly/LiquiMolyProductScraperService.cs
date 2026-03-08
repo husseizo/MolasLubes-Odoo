@@ -398,7 +398,7 @@ public class LiquiMolyProductScraperService
         var (cat, sub)  = ExtractCategories(doc);
         var approvals   = ExtractApprovals(doc);
         var (currentSize, allSizes) = ExtractPackagingSizes(doc, requestedSku, name);
-        var (pdf, sds)  = ExtractDownloads(doc);
+        var (pdf, sds)  = ExtractDownloads(doc, requestedSku);
 
         // SpecGrade: name first, then description
         var specGrade = ExtractSpecGrade(name ?? "")
@@ -779,70 +779,97 @@ public class LiquiMolyProductScraperService
     }
 
     /// <summary>
-    /// Extracts the product information PDF URL and the safety data sheet URL
+    /// Extracts the English product information PDF URL and the English safety data sheet URL
     /// from the Downloads tab.
     ///
-    /// Product information sheets are served from
-    /// <c>pim.liqui-moly.de/ws/pi/article/{id}?language=en</c> (not a .pdf extension).
-    /// Safety data sheets are served from <c>sichdatonline.chemical-check.de</c>.
-    /// English versions are preferred for both.
+    /// The downloads section is scoped to the variant-specific container:
+    ///   <c>div.variantswitch-sku-{sku}.downloads</c>
+    ///
+    /// Product info sheets:  <c>pim.liqui-moly.de/ws/pi/article/{id}?language=en</c>
+    /// Safety data sheets:   <c>sichdatonline.chemical-check.de/…_EN.pdf</c>
+    ///   or (fallback)       <c>static.liqui-moly.com/…_EN.pdf</c>
+    ///
+    /// English is identified by <c>language=en</c> in the PI URL, or by the presence of
+    /// a <c>flag-icon--gb</c> icon + "English" label span in the SDS row.
     /// </summary>
-    private static (string? pdfUrl, string? sdsUrl) ExtractDownloads(HtmlDocument doc)
+    private static (string? pdfUrl, string? sdsUrl) ExtractDownloads(HtmlDocument doc, string requestedSku)
     {
         string? pdfUrl = null;
         string? sdsUrl = null;
 
-        // ── Product Information (pim.liqui-moly.de/ws/pi/) ───────────────────
-        // The same domain is also used for article-image downloads; restrict to
-        // /ws/pi/ to avoid picking up image anchor links as PDF URLs.
-        var piLinks = doc.DocumentNode
-            .SelectNodes("//a[contains(@href,'pim.liqui-moly.de/ws/pi/')]");
+        // ── Scope to the variant-specific downloads section ───────────────────
+        // <div class="variantswitch-sku-{sku} downloads container ...">
+        var downloadsDiv = doc.DocumentNode.SelectSingleNode(
+            $"//div[contains(@class,'variantswitch-sku-{requestedSku}') and contains(@class,'downloads')]");
+        var root = downloadsDiv ?? doc.DocumentNode;
 
+        // ── Product Information (pim.liqui-moly.de/ws/pi/) ───────────────────
+        var piLinks = root.SelectNodes(".//a[contains(@href,'pim.liqui-moly.de/ws/pi/')]");
         if (piLinks != null)
         {
-            // Prefer English (language=en), fall back to first link found
+            // Prefer British English (language=en), then US English (language=us)
             var pick = piLinks.FirstOrDefault(n =>
-                n.GetAttributeValue("href", "")
-                 .Contains("language=en", StringComparison.OrdinalIgnoreCase))
-                ?? piLinks[0];
+                            n.GetAttributeValue("href", "")
+                             .Contains("language=en", StringComparison.OrdinalIgnoreCase))
+                    ?? piLinks.FirstOrDefault(n =>
+                            n.GetAttributeValue("href", "")
+                             .Contains("language=us", StringComparison.OrdinalIgnoreCase))
+                    ?? piLinks[0];
 
             var h = pick.GetAttributeValue("href", null);
             if (!string.IsNullOrWhiteSpace(h)) pdfUrl = h;
         }
 
-        // ── Safety Data Sheet (sichdatonline.chemical-check.de) ──────────────
-        var sdsLinks = doc.DocumentNode
-            .SelectNodes("//a[contains(@href,'chemical-check.de')]");
+        // ── Safety Data Sheet ─────────────────────────────────────────────────
+        // Links may be on chemical-check.de or static.liqui-moly.com (.pdf).
+        // English is identified by flag-icon--gb + "English" span, or _EN.pdf in URL.
+        var sdsLinks = root.SelectNodes(
+            ".//a[contains(@href,'chemical-check.de') or " +
+            "(contains(@href,'static.liqui-moly.com') and contains(@href,'.pdf'))]");
 
         if (sdsLinks != null)
         {
-            // Prefer the link whose surrounding row text says "English"
+            // Best match: GB-flag icon + "English" label span
             var pick = sdsLinks.FirstOrDefault(n =>
-            {
-                var rowText = n.ParentNode?.InnerText ?? "";
-                return rowText.Contains("English", StringComparison.OrdinalIgnoreCase);
-            }) ?? sdsLinks[0];
+                {
+                    var hasGbFlag = n.SelectSingleNode(".//i[contains(@class,'flag-icon--gb')]") != null;
+                    var span      = n.SelectSingleNode(".//span[contains(@class,'fw-bold')]");
+                    var isEnglish = span?.InnerText.Trim()
+                                       .Equals("English", StringComparison.OrdinalIgnoreCase) == true;
+                    return hasGbFlag && isEnglish;
+                })
+                // Fallback 1: _EN.pdf suffix in URL
+                ?? sdsLinks.FirstOrDefault(n =>
+                    n.GetAttributeValue("href", "").Contains("_EN.pdf", StringComparison.OrdinalIgnoreCase))
+                // Fallback 2: any link whose label span says "English"
+                ?? sdsLinks.FirstOrDefault(n =>
+                {
+                    var span = n.SelectSingleNode(".//span[contains(@class,'fw-bold')]");
+                    return span?.InnerText.Trim()
+                               .Equals("English", StringComparison.OrdinalIgnoreCase) == true;
+                })
+                ?? sdsLinks[0];
 
             var h = pick.GetAttributeValue("href", null);
             if (!string.IsNullOrWhiteSpace(h)) sdsUrl = h;
         }
 
-        // ── Fallback: generic .pdf scan ───────────────────────────────────────
+        // ── Fallback: generic .pdf scan (only if scoped search above found nothing) ──
         if (pdfUrl == null || sdsUrl == null)
         {
-            var links = doc.DocumentNode.SelectNodes("//a[contains(@href,'.pdf')]");
-            if (links != null)
+            var pdfLinks = doc.DocumentNode.SelectNodes("//a[contains(@href,'.pdf')]");
+            if (pdfLinks != null)
             {
-                foreach (var link in links)
+                foreach (var link in pdfLinks)
                 {
                     var href = link.GetAttributeValue("href", null);
                     if (string.IsNullOrWhiteSpace(href)) continue;
 
-                    var hrefL    = href.ToLowerInvariant();
-                    var textL    = link.InnerText.ToLowerInvariant();
-                    bool isSds   = textL.Contains("safety") || textL.Contains("sds")
-                                || hrefL.Contains("safety") || hrefL.Contains("sds")
-                                || hrefL.Contains("chemical-check");
+                    var hrefL  = href.ToLowerInvariant();
+                    var textL  = link.InnerText.ToLowerInvariant();
+                    bool isSds = textL.Contains("safety") || textL.Contains("sds")
+                              || hrefL.Contains("safety") || hrefL.Contains("sds")
+                              || hrefL.Contains("chemical-check");
 
                     if (isSds  && sdsUrl == null) sdsUrl = href;
                     else if (!isSds && pdfUrl == null) pdfUrl = href;
