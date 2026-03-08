@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MolasLubes.Infrastructure.Integrations.LiquiMoly;
+using MolasLubes.Infrastructure.Integrations.Meguin;
 using MolasLubes.Infrastructure.Persistence;
 using MolasLubes.Infrastructure.Services.Sync;
 using MolasLubes.Infrastructure.Scheduling;
@@ -12,20 +13,13 @@ using Quartz;
 namespace MolasLubes.Infrastructure.Scheduling.Jobs;
 
 /// <summary>
-/// Quartz job that:
-///   1. Reads distinct active ItemCodes from CacheProducts.
-///   2. Splits them into batches (controlled by <see cref="LiquiMolyScraperSettings.BatchSize"/>).
-///   3. For each batch, calls <see cref="LiquiMolyProductScraperService.ScrapeByArticleNumbersAsync"/>
-///      which uses a 2-phase approach:
-///        Phase 1 — per-article catalog search to locate matching product stubs.
-///        Phase 2 — visit each matched product's detail page in shuffled order
-///                  with human-like variable delays.
-///   4. Upserts found products into SQL Server cache via LiquiMolyCacheSyncService.
-///   5. Upserts found products into Neon PostgreSQL via LiquiMolyNeonSyncService.
-///   6. After all batches complete, marks products no longer found as inactive in both stores.
+/// Quartz job that scrapes both the Liqui-Moly and Meguin product catalogues.
 ///
-/// Scheduled (default) every 24 hours via Program.cs.
-/// Can also be triggered manually via POST /api/admin/liquimoly/scrape.
+/// Products whose SAP <c>ItemName</c> contains "meguin" (case-insensitive) are
+/// routed to <see cref="MeguinProductScraperService"/>; all others are scraped
+/// from Liqui-Moly.  Both sets are upserted into the same SQL Server and Neon
+/// stores via <see cref="LiquiMolyCacheSyncService"/> /
+/// <see cref="LiquiMolyNeonSyncService"/>.
 /// </summary>
 [DisallowConcurrentExecution]
 public class LiquiMolyProductScrapeJob : IJob
@@ -50,76 +44,59 @@ public class LiquiMolyProductScrapeJob : IJob
         {
             using var scope = _scopeFactory.CreateScope();
 
-            var cacheDb   = scope.ServiceProvider.GetRequiredService<MolasCacheDbContext>();
-            var scraper   = scope.ServiceProvider.GetRequiredService<LiquiMolyProductScraperService>();
-            var cacheSync = scope.ServiceProvider.GetRequiredService<LiquiMolyCacheSyncService>();
-            var neonSync  = scope.ServiceProvider.GetRequiredService<LiquiMolyNeonSyncService>();
-            var settings  = scope.ServiceProvider.GetRequiredService<IOptions<LiquiMolyScraperSettings>>().Value;
+            var cacheDb        = scope.ServiceProvider.GetRequiredService<MolasCacheDbContext>();
+            var lmScraper      = scope.ServiceProvider.GetRequiredService<LiquiMolyProductScraperService>();
+            var meguinScraper  = scope.ServiceProvider.GetRequiredService<MeguinProductScraperService>();
+            var cacheSync      = scope.ServiceProvider.GetRequiredService<LiquiMolyCacheSyncService>();
+            var neonSync       = scope.ServiceProvider.GetRequiredService<LiquiMolyNeonSyncService>();
+            var settings       = scope.ServiceProvider.GetRequiredService<IOptions<LiquiMolyScraperSettings>>().Value;
 
             int batchSize = settings.BatchSize > 0 ? settings.BatchSize : 50;
 
-            // ── Step 1: Distinct active ItemCodes from CacheProducts ─────────
-            var articleNumbers = await cacheDb.CacheProducts
+            // ── Step 1: Fetch distinct active products (ItemCode + ItemName) ──
+            var activeProducts = await cacheDb.CacheProducts
                 .Where(p => p.IsActive)
-                .Select(p => p.ItemCode)
+                .Select(p => new { p.ItemCode, p.ItemName })
                 .Distinct()
                 .ToListAsync(context.CancellationToken);
 
-            _logger.LogInformation(
-                "[LiquiMoly] Resolved {Count} distinct article numbers from CacheProducts (BatchSize={BatchSize})",
-                articleNumbers.Count, batchSize);
-
-            if (articleNumbers.Count == 0)
+            if (activeProducts.Count == 0)
             {
                 _logger.LogWarning("[LiquiMoly] No active products in CacheProducts — skipping");
                 return;
             }
 
-            // ── Step 2: Scrape in batches, saving incrementally ───────────────
+            // ── Step 2: Split by brand ────────────────────────────────────────
+            // Products with "meguin" in the SAP item name are Meguin products.
+            var meguinSkus = activeProducts
+                .Where(p => p.ItemName != null &&
+                            p.ItemName.Contains("meguin", StringComparison.OrdinalIgnoreCase))
+                .Select(p => p.ItemCode)
+                .Distinct()
+                .ToList();
+
+            var lmSkus = activeProducts
+                .Where(p => p.ItemName == null ||
+                            !p.ItemName.Contains("meguin", StringComparison.OrdinalIgnoreCase))
+                .Select(p => p.ItemCode)
+                .Distinct()
+                .ToList();
+
+            _logger.LogInformation(
+                "[LiquiMoly] SKU split | LiquiMoly={Lm} | Meguin={Meg} | Total={Total} (BatchSize={Bs})",
+                lmSkus.Count, meguinSkus.Count, activeProducts.Count, batchSize);
+
+            // ── Step 3: Scrape both brands in batches ─────────────────────────
             var allScrapedNumbers = new List<string>();
-            int totalFound        = 0;
-            int batchCount        = (int)Math.Ceiling((double)articleNumbers.Count / batchSize);
+            int totalFound = 0;
 
-            for (int i = 0; i < batchCount; i++)
-            {
-                if (context.CancellationToken.IsCancellationRequested)
-                {
-                    _logger.LogWarning("[LiquiMoly] Cancellation requested — stopping after batch {Batch}/{Total}",
-                        i, batchCount);
-                    break;
-                }
+            totalFound += await ScrapeInBatchesAsync(
+                lmSkus, lmScraper, cacheSync, neonSync, batchSize,
+                "LiquiMoly", allScrapedNumbers, context.CancellationToken);
 
-                var batch = articleNumbers
-                    .Skip(i * batchSize)
-                    .Take(batchSize)
-                    .ToList();
-
-                _logger.LogInformation(
-                    "[LiquiMoly] Batch {Batch}/{Total} — scraping {Count} article(s)",
-                    i + 1, batchCount, batch.Count);
-
-                var products = await scraper.ScrapeByArticleNumbersAsync(
-                    batch, context.CancellationToken);
-
-                if (products.Count == 0)
-                {
-                    _logger.LogWarning(
-                        "[LiquiMoly] Batch {Batch}/{Total} — scraper returned 0 products",
-                        i + 1, batchCount);
-                    continue;
-                }
-
-                totalFound += products.Count;
-                allScrapedNumbers.AddRange(products.Select(p => p.ArticleNumber));
-
-                // Save each batch incrementally so partial progress is not lost
-                await cacheSync.UpsertAsync(products);
-                await neonSync.UpsertAsync(products);
-
-                _logger.LogInformation(
-                    "[LiquiMoly] Batch {Batch}/{Total} saved | Found={Found} | RunningTotal={RunningTotal}",
-                    i + 1, batchCount, products.Count, totalFound);
-            }
+            totalFound += await ScrapeInBatchesAsync(
+                meguinSkus, meguinScraper, cacheSync, neonSync, batchSize,
+                "Meguin", allScrapedNumbers, context.CancellationToken);
 
             if (allScrapedNumbers.Count == 0)
             {
@@ -127,18 +104,18 @@ public class LiquiMolyProductScrapeJob : IJob
                 sw.Stop();
                 _logger.LogInformation(
                     "[LiquiMoly] Job complete | Found=0/{Total} | DurationMs={Ms}",
-                    articleNumbers.Count, sw.ElapsedMilliseconds);
+                    activeProducts.Count, sw.ElapsedMilliseconds);
                 return;
             }
 
-            // ── Step 3: Deactivate stale products (not seen in this run) ─────
+            // ── Step 4: Deactivate stale products (not seen in this run) ──────
             await cacheSync.DeactivateStaleAsync(allScrapedNumbers);
             await neonSync.DeactivateStaleAsync(allScrapedNumbers);
 
             sw.Stop();
             _logger.LogInformation(
-                "[LiquiMoly] Job complete | Found={Found}/{Total} | Batches={Batches} | DurationMs={Ms}",
-                totalFound, articleNumbers.Count, batchCount, sw.ElapsedMilliseconds);
+                "[LiquiMoly] Job complete | Found={Found}/{Total} | DurationMs={Ms}",
+                totalFound, activeProducts.Count, sw.ElapsedMilliseconds);
         }
         catch (Exception ex)
         {
@@ -149,10 +126,59 @@ public class LiquiMolyProductScrapeJob : IJob
 
             await QuartzRetryHelper.HandleRetryAsync(context, ex);
         }
+    }
 
+    private async Task<int> ScrapeInBatchesAsync(
+        List<string> skus,
+        LiquiMolyProductScraperService scraper,
+        LiquiMolyCacheSyncService cacheSync,
+        LiquiMolyNeonSyncService neonSync,
+        int batchSize,
+        string brandLabel,
+        List<string> allScrapedNumbers,
+        CancellationToken ct)
+    {
+        if (skus.Count == 0) return 0;
 
+        int totalFound  = 0;
+        int batchCount  = (int)Math.Ceiling((double)skus.Count / batchSize);
 
+        for (int i = 0; i < batchCount; i++)
+        {
+            if (ct.IsCancellationRequested)
+            {
+                _logger.LogWarning("[{Brand}] Cancellation requested — stopping after batch {Batch}/{Total}",
+                    brandLabel, i, batchCount);
+                break;
+            }
 
+            var batch = skus.Skip(i * batchSize).Take(batchSize).ToList();
 
+            _logger.LogInformation(
+                "[{Brand}] Batch {Batch}/{Total} — scraping {Count} article(s)",
+                brandLabel, i + 1, batchCount, batch.Count);
+
+            var products = await scraper.ScrapeByArticleNumbersAsync(batch, ct);
+
+            if (products.Count == 0)
+            {
+                _logger.LogWarning(
+                    "[{Brand}] Batch {Batch}/{Total} — scraper returned 0 products",
+                    brandLabel, i + 1, batchCount);
+                continue;
+            }
+
+            totalFound += products.Count;
+            allScrapedNumbers.AddRange(products.Select(p => p.ArticleNumber));
+
+            await cacheSync.UpsertAsync(products);
+            await neonSync.UpsertAsync(products);
+
+            _logger.LogInformation(
+                "[{Brand}] Batch {Batch}/{Total} saved | Found={Found} | RunningTotal={RunningTotal}",
+                brandLabel, i + 1, batchCount, products.Count, totalFound);
+        }
+
+        return totalFound;
     }
 }

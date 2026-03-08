@@ -10,13 +10,20 @@ public class LiquiMolyProductScraperService
 {
     private readonly HttpClient _http;
     private readonly LiquiMolyScraperSettings _settings;
-    private readonly ILogger<LiquiMolyProductScraperService> _logger;
+    // Non-generic so subclasses can pass ILogger<SubclassType> without casting.
+    private readonly ILogger _logger;
+    private readonly string _logPrefix;
 
-    // Shared across instances; rebuilt when older than 23 h so daily jobs
-    // always pick up newly-added Liqui-Moly products.
-    private static Dictionary<string, string>? _cachedIndex;
-    private static DateTimeOffset _cacheBuiltAt = DateTimeOffset.MinValue;
+    // Per-brand index cache: key = BrandKey, value = (index, built-at)
+    private static readonly ConcurrentDictionary<string, (Dictionary<string, string> Index, DateTimeOffset BuiltAt)>
+        _brandCache = new(StringComparer.OrdinalIgnoreCase);
+
     private static readonly TimeSpan CacheLifetime = TimeSpan.FromHours(23);
+
+    // Exposed for subclasses to give each brand its own cache slot and log prefix.
+    protected virtual string BrandKey   => "LiquiMoly";
+    // Includes a trailing space so log messages read naturally when concatenated.
+    protected virtual string LogPrefix  => "[LiquiMoly] ";
 
     // Valid numeric SKU: 3–6 digits
     private static readonly Regex ValidSkuPattern =
@@ -33,14 +40,23 @@ public class LiquiMolyProductScraperService
     // Safety limit on paginated category pages to prevent runaway fetching
     private const int MaxCategoryPages = 50;
 
+    // Public DI constructor for direct registration.
     public LiquiMolyProductScraperService(
         HttpClient httpClient,
         IOptions<LiquiMolyScraperSettings> settings,
         ILogger<LiquiMolyProductScraperService> logger)
+        : this(httpClient, settings.Value, logger) { }
+
+    // Protected constructor used by subclasses that supply their own settings value and logger.
+    protected LiquiMolyProductScraperService(
+        HttpClient httpClient,
+        LiquiMolyScraperSettings settings,
+        ILogger logger)
     {
-        _http = httpClient;
-        _settings = settings.Value;
-        _logger = logger;
+        _http      = httpClient;
+        _settings  = settings;
+        _logger    = logger;
+        _logPrefix = LogPrefix;
     }
 
     // ======================================================
@@ -53,10 +69,10 @@ public class LiquiMolyProductScraperService
     {
         var raw = articleNumbers?.ToList() ?? new List<string>();
 
-        _logger.LogInformation("[LiquiMoly] Raw SKU input count: {Count}", raw.Count);
+        _logger.LogInformation(_logPrefix + "Raw SKU input count: {Count}", raw.Count);
 
         if (raw.Count > 0)
-            _logger.LogInformation("[LiquiMoly] First 10 raw SKUs: {Skus}",
+            _logger.LogInformation(_logPrefix + "First 10 raw SKUs: {Skus}",
                 string.Join(", ", raw.Take(10)));
 
         var targets = new HashSet<string>(
@@ -65,15 +81,15 @@ public class LiquiMolyProductScraperService
                .Where(x => ValidSkuPattern.IsMatch(x)),
             StringComparer.OrdinalIgnoreCase);
 
-        _logger.LogInformation("[LiquiMoly] Valid numeric SKUs after filtering: {Count}", targets.Count);
+        _logger.LogInformation(_logPrefix + "Valid numeric SKUs after filtering: {Count}", targets.Count);
 
         if (targets.Count > 0)
-            _logger.LogInformation("[LiquiMoly] First 10 cleaned SKUs: {Skus}",
+            _logger.LogInformation(_logPrefix + "First 10 cleaned SKUs: {Skus}",
                 string.Join(", ", targets.Take(10)));
 
         var index = await GetOrBuildIndexAsync(ct);
 
-        _logger.LogInformation("[LiquiMoly] Product index size: {Count}", index.Count);
+        _logger.LogInformation(_logPrefix + "Product index size: {Count}", index.Count);
 
         var results = new ConcurrentBag<LiquiMolyProductDto>();
         var missedSkus = new ConcurrentBag<string>();
@@ -88,7 +104,7 @@ public class LiquiMolyProductScraperService
             }
 
             Interlocked.Increment(ref found);
-            _logger.LogDebug("[LiquiMoly] SKU {Sku} resolved → {Url}", sku, url);
+            _logger.LogDebug(_logPrefix + "SKU {Sku} resolved → {Url}", sku, url);
 
             var dto = await ScrapeProductPageForSkuAsync(sku, url, ct);
             if (dto != null)
@@ -99,7 +115,7 @@ public class LiquiMolyProductScraperService
         // Fallback: search Magento catalogue for each SKU that was not in the index
         if (!missedSkus.IsEmpty)
         {
-            _logger.LogInformation("[LiquiMoly] Attempting search fallback for {Count} missing SKU(s)", missedSkus.Count);
+            _logger.LogInformation(_logPrefix + "Attempting search fallback for {Count} missing SKU(s)", missedSkus.Count);
 
             await ForEachBoundedAsync(missedSkus, _settings.MaxParallelRequests, async sku =>
             {
@@ -107,13 +123,13 @@ public class LiquiMolyProductScraperService
                 if (url == null)
                 {
                     Interlocked.Increment(ref missing);
-                    _logger.LogWarning("[LiquiMoly] SKU {Sku} not found in index or via search", sku);
+                    _logger.LogWarning(_logPrefix + "SKU {Sku} not found in index or via search", sku);
                     return;
                 }
 
 
                 Interlocked.Increment(ref found);
-                _logger.LogDebug("[LiquiMoly] SKU {Sku} resolved via search → {Url}", sku, url);
+                _logger.LogDebug(_logPrefix + "SKU {Sku} resolved via search → {Url}", sku, url);
 
                 var dto = await ScrapeProductPageForSkuAsync(sku, url, ct);
                 if (dto != null)
@@ -122,7 +138,7 @@ public class LiquiMolyProductScraperService
         }
 
         _logger.LogInformation(
-            "[LiquiMoly] Scrape summary | Requested={Requested} | FoundInIndex={Found} | Missing={Missing} | Scraped={Scraped}",
+            _logPrefix + "Scrape summary | Requested={Requested} | FoundInIndex={Found} | Missing={Missing} | Scraped={Scraped}",
             targets.Count, found, missing, results.Count);
 
         return results.ToList();
@@ -134,15 +150,15 @@ public class LiquiMolyProductScraperService
 
     private async Task<Dictionary<string, string>> GetOrBuildIndexAsync(CancellationToken ct)
     {
-        if (_cachedIndex != null
-            && _cachedIndex.Count > 0
-            && DateTimeOffset.UtcNow - _cacheBuiltAt < CacheLifetime)
+        if (_brandCache.TryGetValue(BrandKey, out var cached)
+            && cached.Index.Count > 0
+            && DateTimeOffset.UtcNow - cached.BuiltAt < CacheLifetime)
         {
-            _logger.LogInformation("[LiquiMoly] Using cached index | {Count} SKUs", _cachedIndex.Count);
-            return _cachedIndex;
+            _logger.LogInformation(_logPrefix + "Using cached index | {Count} SKUs", cached.Index.Count);
+            return cached.Index;
         }
 
-        _logger.LogInformation("[LiquiMoly] Building product index from category pages...");
+        _logger.LogInformation(_logPrefix + "Building product index from category pages...");
         return await BuildProductIndexAsync(ct);
     }
 
@@ -182,13 +198,13 @@ public class LiquiMolyProductScraperService
         }
 
         _logger.LogInformation(
-            "[LiquiMoly] Category crawl complete | Direct SKU mappings={Direct} | Need product page fetch={Fetch}",
+            _logPrefix + "Category crawl complete | Direct SKU mappings={Direct} | Need product page fetch={Fetch}",
             map.Count, needsProductFetch.Count);
 
         if (map.Count == 0 && needsProductFetch.IsEmpty)
         {
             _logger.LogError(
-                "[LiquiMoly] No product URLs found — category pages may be blocked or have changed structure");
+                _logPrefix + "No product URLs found — category pages may be blocked or have changed structure");
             return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         }
 
@@ -213,27 +229,26 @@ public class LiquiMolyProductScraperService
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "[LiquiMoly] Failed extracting SKU from {Url}", productUrl);
+                    _logger.LogWarning(ex, _logPrefix + "Failed extracting SKU from {Url}", productUrl);
                 }
             }, ct);
         }
 
         var result = new Dictionary<string, string>(map, StringComparer.OrdinalIgnoreCase);
 
-        _logger.LogInformation("[LiquiMoly] Index complete | SKUs={Count}", result.Count);
+        _logger.LogInformation(_logPrefix + "Index complete | SKUs={Count}", result.Count);
 
         if (result.Count > 0)
         {
-            _logger.LogInformation("[LiquiMoly] Sample SKUs: {Skus}",
+            _logger.LogInformation(_logPrefix + "Sample SKUs: {Skus}",
                 string.Join(", ", result.Keys.Take(10)));
 
-            _cachedIndex = result;
-            _cacheBuiltAt = DateTimeOffset.UtcNow;
+            _brandCache[BrandKey] = (result, DateTimeOffset.UtcNow);
         }
         else
         {
             _logger.LogError(
-                "[LiquiMoly] Product index EMPTY — check category page structure or HTML class names");
+                _logPrefix + "Product index EMPTY — check category page structure or HTML class names");
         }
 
         return result;
@@ -262,7 +277,7 @@ public class LiquiMolyProductScraperService
         var firstHtml = await FetchHtmlAsync(categoryUrl, ct);
         if (string.IsNullOrWhiteSpace(firstHtml))
         {
-            _logger.LogWarning("[LiquiMoly] Category '{Category}' returned empty response", categoryName);
+            _logger.LogWarning(_logPrefix + "Category '{Category}' returned empty response", categoryName);
             return;
         }
 
@@ -273,7 +288,7 @@ public class LiquiMolyProductScraperService
         int totalPages = Math.Min(ExtractTotalPages(firstDoc), MaxCategoryPages);
 
         _logger.LogInformation(
-            "[LiquiMoly] Category '{Category}' has {Pages} page(s)",
+            _logPrefix + "Category '{Category}' has {Pages} page(s)",
             categoryName, totalPages);
 
         if (totalPages > 1)
@@ -295,7 +310,7 @@ public class LiquiMolyProductScraperService
         }
 
         _logger.LogInformation(
-            "[LiquiMoly] Category '{Category}' → index now has {Count} SKU mappings",
+            _logPrefix + "Category '{Category}' → index now has {Count} SKU mappings",
             categoryName, map.Count);
     }
 
@@ -909,7 +924,7 @@ public class LiquiMolyProductScraperService
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "[LiquiMoly] Search fallback failed for SKU {Sku}", sku);
+            _logger.LogWarning(ex, _logPrefix + "Search fallback failed for SKU {Sku}", sku);
             return null;
         }
     }
@@ -934,13 +949,13 @@ public class LiquiMolyProductScraperService
                     return await resp.Content.ReadAsStringAsync(ct);
 
                 _logger.LogWarning(
-                    "[LiquiMoly] HTTP {Status} for {Url} (attempt {A}/{Max})",
+                    _logPrefix + "HTTP {Status} for {Url} (attempt {A}/{Max})",
                     (int)resp.StatusCode, url, attempt + 1, maxRetries + 1);
             }
             catch (Exception ex) when (!ct.IsCancellationRequested && attempt < maxRetries)
             {
                 _logger.LogWarning(ex,
-                    "[LiquiMoly] Fetch error for {Url} (attempt {A}/{Max})",
+                    _logPrefix + "Fetch error for {Url} (attempt {A}/{Max})",
                     url, attempt + 1, maxRetries + 1);
 
                 await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, attempt)), ct);
