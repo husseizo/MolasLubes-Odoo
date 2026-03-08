@@ -76,14 +76,14 @@ public class LiquiMolyProductScraperService
         _logger.LogInformation("[LiquiMoly] Product index size: {Count}", index.Count);
 
         var results = new ConcurrentBag<LiquiMolyProductDto>();
+        var missedSkus = new ConcurrentBag<string>();
         int found = 0, missing = 0;
 
         await ForEachBoundedAsync(targets, _settings.MaxParallelRequests, async sku =>
         {
             if (!index.TryGetValue(sku, out var url))
             {
-                Interlocked.Increment(ref missing);
-                _logger.LogWarning("[LiquiMoly] SKU {Sku} not found in index", sku);
+                missedSkus.Add(sku);
                 return;
             }
 
@@ -95,6 +95,31 @@ public class LiquiMolyProductScraperService
                 results.Add(dto);
 
         }, ct);
+
+        // Fallback: search Magento catalogue for each SKU that was not in the index
+        if (!missedSkus.IsEmpty)
+        {
+            _logger.LogInformation("[LiquiMoly] Attempting search fallback for {Count} missing SKU(s)", missedSkus.Count);
+
+            await ForEachBoundedAsync(missedSkus, _settings.MaxParallelRequests, async sku =>
+            {
+                var url = await TrySearchForSkuAsync(sku, ct);
+                if (url == null)
+                {
+                    Interlocked.Increment(ref missing);
+                    _logger.LogWarning("[LiquiMoly] SKU {Sku} not found in index or via search", sku);
+                    return;
+                }
+
+
+                Interlocked.Increment(ref found);
+                _logger.LogDebug("[LiquiMoly] SKU {Sku} resolved via search → {Url}", sku, url);
+
+                var dto = await ScrapeProductPageForSkuAsync(sku, url, ct);
+                if (dto != null)
+                    results.Add(dto);
+            }, ct);
+        }
 
         _logger.LogInformation(
             "[LiquiMoly] Scrape summary | Requested={Requested} | FoundInIndex={Found} | Missing={Missing} | Scraped={Scraped}",
@@ -809,6 +834,58 @@ public class LiquiMolyProductScraperService
         if (node == null) return null;
         var text = HtmlEntity.DeEntitize(node.InnerText.Trim());
         return ValidSkuPattern.IsMatch(text) ? text : null;
+    }
+
+    // ======================================================
+    // SEARCH FALLBACK
+    // ======================================================
+
+    /// <summary>
+    /// Searches the Magento 2 catalogue for a single SKU and returns its product URL
+    /// (with fragment) if found, or null.
+    ///
+    /// Endpoint: /en/catalogsearch/result/?q={sku}
+    /// The result page contains the same <c>a.product-variation</c> links as category
+    /// pages, so we can reuse <see cref="ExtractSkuMappingsFromPage"/>.
+    /// </summary>
+    private async Task<string?> TrySearchForSkuAsync(string sku, CancellationToken ct)
+    {
+        var searchUrl = _settings.BaseUrl.TrimEnd('/')
+                      + "/en/catalogsearch/result/?q=" + sku;
+        try
+        {
+            var html = await FetchHtmlAsync(searchUrl, ct);
+            if (string.IsNullOrWhiteSpace(html)) return null;
+
+            var doc = new HtmlDocument();
+            doc.LoadHtml(html);
+
+            // Reuse the same extractor — collect into a temp map
+            var map = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var discard = new ConcurrentBag<string>();
+            ExtractSkuMappingsFromPage(doc, map, discard);
+
+            if (map.TryGetValue(sku, out var url))
+                return url;
+
+            // Fallback: product-page SKU span in case the search returned a direct page
+            var pageSku = ExtractSkuFromPage(doc);
+            if (pageSku == sku)
+            {
+                var canonical = doc.DocumentNode
+                    .SelectSingleNode("//link[@rel='canonical']")
+                    ?.GetAttributeValue("href", null);
+                if (!string.IsNullOrWhiteSpace(canonical))
+                    return canonical + "#" + sku;
+            }
+
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[LiquiMoly] Search fallback failed for SKU {Sku}", sku);
+            return null;
+        }
     }
 
     // ======================================================
