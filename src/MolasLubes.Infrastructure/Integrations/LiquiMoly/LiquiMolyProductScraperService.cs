@@ -472,12 +472,31 @@ public class LiquiMolyProductScraperService
 
             if (string.IsNullOrWhiteSpace(url)) continue;
 
-            // Accept only actual product catalog images — filters out logo.svg,
-            // footer SVGs, GHS icons and any other non-product assets.
-            if (!url.Contains("/media/catalog/product/")) continue;
+            // Accept Magento catalog images or Liqui-Moly PIM article images;
+            // filter out logo.svg, footer SVGs, GHS icons and other non-product assets.
+            if (!url.Contains("/media/catalog/product/")
+             && !url.Contains("pim.liqui-moly.de/ws/media/article-image/"))
+                continue;
 
             if (!urls.Contains(url))
                 urls.Add(url);
+        }
+
+        // Fallback: Liqui-Moly wraps product images in <a href="pim.liqui-moly.de/ws/media/article-image/…">
+        // anchor tags (for direct download). If the img-based pass found nothing, harvest those hrefs.
+        if (urls.Count == 0)
+        {
+            var anchorImgs = doc.DocumentNode
+                .SelectNodes("//a[contains(@href,'pim.liqui-moly.de/ws/media/article-image/')]");
+            if (anchorImgs != null)
+            {
+                foreach (var a in anchorImgs)
+                {
+                    var href = a.GetAttributeValue("href", null)?.Trim();
+                    if (!string.IsNullOrWhiteSpace(href) && !urls.Contains(href))
+                        urls.Add(href);
+                }
+            }
         }
 
         return urls;
@@ -545,6 +564,11 @@ public class LiquiMolyProductScraperService
                      && !t.Equals("Products", StringComparison.OrdinalIgnoreCase))
             .ToList()
             ?? new List<string>();
+
+        // The last anchor in the breadcrumb is the current product page — drop it
+        // so that only genuine category crumbs remain.
+        if (crumbs.Count > 0)
+            crumbs.RemoveAt(crumbs.Count - 1);
 
         return (
             crumbs.Count >= 1 ? crumbs[0] : null,
@@ -753,9 +777,11 @@ public class LiquiMolyProductScraperService
         string? pdfUrl = null;
         string? sdsUrl = null;
 
-        // ── Product Information (pim.liqui-moly.de) ──────────────────────────
+        // ── Product Information (pim.liqui-moly.de/ws/pi/) ───────────────────
+        // The same domain is also used for article-image downloads; restrict to
+        // /ws/pi/ to avoid picking up image anchor links as PDF URLs.
         var piLinks = doc.DocumentNode
-            .SelectNodes("//a[contains(@href,'pim.liqui-moly.de')]");
+            .SelectNodes("//a[contains(@href,'pim.liqui-moly.de/ws/pi/')]");
 
         if (piLinks != null)
         {
