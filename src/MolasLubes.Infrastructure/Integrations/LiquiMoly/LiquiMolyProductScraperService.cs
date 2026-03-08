@@ -978,6 +978,10 @@ public class LiquiMolyProductScraperService
                 _logger.LogWarning(
                     _logPrefix + "HTTP {Status} for {Url} (attempt {A}/{Max})",
                     (int)resp.StatusCode, url, attempt + 1, maxRetries + 1);
+
+                // Server errors (5xx) are not transient — don't retry.
+                if ((int)resp.StatusCode >= 500)
+                    return string.Empty;
             }
             catch (Exception ex) when (!ct.IsCancellationRequested && attempt < maxRetries)
             {

@@ -14,11 +14,9 @@ public class MeguinScraperSettings : LiquiMolyScraperSettings
         BaseUrl = "https://www.meguin.com";
         CategoryPaths = new()
         {
-            { "/en/compressor-oils.html",    "Compressor Oils"   },
-            { "/en/hydraulic-oils.html",     "Hydraulic Oils"    },
-            { "/en/greases.html",            "Greases"           },
-            { "/en/gear-oils.html",          "Gear Oils"         },
-            { "/en/special-lubricants.html", "Special Lubricants"},
+            { "/en/oils.html",      "Oils"      },
+            { "/en/greases.html",   "Greases"   },
+            { "/en/gear-oils.html", "Gear Oils" },
         };
     }
 }
