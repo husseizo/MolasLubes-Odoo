@@ -75,12 +75,12 @@ public class NeonSalesOrderLineSyncService
                 {
                     SalesOrderEntry = l.SapDocEntry,
 
-                    ItemCode = l.ItemCode,
-                    ItemName = "", // optional enrichment later
+                    ItemCode  = l.ItemCode,
+                    ItemName  = l.ItemName ?? string.Empty,
 
-                    Quantity = l.Quantity,
-                    Price = 0m,     // optional: add if available
-                    LineTotal = 0m, // optional: compute later
+                    Quantity  = l.Quantity,
+                    Price     = l.Price,
+                    LineTotal = l.LineTotal,
 
                     OdooSalesOrderLineId = l.OdooSalesOrderLineId
                 })

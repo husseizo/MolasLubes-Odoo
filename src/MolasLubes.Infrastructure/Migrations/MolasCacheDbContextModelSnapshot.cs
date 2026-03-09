@@ -600,10 +600,21 @@ namespace MolasLubes.Infrastructure.Migrations
                         .HasMaxLength(20)
                         .HasColumnType("nvarchar(20)");
 
+                    b.Property<string>("CustomerName")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTime?>("DocDate")
+                        .HasColumnType("datetime2");
+
                     b.Property<string>("DocStatus")
                         .IsRequired()
                         .HasMaxLength(1)
                         .HasColumnType("nvarchar(1)");
+
+                    b.Property<decimal>("DocTotal")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
 
                     b.Property<DateTime?>("LastUpdatedAt")
                         .HasColumnType("datetime2");
@@ -633,6 +644,9 @@ namespace MolasLubes.Infrastructure.Migrations
                     b.Property<int>("SapDocNum")
                         .HasColumnType("int");
 
+                    b.Property<DateTime?>("UpdateDate")
+                        .HasColumnType("datetime2");
+
                     b.HasKey("Id");
 
                     b.HasIndex("OdooSalesOrderId");
@@ -658,9 +672,24 @@ namespace MolasLubes.Infrastructure.Migrations
                         .HasMaxLength(50)
                         .HasColumnType("nvarchar(50)");
 
+                    b.Property<string>("ItemName")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<decimal>("LineTotal")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<int>("LineNum")
+                        .HasColumnType("int");
+
                     b.Property<string>("OdooSalesOrderLineId")
                         .HasMaxLength(20)
                         .HasColumnType("nvarchar(20)");
+
+                    b.Property<decimal>("Price")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
 
                     b.Property<decimal>("Quantity")
                         .HasPrecision(18, 4)

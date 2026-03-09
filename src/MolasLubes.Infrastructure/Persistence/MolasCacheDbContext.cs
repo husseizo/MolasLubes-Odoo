@@ -197,6 +197,9 @@ public class MolasCacheDbContext : DbContext
             entity.HasIndex(e => e.SapDocEntry)
                   .IsUnique();
 
+            entity.Property(e => e.CustomerName).HasMaxLength(200);
+            entity.Property(e => e.DocTotal).HasPrecision(18, 2);
+
             entity.Property(e => e.OdooSalesOrderId).HasMaxLength(20);
             entity.Property(e => e.OdooStatus).HasMaxLength(10);
             entity.Property(e => e.OdooSyncDir).HasMaxLength(10);
@@ -217,8 +220,17 @@ public class MolasCacheDbContext : DbContext
             entity.Property(x => x.Quantity)
                   .HasPrecision(18, 4);
 
+            entity.Property(x => x.Price)
+                  .HasPrecision(18, 2);
+
+            entity.Property(x => x.LineTotal)
+                  .HasPrecision(18, 2);
+
             entity.Property(x => x.ItemCode)
                   .HasMaxLength(50);
+
+            entity.Property(x => x.ItemName)
+                  .HasMaxLength(200);
 
             entity.Property(x => x.OdooSalesOrderLineId)
                   .HasMaxLength(20);

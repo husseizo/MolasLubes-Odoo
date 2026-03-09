@@ -1,4 +1,4 @@
-﻿namespace MolasLubes.Domain.Entities.Cache;
+namespace MolasLubes.Domain.Entities.Cache;
 
 public class CacheSalesOrderLine
 {
@@ -9,8 +9,17 @@ public class CacheSalesOrderLine
 
     public CacheSalesOrder? SalesOrder { get; set; }
 
+    public int LineNum { get; set; }
+
     public string ItemCode { get; set; } = null!;
+
+    public string? ItemName { get; set; }
+
     public decimal Quantity { get; set; }
+
+    public decimal Price { get; set; }
+
+    public decimal LineTotal { get; set; }
 
     // =========================
     // 🔗 ODOO LINE UDF

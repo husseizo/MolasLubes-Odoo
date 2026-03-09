@@ -1,4 +1,4 @@
-﻿using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace MolasLubes.Domain.Entities.Cache;
@@ -14,12 +14,20 @@ public class CacheSalesOrder
     [DatabaseGenerated(DatabaseGeneratedOption.None)]
     public int SapDocEntry { get; set; }
 
-
     public int SapDocNum { get; set; }
 
     [Required]
     [MaxLength(20)]
     public string CustomerCode { get; set; } = null!;
+
+    [MaxLength(200)]
+    public string? CustomerName { get; set; }
+
+    public DateTime? DocDate { get; set; }
+
+    public decimal DocTotal { get; set; }
+
+    public DateTime? UpdateDate { get; set; }
 
     [Required]
     [MaxLength(1)]
