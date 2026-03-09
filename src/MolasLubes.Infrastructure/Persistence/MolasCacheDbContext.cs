@@ -354,6 +354,7 @@ public class MolasCacheDbContext : DbContext
             entity.Property(x => x.Description).HasMaxLength(4000);
             entity.Property(x => x.SpecGrade).HasMaxLength(50);
             entity.Property(x => x.PackagingSize).HasMaxLength(30);
+            entity.Property(x => x.Liter).HasColumnType("decimal(8,3)");
 
             // JSON columns for multi-value fields
             entity.Property(x => x.AllPackagingSizes);          // JSON array of strings

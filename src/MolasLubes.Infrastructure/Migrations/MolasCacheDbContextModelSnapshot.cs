@@ -393,6 +393,9 @@ namespace MolasLubes.Infrastructure.Migrations
                         .HasMaxLength(30)
                         .HasColumnType("nvarchar(30)");
 
+                    b.Property<decimal?>("Liter")
+                        .HasColumnType("decimal(8,3)");
+
                     b.Property<string>("ProductInfoPdfUrl")
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");

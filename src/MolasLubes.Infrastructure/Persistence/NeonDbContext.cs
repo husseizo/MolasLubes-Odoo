@@ -359,6 +359,7 @@ public class NeonDbContext : DbContext
             e.Property(x => x.Description);                     // text (no length cap)
             e.Property(x => x.SpecGrade).HasMaxLength(50);
             e.Property(x => x.PackagingSize).HasMaxLength(30);
+            e.Property(x => x.Liter).HasColumnType("numeric(8,3)");
 
             // JSON columns for multi-value fields
             e.Property(x => x.AllPackagingSizes);               // JSON array of strings

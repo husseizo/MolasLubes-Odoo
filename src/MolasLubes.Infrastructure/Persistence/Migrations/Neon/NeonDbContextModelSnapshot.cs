@@ -383,6 +383,9 @@ namespace MolasLubes.Infrastructure.Persistence.Migrations.Neon
                         .HasMaxLength(30)
                         .HasColumnType("character varying(30)");
 
+                    b.Property<decimal?>("Liter")
+                        .HasColumnType("numeric(8,3)");
+
                     b.Property<string>("ProductInfoPdfUrl")
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)");
