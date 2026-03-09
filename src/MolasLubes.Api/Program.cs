@@ -246,6 +246,7 @@ builder.Services.AddTransient<ProductFullSyncJob>();
 builder.Services.AddTransient<CustomerDeltaSyncJob>();
 builder.Services.AddTransient<CustomerFullSyncJob>();
 builder.Services.AddTransient<SalesOrderSyncJob>();
+builder.Services.AddTransient<MolasLubes.Infrastructure.Scheduling.Jobs.SapOpenOrdersSyncJob>();
 builder.Services.AddTransient<InvoiceSyncJob>();
 builder.Services.AddTransient<InvoiceFullSyncJob>();
 builder.Services.AddTransient<PaymentSyncJob>();
@@ -294,6 +295,7 @@ builder.Services.AddQuartz(q =>
     RegisterJob<ProductFullSyncJob>("ProductFullSyncJob", "0 0 */6 ? * *"); // every 6 hours
     RegisterJob<CustomerDeltaSyncJob>("CustomerDeltaSyncJob", "0 */5 * ? * *");
     RegisterJob<SalesOrderSyncJob>("SalesOrderSyncJob", "10 */5 * ? * *");
+    RegisterJob<MolasLubes.Infrastructure.Scheduling.Jobs.SapOpenOrdersSyncJob>("SapOpenOrdersSyncJob", "20 */5 * ? * *"); // every 5 min — open orders
     RegisterJob<DeliveryDeltaSyncJob>("DeliveryDeltaSyncJob", "0/10 * * ? * *"); // every 10s — SAP→Cache (delivery layer 1)
 
 

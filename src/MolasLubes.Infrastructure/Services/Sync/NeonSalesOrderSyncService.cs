@@ -61,7 +61,7 @@ public class NeonSalesOrderSyncService
                     DocNum = x.SapDocNum,
 
                     CustomerCode = x.CustomerCode,
-                    CustomerName = string.Empty, // optional (can be filled later)
+                    CustomerName = x.CustomerName ?? string.Empty,
 
                     Status =
                         x.DocStatus == "O" ? "OPEN" :
@@ -69,8 +69,8 @@ public class NeonSalesOrderSyncService
                         x.DocStatus == "X" ? "CANCELLED" :
                         "UNKNOWN",
 
-                    DocTotal = 0m, // optional: can be derived later
-                    DocDate = x.CreatedAt.AsUtc(),
+                    DocTotal = x.DocTotal,
+                    DocDate = (x.DocDate ?? x.CreatedAt).AsUtc(),
 
                     // 🔗 ODOO UDFS (UTC SAFE)
                     OdooSalesOrderId = x.OdooSalesOrderId,

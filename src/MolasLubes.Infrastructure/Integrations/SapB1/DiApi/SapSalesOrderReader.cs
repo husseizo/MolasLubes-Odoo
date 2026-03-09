@@ -67,6 +67,7 @@ ORDER BY DocEntry
                 CardName = orders.CardName,
                 DocDate = orders.DocDate,
                 DocTotal = (decimal)orders.DocTotal,
+                UpdateDate = orders.UpdateDate,
 
                 // 🔥 Cancellation / Status Detection
                 DocStatus =
@@ -136,6 +137,94 @@ ORDER BY DocEntry
 
         // Start from safe SQL minimum
         return ReadRecentSalesOrders(SqlMinDate);
+    }
+
+    // =====================================================
+    // 📋 OPEN ORDERS ONLY (DocStatus = 'O')
+    // =====================================================
+    public IEnumerable<SapSalesOrderDto> ReadOpenSalesOrders()
+    {
+        _logger.LogInformation("🛒 Reading SAP OPEN Sales Orders");
+
+        var company = _connection.GetConnectedCompany();
+        var orders = (Documents)company.GetBusinessObject(BoObjectTypes.oOrders);
+        var rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
+
+        rs.DoQuery(@"
+SELECT DocEntry
+FROM ORDR
+WHERE DocStatus = 'O'
+  AND Cancelled = 'N'
+ORDER BY DocEntry
+");
+
+        while (!rs.EoF)
+        {
+            var docEntry = Convert.ToInt32(rs.Fields.Item("DocEntry").Value);
+
+            if (!orders.GetByKey(docEntry))
+            {
+                rs.MoveNext();
+                continue;
+            }
+
+            var dto = new SapSalesOrderDto
+            {
+                DocEntry   = orders.DocEntry,
+                DocNum     = orders.DocNum,
+                CardCode   = orders.CardCode,
+                CardName   = orders.CardName,
+                DocDate    = orders.DocDate,
+                DocTotal   = (decimal)orders.DocTotal,
+                UpdateDate = orders.UpdateDate,
+
+                DocStatus = "O",
+
+                OdooSalesOrderId =
+                    orders.UserFields.Fields
+                        .Item(OdooUdfs.SalesOrderId).Value?.ToString(),
+
+                OdooStatus =
+                    orders.UserFields.Fields
+                        .Item(OdooUdfs.Status).Value?.ToString(),
+
+                OdooSyncDir =
+                    orders.UserFields.Fields
+                        .Item(OdooUdfs.SyncDir).Value?.ToString(),
+
+                OdooErrorMsg =
+                    orders.UserFields.Fields
+                        .Item(OdooUdfs.ErrorMsg).Value?.ToString(),
+
+                OdooLastSync =
+                    TryGetDate(
+                        orders.UserFields.Fields
+                            .Item(OdooUdfs.LastSync).Value)
+            };
+
+            for (int i = 0; i < orders.Lines.Count; i++)
+            {
+                orders.Lines.SetCurrentLine(i);
+
+                dto.Lines.Add(new SapSalesOrderLineDto
+                {
+                    LineNum  = orders.Lines.LineNum,
+                    ItemCode = orders.Lines.ItemCode,
+                    ItemName = orders.Lines.ItemDescription,
+                    Quantity  = (decimal)orders.Lines.Quantity,
+                    Price     = (decimal)orders.Lines.Price,
+                    LineTotal = (decimal)orders.Lines.LineTotal,
+
+                    OdooSalesOrderLineId =
+                        orders.Lines.UserFields.Fields
+                            .Item("U_Odoo_SOLine_ID").Value?.ToString()
+                });
+            }
+
+            yield return dto;
+
+            rs.MoveNext();
+        }
     }
 
     // =====================================================
