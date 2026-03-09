@@ -299,7 +299,7 @@ public class LiquiMolyProductScraperService
                 _settings.MaxParallelRequests,
                 async page =>
                 {
-                    await Task.Delay(_settings.DelayBetweenRequestsMs * (page - 1), ct);
+                    await Task.Delay(_settings.DelayBetweenRequestsMs, ct);
 
                     var html = await FetchHtmlAsync($"{categoryUrl}?p={page}", ct);
                     if (string.IsNullOrWhiteSpace(html)) return;
@@ -386,7 +386,12 @@ public class LiquiMolyProductScraperService
             ? productUrlWithHash[..productUrlWithHash.IndexOf('#')]
             : productUrlWithHash;
 
-        var html = await FetchHtmlAsync(pageUrl, ct);
+        // Fire both requests concurrently — product page HTML and PIM sheets are independent.
+        var htmlTask = FetchHtmlAsync(pageUrl, ct);
+        var pimTask  = FetchPimSheetsAsync(requestedSku, ct);
+        await Task.WhenAll(htmlTask, pimTask);
+
+        var html = htmlTask.Result;
         if (string.IsNullOrWhiteSpace(html))
             return null;
 
@@ -402,7 +407,7 @@ public class LiquiMolyProductScraperService
 
         // Try PIM API first for download URLs; fall back to HTML scraping.
         string? pdf = null, sds = null;
-        var pimSheets = await FetchPimSheetsAsync(requestedSku, ct);
+        var pimSheets = pimTask.Result;
         if (pimSheets != null)
         {
             pdf = SelectPimProductInfoUrl(pimSheets);
