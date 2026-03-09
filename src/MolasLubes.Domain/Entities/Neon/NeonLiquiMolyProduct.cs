@@ -25,6 +25,9 @@ public class NeonLiquiMolyProduct
     /// <summary>All available sizes as a JSON array (e.g. ["1 L","5 L","20 L"]).</summary>
     public string? AllPackagingSizes { get; set; }        // JSON-serialised List<string>
 
+    /// <summary>Volume in litres (e.g. 5.0, 0.5 for 500 ml). Null for weight-only units.</summary>
+    public decimal? Liter { get; set; }
+
     // =============================
     // MEDIA
     // =============================

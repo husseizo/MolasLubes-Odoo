@@ -20,6 +20,9 @@ public class LiquiMolyProductDto
     /// <summary>All available packaging/volume variants scraped from the product page.</summary>
     public List<string> AllPackagingSizes { get; set; } = new();
 
+    /// <summary>Volume in litres parsed from PackagingSize (e.g. 5.0, 0.5 for 500 ml). Null for weight-only units.</summary>
+    public decimal? Liter { get; set; }
+
     /// <summary>Primary spec grade extracted from the product name (e.g. "5W-30").</summary>
     public string? SpecGrade { get; set; }
 

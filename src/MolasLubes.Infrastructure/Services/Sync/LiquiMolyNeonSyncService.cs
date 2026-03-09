@@ -128,6 +128,7 @@ public class LiquiMolyNeonSyncService
         entity.Description           = dto.Description;
         entity.SpecGrade             = dto.SpecGrade;
         entity.PackagingSize         = dto.PackagingSize;
+        entity.Liter                 = dto.Liter;
         entity.ImageUrl              = dto.ImageUrl;
         entity.ProductUrl            = dto.ProductUrl;
         entity.IsActive              = true;
