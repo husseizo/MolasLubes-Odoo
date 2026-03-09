@@ -2,6 +2,7 @@ using HtmlAgilityPack;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Collections.Concurrent;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace MolasLubes.Infrastructure.Integrations.LiquiMoly;
@@ -398,7 +399,22 @@ public class LiquiMolyProductScraperService
         var (cat, sub)  = ExtractCategories(doc);
         var approvals   = ExtractApprovals(doc);
         var (currentSize, allSizes) = ExtractPackagingSizes(doc, requestedSku, name);
-        var (pdf, sds)  = ExtractDownloads(doc, requestedSku);
+
+        // Try PIM API first for download URLs; fall back to HTML scraping.
+        string? pdf = null, sds = null;
+        var pimSheets = await FetchPimSheetsAsync(requestedSku, ct);
+        if (pimSheets != null)
+        {
+            pdf = SelectPimProductInfoUrl(pimSheets);
+            sds = SelectPimSdsUrl(pimSheets);
+            pimSheets.Dispose();
+        }
+        if (pdf == null || sds == null)
+        {
+            var (htmlPdf, htmlSds) = ExtractDownloads(doc, requestedSku);
+            pdf ??= htmlPdf;
+            sds ??= htmlSds;
+        }
 
         // SpecGrade: name first, then description
         var specGrade = ExtractSpecGrade(name ?? "")
@@ -902,6 +918,97 @@ public class LiquiMolyProductScraperService
         if (node == null) return null;
         var text = HtmlEntity.DeEntitize(node.InnerText.Trim());
         return ValidSkuPattern.IsMatch(text) ? text : null;
+    }
+
+    // ======================================================
+    // PIM API  —  structured download URLs
+    // ======================================================
+
+    /// <summary>
+    /// Fetches the PIM sheets JSON for a given variant/SKU.
+    /// Endpoint: https://pim.liqui-moly.com/sheets/{sku}
+    /// Returns a parsed <see cref="JsonDocument"/> or null when unavailable.
+    /// Caller must dispose the returned document.
+    /// </summary>
+    private async Task<JsonDocument?> FetchPimSheetsAsync(string sku, CancellationToken ct)
+    {
+        var url = $"https://pim.liqui-moly.com/sheets/{sku}";
+        try
+        {
+            var resp = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
+            if (!resp.IsSuccessStatusCode)
+            {
+                _logger.LogDebug(_logPrefix + "PIM sheets not available for SKU {Sku} (HTTP {Status})",
+                    sku, (int)resp.StatusCode);
+                return null;
+            }
+
+            var json = await resp.Content.ReadAsStringAsync(ct);
+            if (string.IsNullOrWhiteSpace(json)) return null;
+            return JsonDocument.Parse(json);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, _logPrefix + "PIM sheets fetch failed for SKU {Sku}", sku);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Selects the English product-information PDF URL from a PIM sheets document.
+    /// Preference: en_GB → any en_* key → first available URL.
+    /// </summary>
+    private static string? SelectPimProductInfoUrl(JsonDocument doc)
+    {
+        if (!doc.RootElement.TryGetProperty("productinformation", out var pi)
+            || pi.ValueKind != JsonValueKind.Object)
+            return null;
+
+        // en_GB preferred
+        if (pi.TryGetProperty("en_GB", out var enGb)
+            && enGb.TryGetProperty("url", out var u1) && u1.ValueKind == JsonValueKind.String)
+            return u1.GetString();
+
+        // Any en_* key
+        foreach (var prop in pi.EnumerateObject())
+        {
+            if (!prop.Name.StartsWith("en_", StringComparison.OrdinalIgnoreCase)) continue;
+            if (prop.Value.TryGetProperty("url", out var u2) && u2.ValueKind == JsonValueKind.String)
+                return u2.GetString();
+        }
+
+        // First available
+        foreach (var prop in pi.EnumerateObject())
+        {
+            if (prop.Value.TryGetProperty("url", out var u3) && u3.ValueKind == JsonValueKind.String)
+                return u3.GetString();
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Selects the English safety-data-sheet PDF URL from a PIM sheets document.
+    /// Keeps only locales whose key starts with "en_" AND whose URL contains "_EN" (case-insensitive).
+    /// </summary>
+    private static string? SelectPimSdsUrl(JsonDocument doc)
+    {
+        if (!doc.RootElement.TryGetProperty("safetydatasheets", out var sds)
+            || sds.ValueKind != JsonValueKind.Object)
+            return null;
+
+        foreach (var prop in sds.EnumerateObject())
+        {
+            if (!prop.Name.StartsWith("en_", StringComparison.OrdinalIgnoreCase)) continue;
+            if (!prop.Value.TryGetProperty("url", out var urlEl)
+                || urlEl.ValueKind != JsonValueKind.String) continue;
+
+            var url = urlEl.GetString();
+            if (url != null && url.Contains("_EN", StringComparison.OrdinalIgnoreCase))
+                return url;
+        }
+
+        return null;
     }
 
     // ======================================================
