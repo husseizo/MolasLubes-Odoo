@@ -112,6 +112,10 @@ ORDER BY DocEntry
             firstLine = false;
         }
 
+        if (firstLine)
+            throw new Exception(
+                $"Quotation {quotationDocEntry} has no open lines to convert (all lines are fully closed)");
+
         int rc = order.Add();
 
         if (rc != 0)
