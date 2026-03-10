@@ -36,7 +36,6 @@ public class SapQuotationConverter
 SELECT DocEntry
 FROM OQUT
 WHERE DocStatus = 'O'
-  AND Canceled = 'N'
 ORDER BY DocEntry
 ");
 
