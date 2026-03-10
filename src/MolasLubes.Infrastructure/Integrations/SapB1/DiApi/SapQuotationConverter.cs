@@ -92,14 +92,24 @@ ORDER BY DocEntry
         if (!string.IsNullOrWhiteSpace(quotation.Comments))
             order.Comments = quotation.Comments;
 
-        // Copy lines via BaseType/BaseEntry/BaseLine
-        // (same pattern used by delivery→invoice and invoice→credit memo)
+        // Copy lines via BaseType/BaseEntry/BaseLine.
+        // The Documents object starts with one empty line at index 0, so Add()
+        // must be called *before* each subsequent line, not after every line.
+        // Lines where OpenQuantity == 0 are already fully converted — skip them.
+        bool firstLine = true;
         for (int i = 0; i < quotation.Lines.Count; i++)
         {
+            quotation.Lines.SetCurrentLine(i);
+            if (quotation.Lines.RemainingOpenQuantity == 0)
+                continue;
+
+            if (!firstLine)
+                order.Lines.Add();
+
             order.Lines.BaseType  = (int)BoObjectTypes.oQuotations;
             order.Lines.BaseEntry = quotationDocEntry;
             order.Lines.BaseLine  = i;
-            order.Lines.Add();
+            firstLine = false;
         }
 
         int rc = order.Add();
