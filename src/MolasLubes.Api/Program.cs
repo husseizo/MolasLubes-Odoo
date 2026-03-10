@@ -124,6 +124,7 @@ builder.Services.AddScoped<SapCreditMemoReader>();
 builder.Services.AddScoped<SapCustomerWriter>();
 builder.Services.AddScoped<SapSalesOrderCreator>();
 builder.Services.AddScoped<SapSalesOrderCanceler>();
+builder.Services.AddScoped<SapQuotationConverter>();
 builder.Services.AddScoped<SapInvoiceWriter>();
 builder.Services.AddScoped<SapCreditMemoWriter>();
 builder.Services.AddScoped<SapPaymentWriter>();
@@ -264,6 +265,7 @@ builder.Services.AddTransient<NeonSalesOrderSyncJob>();
 builder.Services.AddTransient<NeonSalesOrderLineSyncJob>();
 builder.Services.AddTransient<NeonPriceListSyncJob>();
 builder.Services.AddTransient<LiquiMolyProductScrapeJob>();
+builder.Services.AddTransient<QuotationToSalesOrderJob>();
 
 // =====================================================
 // QUARTZ CONFIGURATION
@@ -296,6 +298,7 @@ builder.Services.AddQuartz(q =>
     RegisterJob<CustomerDeltaSyncJob>("CustomerDeltaSyncJob", "0 */5 * ? * *");
     RegisterJob<SalesOrderSyncJob>("SalesOrderSyncJob", "10 */5 * ? * *");
     RegisterJob<MolasLubes.Infrastructure.Scheduling.Jobs.SapOpenOrdersSyncJob>("SapOpenOrdersSyncJob", "20 */5 * ? * *"); // every 5 min — open orders
+    RegisterJob<QuotationToSalesOrderJob>("QuotationToSalesOrderJob", "30 */5 * ? * *"); // every 5 min — convert open OQUT → ORDR
     RegisterJob<DeliveryDeltaSyncJob>("DeliveryDeltaSyncJob", "0/10 * * ? * *"); // every 10s — SAP→Cache (delivery layer 1)
 
 
