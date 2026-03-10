@@ -21,6 +21,8 @@ using Quartz;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Host.UseWindowsService(); // enables running as a Windows Service (SCM integration)
+
 // =====================================================
 // 📄 LOGGING — SERILOG (Console + File)
 // =====================================================
