@@ -154,7 +154,6 @@ ORDER BY DocEntry
 SELECT DocEntry
 FROM ORDR
 WHERE DocStatus = 'O'
-  AND Cancelled = 'N'
 ORDER BY DocEntry
 ");
 
