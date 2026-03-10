@@ -82,10 +82,10 @@ ORDER BY DocEntry
 
         var order = (Documents)company.GetBusinessObject(BoObjectTypes.oOrders);
 
-        // Copy header from quotation
+        // Copy header from quotation (dates taken exactly from OQUT)
         order.CardCode    = quotation.CardCode;
-        order.DocDate     = DateTime.Today;
-        order.TaxDate     = DateTime.Today;
+        order.DocDate     = quotation.DocDate;
+        order.TaxDate     = quotation.TaxDate;
         order.DocDueDate  = quotation.DocDueDate;
         order.DocCurrency = quotation.DocCurrency;
 

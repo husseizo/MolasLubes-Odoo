@@ -298,7 +298,7 @@ builder.Services.AddQuartz(q =>
     RegisterJob<CustomerDeltaSyncJob>("CustomerDeltaSyncJob", "0 */5 * ? * *");
     RegisterJob<SalesOrderSyncJob>("SalesOrderSyncJob", "10 */5 * ? * *");
     RegisterJob<MolasLubes.Infrastructure.Scheduling.Jobs.SapOpenOrdersSyncJob>("SapOpenOrdersSyncJob", "20 */5 * ? * *"); // every 5 min — open orders
-    RegisterJob<QuotationToSalesOrderJob>("QuotationToSalesOrderJob", "30 */5 * ? * *"); // every 5 min — convert open OQUT → ORDR
+    RegisterJob<QuotationToSalesOrderJob>("QuotationToSalesOrderJob", "0 */2 * ? * *"); // every 2 min — convert open OQUT → ORDR
     RegisterJob<DeliveryDeltaSyncJob>("DeliveryDeltaSyncJob", "0/10 * * ? * *"); // every 10s — SAP→Cache (delivery layer 1)
 
 
