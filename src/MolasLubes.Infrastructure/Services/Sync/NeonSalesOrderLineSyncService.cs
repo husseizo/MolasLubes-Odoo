@@ -49,8 +49,10 @@ public class NeonSalesOrderLineSyncService
 
             // -------------------------------------------------
             // 2️⃣ AFFECTED SALES ORDERS
+            // Only include entries that already have a parent row in NeonSalesOrders;
+            // otherwise the FK constraint (NeonSalesOrderLines → NeonSalesOrders) fails.
             // -------------------------------------------------
-            var orderEntries = await _cacheDb.CacheSalesOrders
+            var candidateEntries = await _cacheDb.CacheSalesOrders
                 .AsNoTracking()
                 .Where(o =>
                     o.LastUpdatedAt != null &&
@@ -58,6 +60,13 @@ public class NeonSalesOrderLineSyncService
                 .Select(o => o.SapDocEntry)
                 .Distinct()
                 .ToListAsync();
+
+            var existingNeonEntries = await _neonDb.SalesOrders
+                .Where(o => candidateEntries.Contains(o.SapDocEntry))
+                .Select(o => o.SapDocEntry)
+                .ToListAsync();
+
+            var orderEntries = existingNeonEntries;
 
             if (orderEntries.Count == 0)
             {
