@@ -6,7 +6,7 @@ namespace MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 
 /// <summary>
 /// Reads open SAP Quotations (OQUT) and converts them to Sales Orders (ORDR)
-/// via the DI API CopyFrom mechanism.
+/// via the DI API BaseType/BaseEntry/BaseLine line-copy mechanism.
 /// </summary>
 public class SapQuotationConverter
 {
@@ -67,21 +67,41 @@ ORDER BY DocEntry
     }
 
     // =====================================================
-    // CONVERT QUOTATION → SALES ORDER (CopyFrom)
+    // CONVERT QUOTATION → SALES ORDER (BaseType/BaseEntry/BaseLine)
     // =====================================================
     public (int DocEntry, int DocNum) ConvertToSalesOrder(int quotationDocEntry)
     {
         _logger.LogInformation(
-            "Converting Quotation DocEntry={DocEntry} to Sales Order via CopyFrom",
+            "Converting Quotation DocEntry={DocEntry} to Sales Order",
             quotationDocEntry);
 
-        var company = _connection.GetConnectedCompany();
-        var order   = (Documents)company.GetBusinessObject(BoObjectTypes.oOrders);
+        var company   = _connection.GetConnectedCompany();
+        var quotation = (Documents)company.GetBusinessObject(BoObjectTypes.oQuotations);
 
-        order.CopyFrom(
-            quotationDocEntry,
-            BoObjectTypes.oQuotations,
-            BoCopyDigitGroups.boCopyDigitGroups_No);
+        if (!quotation.GetByKey(quotationDocEntry))
+            throw new Exception($"Quotation {quotationDocEntry} not found in SAP");
+
+        var order = (Documents)company.GetBusinessObject(BoObjectTypes.oOrders);
+
+        // Copy header from quotation
+        order.CardCode    = quotation.CardCode;
+        order.DocDate     = DateTime.Today;
+        order.TaxDate     = DateTime.Today;
+        order.DocDueDate  = quotation.DocDueDate;
+        order.DocCurrency = quotation.DocCurrency;
+
+        if (!string.IsNullOrWhiteSpace(quotation.Comments))
+            order.Comments = quotation.Comments;
+
+        // Copy lines via BaseType/BaseEntry/BaseLine
+        // (same pattern used by delivery→invoice and invoice→credit memo)
+        for (int i = 0; i < quotation.Lines.Count; i++)
+        {
+            order.Lines.BaseType  = (int)BoObjectTypes.oQuotations;
+            order.Lines.BaseEntry = quotationDocEntry;
+            order.Lines.BaseLine  = i;
+            order.Lines.Add();
+        }
 
         int rc = order.Add();
 
@@ -89,7 +109,7 @@ ORDER BY DocEntry
         {
             company.GetLastError(out int code, out string msg);
             throw new Exception(
-                $"CopyFrom OQUT {quotationDocEntry} to ORDR failed ({code}): {msg}");
+                $"OQUT {quotationDocEntry} to ORDR failed ({code}): {msg}");
         }
 
         int docEntry = int.Parse(company.GetNewObjectKey());
