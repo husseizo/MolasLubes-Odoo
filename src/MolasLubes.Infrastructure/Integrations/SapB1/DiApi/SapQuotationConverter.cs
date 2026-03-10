@@ -82,10 +82,10 @@ ORDER BY DocEntry
 
         var order = (Documents)company.GetBusinessObject(BoObjectTypes.oOrders);
 
-        // Copy header from quotation
+        // Copy header from quotation (dates taken exactly from OQUT)
         order.CardCode    = quotation.CardCode;
-        order.DocDate     = DateTime.Today;
-        order.TaxDate     = DateTime.Today;
+        order.DocDate     = quotation.DocDate;
+        order.TaxDate     = quotation.TaxDate;
         order.DocDueDate  = quotation.DocDueDate;
         order.DocCurrency = quotation.DocCurrency;
 
@@ -111,6 +111,10 @@ ORDER BY DocEntry
             order.Lines.BaseLine  = i;
             firstLine = false;
         }
+
+        if (firstLine)
+            throw new Exception(
+                $"Quotation {quotationDocEntry} has no open lines to convert (all lines are fully closed)");
 
         int rc = order.Add();
 
