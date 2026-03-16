@@ -86,7 +86,17 @@ public class NeonDbContext : DbContext
             e.Property(x => x.OutstandingBalance).HasPrecision(18, 2);
             e.Property(x => x.AvailableCredit).HasPrecision(18, 2);
 
+            e.Property(x => x.Phone1).HasMaxLength(50);
+            e.Property(x => x.Phone2).HasMaxLength(50);
+            e.Property(x => x.Email).HasMaxLength(100);
 
+            e.Property(x => x.BillToStreet).HasMaxLength(200);
+            e.Property(x => x.BillToCity).HasMaxLength(100);
+            e.Property(x => x.BillToCountry).HasMaxLength(10);
+
+            e.Property(x => x.ShipToStreet).HasMaxLength(200);
+            e.Property(x => x.ShipToCity).HasMaxLength(100);
+            e.Property(x => x.ShipToCountry).HasMaxLength(10);
 
             e.Property(x => x.OdooPartnerId).HasMaxLength(20);
             e.Property(x => x.OdooStatus).HasMaxLength(10);

@@ -69,6 +69,18 @@ public class NeonCustomerSyncService
                     PriceList = x.PriceList,
                     SalesPersonCode = x.SlpCode,
 
+                    Phone1 = x.Phone1,
+                    Phone2 = x.Phone2,
+                    Email = x.Email,
+
+                    BillToStreet = x.BillToStreet,
+                    BillToCity = x.BillToCity,
+                    BillToCountry = x.BillToCountry,
+
+                    ShipToStreet = x.ShipToStreet,
+                    ShipToCity = x.ShipToCity,
+                    ShipToCountry = x.ShipToCountry,
+
                     // 🔗 ODOO UDFS (UTC SAFE)
                     OdooPartnerId = x.OdooPartnerId,
                     OdooStatus = x.OdooStatus,
@@ -113,6 +125,18 @@ public class NeonCustomerSyncService
 
                     entity.PriceList = incoming.PriceList;
                     entity.SalesPersonCode = incoming.SalesPersonCode;
+
+                    entity.Phone1 = incoming.Phone1;
+                    entity.Phone2 = incoming.Phone2;
+                    entity.Email = incoming.Email;
+
+                    entity.BillToStreet = incoming.BillToStreet;
+                    entity.BillToCity = incoming.BillToCity;
+                    entity.BillToCountry = incoming.BillToCountry;
+
+                    entity.ShipToStreet = incoming.ShipToStreet;
+                    entity.ShipToCity = incoming.ShipToCity;
+                    entity.ShipToCountry = incoming.ShipToCountry;
 
                     entity.OdooPartnerId = incoming.OdooPartnerId;
                     entity.OdooStatus = incoming.OdooStatus;
