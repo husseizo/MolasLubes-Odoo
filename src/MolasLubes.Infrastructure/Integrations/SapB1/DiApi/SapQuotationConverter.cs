@@ -108,7 +108,7 @@ ORDER BY DocEntry
 
             order.Lines.BaseType  = (int)BoObjectTypes.oQuotations;
             order.Lines.BaseEntry = quotationDocEntry;
-            order.Lines.BaseLine  = i;
+            order.Lines.BaseLine  = quotation.Lines.LineNum; // actual QUT1.LineNum, not loop index
             firstLine = false;
         }
 
