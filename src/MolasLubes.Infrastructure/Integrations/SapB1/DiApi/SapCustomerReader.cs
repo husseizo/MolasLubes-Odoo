@@ -22,15 +22,23 @@ public class SapCustomerReader
     ShipAddr.City    AS ShipToCity,
     ShipAddr.Country AS ShipToCountry";
 
+    // OUTER APPLY picks the first address row regardless of whether
+    // OCRD.BillToDef / ShipToDef is populated (often empty in SAP B1).
     private const string CustomerJoins = @"
-LEFT JOIN CRD1 BillAddr
-    ON  BillAddr.CardCode  = T0.CardCode
-    AND BillAddr.AdresType = 'B'
-    AND BillAddr.Address   = T0.BillToDef
-LEFT JOIN CRD1 ShipAddr
-    ON  ShipAddr.CardCode  = T0.CardCode
-    AND ShipAddr.AdresType = 'S'
-    AND ShipAddr.Address   = T0.ShipToDef";
+OUTER APPLY (
+    SELECT TOP 1 Street, City, Country
+    FROM CRD1
+    WHERE CardCode  = T0.CardCode
+      AND AdresType = 'B'
+    ORDER BY LineNum
+) BillAddr
+OUTER APPLY (
+    SELECT TOP 1 Street, City, Country
+    FROM CRD1
+    WHERE CardCode  = T0.CardCode
+      AND AdresType = 'S'
+    ORDER BY LineNum
+) ShipAddr";
 
     public SapCustomerReader(
         SapDiApiConnection connection,
