@@ -48,13 +48,29 @@ public class NeonCustomerSyncService
                 lastSync = DateTime.MinValue;
 
             // -------------------------------------------------
+            // 1b️⃣ SAFETY: if Neon has fewer customers than the
+            //     active cache, force a full re-sync so that
+            //     new rows (or rows missing after a schema
+            //     migration) are always pushed to Neon.
+            // -------------------------------------------------
+            var neonCount  = await _neonDb.Customers.CountAsync();
+            var cacheCount = await _cacheDb.CacheCustomers.CountAsync(x => x.IsActive);
+
+            if (neonCount < cacheCount)
+            {
+                _logger.LogWarning(
+                    "⚠ Neon customer count ({NeonCount}) < active cache count ({CacheCount}) → forcing FULL sync",
+                    neonCount, cacheCount);
+                lastSync = DateTime.MinValue;
+            }
+
+            // -------------------------------------------------
             // 2️⃣ READ DELTA FROM CACHE
             // -------------------------------------------------
             var customers = await _cacheDb.CacheCustomers
                 .AsNoTracking()
                 .Where(x =>
                     x.IsActive &&
-                    x.LastSapDeltaAt != null &&
                     x.LastSapDeltaAt > lastSync)
                 .Select(x => new NeonCustomer
                 {
@@ -94,7 +110,9 @@ public class NeonCustomerSyncService
 
             if (customers.Count == 0)
             {
-                _logger.LogInformation("ℹ No customer changes for Neon");
+                _logger.LogInformation(
+                    "ℹ No customer changes for Neon | NeonCount={NeonCount} | CacheActive={CacheCount} | LastSync={LastSync}",
+                    neonCount, cacheCount, lastSync);
                 return;
             }
 
