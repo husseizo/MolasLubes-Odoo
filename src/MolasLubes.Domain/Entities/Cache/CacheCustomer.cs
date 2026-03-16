@@ -14,6 +14,24 @@ public class CacheCustomer
     public int? PriceList { get; set; }
     public int? SlpCode { get; set; }
 
+    // =========================
+    // CONTACT (from OCRD)
+    // =========================
+    public string? Phone1 { get; set; }
+    public string? Phone2 { get; set; }
+    public string? Email { get; set; }
+
+    // =========================
+    // ADDRESSES (from CRD1)
+    // =========================
+    public string? BillToStreet { get; set; }
+    public string? BillToCity { get; set; }
+    public string? BillToCountry { get; set; }
+
+    public string? ShipToStreet { get; set; }
+    public string? ShipToCity { get; set; }
+    public string? ShipToCountry { get; set; }
+
     // SAP → Odoo mapping (UDF)
     public string? OdooCustomerId { get; set; }
     // =========================
