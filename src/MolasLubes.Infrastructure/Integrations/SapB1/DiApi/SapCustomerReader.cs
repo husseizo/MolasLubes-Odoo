@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using SAPbobsCOM;
 using MolasLubes.Infrastructure.Integrations.SapB1.DiApi.SapDtos;
 
@@ -8,6 +8,29 @@ public class SapCustomerReader
 {
     private readonly SapDiApiConnection _connection;
     private readonly ILogger<SapCustomerReader> _logger;
+
+    // Base SELECT used by every customer query.
+    // T0.*        → all OCRD columns (version-safe for Inactive/Frozen/frozenFor)
+    // BillAddr.*  → default billing address from CRD1
+    // ShipAddr.*  → default shipping address from CRD1
+    private const string CustomerSelect = @"
+    T0.*,
+    BillAddr.Street  AS BillToStreet,
+    BillAddr.City    AS BillToCity,
+    BillAddr.Country AS BillToCountry,
+    ShipAddr.Street  AS ShipToStreet,
+    ShipAddr.City    AS ShipToCity,
+    ShipAddr.Country AS ShipToCountry";
+
+    private const string CustomerJoins = @"
+LEFT JOIN CRD1 BillAddr
+    ON  BillAddr.CardCode  = T0.CardCode
+    AND BillAddr.AdresType = 'B'
+    AND BillAddr.Address   = T0.BillToDef
+LEFT JOIN CRD1 ShipAddr
+    ON  ShipAddr.CardCode  = T0.CardCode
+    AND ShipAddr.AdresType = 'S'
+    AND ShipAddr.Address   = T0.ShipToDef";
 
     public SapCustomerReader(
         SapDiApiConnection connection,
@@ -33,20 +56,25 @@ public class SapCustomerReader
         try
         {
             rs.DoQuery($@"
-SELECT *
-FROM OCRD
-WHERE CardType = 'C'
-AND UpdateDate >= '{sinceDate}'
-ORDER BY CardCode
+SELECT {CustomerSelect}
+FROM OCRD T0
+{CustomerJoins}
+WHERE T0.CardType = 'C'
+AND   T0.UpdateDate >= '{sinceDate}'
+ORDER BY T0.CardCode
 ");
 
-            while (!rs.EoF)
+            if (!rs.EoF)
             {
-                var dto = MapCustomer(rs);
-                if (dto != null)
-                    customers.Add(dto);
+                var idx = BuildFieldIndex(rs);
+                while (!rs.EoF)
+                {
+                    var dto = MapCustomer(rs, idx);
+                    if (dto != null)
+                        customers.Add(dto);
 
-                rs.MoveNext();
+                    rs.MoveNext();
+                }
             }
 
             _logger.LogInformation("✅ DELTA completed | Count={Count}", customers.Count);
@@ -59,12 +87,12 @@ ORDER BY CardCode
     }
 
     // =====================================================
-    // 🔁 BATCH READ
+    // 🔁 BATCH READ  (used by full-sync streaming loop)
     // =====================================================
     public List<SapCustomerDto> ReadCustomerBatchAfter(string lastCardCode, int batchSize)
     {
-        var customers = new List<SapCustomerDto>();
-        var safeLast = lastCardCode?.Replace("'", "''");
+        var customers = new List<SapCustomerDto>(batchSize);
+        var safeLast  = lastCardCode?.Replace("'", "''");
 
         var company = _connection.GetConnectedCompany();
         var rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
@@ -72,23 +100,28 @@ ORDER BY CardCode
         try
         {
             string whereClause = string.IsNullOrWhiteSpace(safeLast)
-                ? "WHERE CardType = 'C'"
-                : $"WHERE CardType = 'C' AND CardCode > '{safeLast}'";
+                ? "WHERE T0.CardType = 'C'"
+                : $"WHERE T0.CardType = 'C' AND T0.CardCode > '{safeLast}'";
 
             rs.DoQuery($@"
-SELECT TOP {batchSize} *
-FROM OCRD
+SELECT TOP {batchSize} {CustomerSelect}
+FROM OCRD T0
+{CustomerJoins}
 {whereClause}
-ORDER BY CardCode
+ORDER BY T0.CardCode
 ");
 
-            while (!rs.EoF)
+            if (!rs.EoF)
             {
-                var dto = MapCustomer(rs);
-                if (dto != null)
-                    customers.Add(dto);
+                var idx = BuildFieldIndex(rs);
+                while (!rs.EoF)
+                {
+                    var dto = MapCustomer(rs, idx);
+                    if (dto != null)
+                        customers.Add(dto);
 
-                rs.MoveNext();
+                    rs.MoveNext();
+                }
             }
 
             _logger.LogInformation(
@@ -102,34 +135,6 @@ ORDER BY CardCode
         {
             System.Runtime.InteropServices.Marshal.ReleaseComObject(rs);
         }
-    }
-
-    // =====================================================
-    // 📦 FULL READ
-    // =====================================================
-    public List<SapCustomerDto> ReadAllCustomers(int batchSize = 500)
-    {
-        _logger.LogInformation("👥 Starting FULL customer read (batched)");
-
-        var all = new List<SapCustomerDto>();
-        string lastCardCode = "";
-
-        while (true)
-        {
-            var batch = ReadCustomerBatchAfter(lastCardCode, batchSize);
-
-            if (batch.Count == 0)
-                break;
-
-            all.AddRange(batch);
-            lastCardCode = batch.Last().CardCode;
-
-            if (batch.Count < batchSize)
-                break;
-        }
-
-        _logger.LogInformation("✅ FULL customer read completed | Count={Count}", all.Count);
-        return all;
     }
 
     // =====================================================
@@ -148,16 +153,18 @@ ORDER BY CardCode
         try
         {
             rs.DoQuery($@"
-SELECT *
-FROM OCRD
-WHERE CardType = 'C'
-AND CardCode = '{safe}'
+SELECT {CustomerSelect}
+FROM OCRD T0
+{CustomerJoins}
+WHERE T0.CardType = 'C'
+AND   T0.CardCode = '{safe}'
 ");
 
             if (rs.EoF)
                 return null;
 
-            return MapCustomer(rs);
+            var idx = BuildFieldIndex(rs);
+            return MapCustomer(rs, idx);
         }
         finally
         {
@@ -190,11 +197,12 @@ AND CardCode = '{safe}'
             if (rs.EoF)
                 return null;
 
+            var idx = BuildFieldIndex(rs);
             return new SapCustomerCreditDto
             {
-                CardCode = SafeGetString(rs, "CardCode") ?? "",
-                CreditLimit = SafeGetDecimal(rs, "CreditLine") ?? 0m,
-                Balance = SafeGetDecimal(rs, "Balance") ?? 0m
+                CardCode    = GetString(rs, idx, "CardCode") ?? "",
+                CreditLimit = GetDecimal(rs, idx, "CreditLine") ?? 0m,
+                Balance     = GetDecimal(rs, idx, "Balance")     ?? 0m
             };
         }
         finally
@@ -204,11 +212,11 @@ AND CardCode = '{safe}'
     }
 
     // =====================================================
-    // 🧩 MAP
+    // 🧩 MAP  (index-based O(1) field access)
     // =====================================================
-    private SapCustomerDto? MapCustomer(Recordset rs)
+    private SapCustomerDto? MapCustomer(Recordset rs, Dictionary<string, int> idx)
     {
-        var cardCode = SafeGetString(rs, "CardCode");
+        var cardCode = GetString(rs, idx, "CardCode");
 
         if (string.IsNullOrWhiteSpace(cardCode))
         {
@@ -218,81 +226,76 @@ AND CardCode = '{safe}'
 
         // SAP B1 8.81+: Inactive / Frozen columns.
         // Older versions: frozenFor covers both (Y = blocked/inactive).
-        var inactive   = SafeGetString(rs, "Inactive");
-        var frozen     = SafeGetString(rs, "Frozen");
-        var frozenFor  = SafeGetString(rs, "frozenFor");
+        var inactive  = GetString(rs, idx, "Inactive");
+        var frozen    = GetString(rs, idx, "Frozen");
+        var frozenFor = GetString(rs, idx, "frozenFor");
 
         return new SapCustomerDto
         {
             CardCode = cardCode.Trim(),
-            CardName = SafeGetString(rs, "CardName") ?? "",
+            CardName = GetString(rs, idx, "CardName") ?? "",
             CardType = "C",
 
             IsActive = inactive != "Y" && frozen != "Y" && frozenFor != "Y",
 
-            Phone1 = SafeGetString(rs, "Phone1"),
-            Phone2 = SafeGetString(rs, "Phone2"),
-            Email = SafeGetString(rs, "E_Mail"),
+            Phone1 = GetString(rs, idx, "Phone1"),
+            Phone2 = GetString(rs, idx, "Phone2"),
+            Email  = GetString(rs, idx, "E_Mail"),
 
-            PriceList = SafeGetDecimal(rs, "ListNum") is decimal pl ? (int)pl : null,
-            SlpCode = SafeGetDecimal(rs, "SlpCode") is decimal slp ? (int)slp : null,
+            PriceList = GetDecimal(rs, idx, "ListNum") is decimal pl  ? (int)pl  : null,
+            SlpCode   = GetDecimal(rs, idx, "SlpCode") is decimal slp ? (int)slp : null,
 
-            OdooPartnerId = SafeGetString(rs, "U_Odoo_Partner_ID"),
+            BillToStreet  = GetString(rs, idx, "BillToStreet"),
+            BillToCity    = GetString(rs, idx, "BillToCity"),
+            BillToCountry = GetString(rs, idx, "BillToCountry"),
 
-            UpdateDate = TryGetDate(SafeGet(rs, "UpdateDate")),
-            UpdateTime = TryGetSapTime(SafeGet(rs, "UpdateTS"))
+            ShipToStreet  = GetString(rs, idx, "ShipToStreet"),
+            ShipToCity    = GetString(rs, idx, "ShipToCity"),
+            ShipToCountry = GetString(rs, idx, "ShipToCountry"),
+
+            OdooPartnerId = GetString(rs, idx, "U_Odoo_Partner_ID"),
+
+            UpdateDate = TryGetDate(GetRaw(rs, idx, "UpdateDate")),
+            UpdateTime = TryGetSapTime(GetRaw(rs, idx, "UpdateTS"))
         };
     }
 
     // =====================================================
-    // SAFE ACCESS (FIXED)
+    // FIELD-INDEX HELPERS
+    // Built once per query execution — O(1) per field access
     // =====================================================
-    private static object? SafeGet(Recordset rs, string fieldName)
+    private static Dictionary<string, int> BuildFieldIndex(Recordset rs)
     {
-        try
+        var dict = new Dictionary<string, int>(rs.Fields.Count, StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < rs.Fields.Count; i++)
         {
-            for (int i = 0; i < rs.Fields.Count; i++)
-            {
-                var field = rs.Fields.Item(i);
-
-                if (string.Equals(field.Name, fieldName, StringComparison.OrdinalIgnoreCase))
-                {
-                    var value = field.Value;
-
-                    if (value == null)
-                        return null;
-
-                    if (value is DBNull)
-                        return null;
-
-                    return value;
-                }
-            }
-
-            return null;
+            var name = rs.Fields.Item(i).Name;
+            if (!dict.ContainsKey(name))
+                dict[name] = i;
         }
-        catch
-        {
-            return null;
-        }
+        return dict;
     }
 
-    private static string? SafeGetString(Recordset rs, string fieldName)
-        => SafeGet(rs, fieldName)?.ToString();
-
-    private static decimal? SafeGetDecimal(Recordset rs, string fieldName)
+    private static object? GetRaw(Recordset rs, Dictionary<string, int> idx, string name)
     {
-        var value = SafeGet(rs, fieldName);
-        if (value == null) return null;
+        if (!idx.TryGetValue(name, out var i)) return null;
+        try
+        {
+            var v = rs.Fields.Item(i).Value;
+            return v is DBNull ? null : v;
+        }
+        catch { return null; }
+    }
 
-        if (value is decimal d)
-            return d;
+    private static string?  GetString (Recordset rs, Dictionary<string, int> idx, string name)
+        => GetRaw(rs, idx, name)?.ToString();
 
-        decimal parsed;
-        if (decimal.TryParse(value.ToString(), out parsed))
-            return parsed;
-
-        return null;
+    private static decimal? GetDecimal(Recordset rs, Dictionary<string, int> idx, string name)
+    {
+        var v = GetRaw(rs, idx, name);
+        if (v == null) return null;
+        if (v is decimal d) return d;
+        return decimal.TryParse(v.ToString(), out var p) ? p : null;
     }
 
     private static DateTime? TryGetDate(object? v)
@@ -301,35 +304,25 @@ AND CardCode = '{safe}'
     private static DateTime? TryGetSapTime(object? v)
     {
         if (v == null) return null;
-
-        int n;
-        if (int.TryParse(v.ToString(), out n))
-        {
-            var s = n.ToString().PadLeft(6, '0');
-            return DateTime.Today
-                .AddHours(int.Parse(s.Substring(0, 2)))
-                .AddMinutes(int.Parse(s.Substring(2, 2)))
-                .AddSeconds(int.Parse(s.Substring(4, 2)));
-        }
-
-        return null;
+        if (!int.TryParse(v.ToString(), out var n)) return null;
+        var s = n.ToString().PadLeft(6, '0');
+        return DateTime.Today
+            .AddHours(int.Parse(s.Substring(0, 2)))
+            .AddMinutes(int.Parse(s.Substring(2, 2)))
+            .AddSeconds(int.Parse(s.Substring(4, 2)));
     }
 
     // =====================================================
     // ACTIVE CHECK
     // =====================================================
-    /// <summary>
-    /// Throws ArgumentException if the CardCode does not exist or is marked Inactive in SAP.
-    /// Call this before posting invoices, payments, or orders to SAP.
-    /// </summary>
     public void ValidateCardCodeActive(string cardCode)
     {
         if (string.IsNullOrWhiteSpace(cardCode))
             throw new ArgumentException("CardCode is required");
 
-        var safe = cardCode.Replace("'", "''");
+        var safe    = cardCode.Replace("'", "''");
         var company = _connection.GetConnectedCompany();
-        var rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
+        var rs      = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
 
         try
         {
@@ -338,14 +331,15 @@ AND CardCode = '{safe}'
             if (rs.EoF)
                 throw new ArgumentException($"Customer '{cardCode}' not found in SAP.");
 
-            var inactive  = SafeGetString(rs, "Inactive");
-            var frozen    = SafeGetString(rs, "Frozen");
-            var frozenFor = SafeGetString(rs, "frozenFor");
+            var idx      = BuildFieldIndex(rs);
+            var inactive  = GetString(rs, idx, "Inactive");
+            var frozen    = GetString(rs, idx, "Frozen");
+            var frozenFor = GetString(rs, idx, "frozenFor");
 
-            if (string.Equals(inactive, "Y", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(inactive,  "Y", StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException($"Customer '{cardCode}' is marked Inactive in SAP and cannot be used for transactions.");
 
-            if (string.Equals(frozen, "Y", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(frozen,    "Y", StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException($"Customer '{cardCode}' is Frozen in SAP and cannot be used for transactions.");
 
             if (string.Equals(frozenFor, "Y", StringComparison.OrdinalIgnoreCase))
