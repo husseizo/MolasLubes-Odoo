@@ -121,6 +121,18 @@ public class CustomerCacheService
                         PriceList = c.PriceList,
                         SlpCode = c.SlpCode,
 
+                        Phone1 = c.Phone1,
+                        Phone2 = c.Phone2,
+                        Email = c.Email,
+
+                        BillToStreet = c.BillToStreet,
+                        BillToCity = c.BillToCity,
+                        BillToCountry = c.BillToCountry,
+
+                        ShipToStreet = c.ShipToStreet,
+                        ShipToCity = c.ShipToCity,
+                        ShipToCountry = c.ShipToCountry,
+
                         OdooPartnerId = c.OdooPartnerId,
                         OdooStatus = c.OdooStatus ?? existing.OdooStatus,
                         OdooErrorMsg = c.OdooErrorMsg,
@@ -148,6 +160,18 @@ public class CustomerCacheService
 
                         PriceList = c.PriceList,
                         SlpCode = c.SlpCode,
+
+                        Phone1 = c.Phone1,
+                        Phone2 = c.Phone2,
+                        Email = c.Email,
+
+                        BillToStreet = c.BillToStreet,
+                        BillToCity = c.BillToCity,
+                        BillToCountry = c.BillToCountry,
+
+                        ShipToStreet = c.ShipToStreet,
+                        ShipToCity = c.ShipToCity,
+                        ShipToCountry = c.ShipToCountry,
 
                         OdooPartnerId = c.OdooPartnerId,
                         OdooStatus = c.OdooStatus ?? "SYNCED",
@@ -201,6 +225,19 @@ public class CustomerCacheService
 
                 PriceList = c.PriceList,
                 SlpCode = c.SlpCode,
+
+                Phone1 = c.Phone1,
+                Phone2 = c.Phone2,
+                Email = c.Email,
+
+                BillToStreet = c.BillToStreet,
+                BillToCity = c.BillToCity,
+                BillToCountry = c.BillToCountry,
+
+                ShipToStreet = c.ShipToStreet,
+                ShipToCity = c.ShipToCity,
+                ShipToCountry = c.ShipToCountry,
+
                 OdooPartnerId = c.OdooPartnerId,
                 OdooStatus = c.OdooStatus ?? "SYNCED",
                 OdooErrorMsg = c.OdooErrorMsg,
@@ -219,6 +256,18 @@ public class CustomerCacheService
 
                 PriceList = c.PriceList,
                 SlpCode = c.SlpCode,
+
+                Phone1 = c.Phone1,
+                Phone2 = c.Phone2,
+                Email = c.Email,
+
+                BillToStreet = c.BillToStreet,
+                BillToCity = c.BillToCity,
+                BillToCountry = c.BillToCountry,
+
+                ShipToStreet = c.ShipToStreet,
+                ShipToCity = c.ShipToCity,
+                ShipToCountry = c.ShipToCountry,
 
                 OdooPartnerId = c.OdooPartnerId,
                 OdooStatus = c.OdooStatus ?? existing.OdooStatus,

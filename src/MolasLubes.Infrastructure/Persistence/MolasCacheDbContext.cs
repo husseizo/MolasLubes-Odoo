@@ -89,6 +89,18 @@ public class MolasCacheDbContext : DbContext
             entity.HasIndex(x => x.PriceList);
             entity.HasIndex(x => x.SlpCode);
 
+            entity.Property(x => x.Phone1).HasMaxLength(50);
+            entity.Property(x => x.Phone2).HasMaxLength(50);
+            entity.Property(x => x.Email).HasMaxLength(100);
+
+            entity.Property(x => x.BillToStreet).HasMaxLength(200);
+            entity.Property(x => x.BillToCity).HasMaxLength(100);
+            entity.Property(x => x.BillToCountry).HasMaxLength(10);
+
+            entity.Property(x => x.ShipToStreet).HasMaxLength(200);
+            entity.Property(x => x.ShipToCity).HasMaxLength(100);
+            entity.Property(x => x.ShipToCountry).HasMaxLength(10);
+
             entity.Property(x => x.OdooPartnerId).HasMaxLength(20);
             entity.Property(x => x.OdooStatus).HasMaxLength(10);
             entity.Property(x => x.OdooSyncDir).HasMaxLength(10);
