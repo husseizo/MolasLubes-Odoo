@@ -216,8 +216,11 @@ AND CardCode = '{safe}'
             return null;
         }
 
-        var inactive = SafeGetString(rs, "Inactive");
-        var frozen   = SafeGetString(rs, "Frozen");
+        // SAP B1 8.81+: Inactive / Frozen columns.
+        // Older versions: frozenFor covers both (Y = blocked/inactive).
+        var inactive   = SafeGetString(rs, "Inactive");
+        var frozen     = SafeGetString(rs, "Frozen");
+        var frozenFor  = SafeGetString(rs, "frozenFor");
 
         return new SapCustomerDto
         {
@@ -225,7 +228,7 @@ AND CardCode = '{safe}'
             CardName = SafeGetString(rs, "CardName") ?? "",
             CardType = "C",
 
-            IsActive = inactive != "Y" && frozen != "Y",
+            IsActive = inactive != "Y" && frozen != "Y" && frozenFor != "Y",
 
             Phone1 = SafeGetString(rs, "Phone1"),
             Phone2 = SafeGetString(rs, "Phone2"),
@@ -335,14 +338,18 @@ AND CardCode = '{safe}'
             if (rs.EoF)
                 throw new ArgumentException($"Customer '{cardCode}' not found in SAP.");
 
-            var inactive = SafeGetString(rs, "Inactive");
-            var frozen   = SafeGetString(rs, "Frozen");
+            var inactive  = SafeGetString(rs, "Inactive");
+            var frozen    = SafeGetString(rs, "Frozen");
+            var frozenFor = SafeGetString(rs, "frozenFor");
 
             if (string.Equals(inactive, "Y", StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException($"Customer '{cardCode}' is marked Inactive in SAP and cannot be used for transactions.");
 
             if (string.Equals(frozen, "Y", StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException($"Customer '{cardCode}' is Frozen in SAP and cannot be used for transactions.");
+
+            if (string.Equals(frozenFor, "Y", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException($"Customer '{cardCode}' is blocked (frozenFor=Y) in SAP and cannot be used for transactions.");
         }
         finally
         {
