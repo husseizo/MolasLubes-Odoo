@@ -204,6 +204,21 @@ builder.Services.AddScoped<
 builder.Services.AddScoped<
     MolasLubes.Infrastructure.Services.Sync.GermaxCacheSyncService>();
 
+builder.Services.AddHttpClient<GermaxProductScraperService>((sp, client) =>
+{
+    var config = sp.GetRequiredService<IConfiguration>();
+
+    client.Timeout = TimeSpan.FromSeconds(
+        config.GetValue("GermaxScraper:RequestTimeoutSeconds", 30));
+
+    client.DefaultRequestHeaders.TryAddWithoutValidation(
+        "User-Agent",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36");
+
+    client.DefaultRequestHeaders.TryAddWithoutValidation(
+        "Accept-Language", "en-US,en;q=0.9");
+});
+
 // =====================================================
 // NEON SYNC SERVICES
 // =====================================================
