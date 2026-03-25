@@ -1,5 +1,4 @@
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using MolasLubes.Domain.Entities.Neon;
 
 namespace MolasLubes.Infrastructure.Persistence;
@@ -19,25 +18,6 @@ public class AutoHubDbContext : DbContext
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        // =====================================================
-        // GLOBAL UTC ENFORCEMENT (Postgres-safe)
-        // =====================================================
-        var utcConverter = new ValueConverter<DateTime, DateTime>(
-            v => v.Kind == DateTimeKind.Utc
-                ? v
-                : DateTime.SpecifyKind(v, DateTimeKind.Utc),
-            v => DateTime.SpecifyKind(v, DateTimeKind.Utc)
-        );
-
-        foreach (var entity in modelBuilder.Model.GetEntityTypes())
-        {
-            foreach (var prop in entity.GetProperties())
-            {
-                if (prop.ClrType == typeof(DateTime))
-                    prop.SetValueConverter(utcConverter);
-            }
-        }
-
         // =====================================================
         // GERMAX PRODUCTS
         // =====================================================
