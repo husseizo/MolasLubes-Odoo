@@ -76,8 +76,8 @@ Do not run enrichment and seed sync at the same time for the same profile. Use Q
 |---|---|
 | **Class** | `GermaxRetryFailedJob` |
 | **File** | `src/MolasLubes.Infrastructure/Scheduling/Jobs/GermaxRetryFailedJob.cs` |
-| **Schedule** | Every 12 hours |
-| **Cron** | `0 0 */12 ? * *` |
+| **Schedule** | Every 12 hours (offset to avoid seed sync overlap) |
+| **Cron** | `0 0 9,21 ? * *` |
 
 ### Responsibilities
 
@@ -109,7 +109,7 @@ All admin endpoints require the existing API key authentication (`ApiKeyAttribut
 |---|---|---|
 | `AutoHubSapSeedSyncJob` | `0 0 */6 ? * *` | 00:00, 06:00, 12:00, 18:00 |
 | `GermaxProductEnrichmentJob` | `0 30 1 ? * *` | 01:30 |
-| `GermaxRetryFailedJob` | `0 0 */12 ? * *` | 00:00, 12:00 |
+| `GermaxRetryFailedJob` | `0 0 9,21 ? * *` | 09:00, 21:00 |
 
 ---
 
@@ -142,7 +142,7 @@ services.AddQuartz(q =>
     q.AddTrigger(opts => opts
         .ForJob(retryJobKey)
         .WithIdentity("GermaxRetryFailedJob-trigger")
-        .WithCronSchedule("0 0 */12 ? * *"));
+        .WithCronSchedule("0 0 9,21 ? * *"));
 });
 ```
 
