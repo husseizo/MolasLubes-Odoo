@@ -110,8 +110,9 @@ public class GermaxProductScraperService
             catch (Exception ex)
             {
                 _logger.LogWarning(ex,
-                    "GermaxScraper: page scrape failed | url={Url}", best.ProductUrl);
-                return null;
+                    "GermaxScraper: page scrape failed | url={Url} — trying next strategy",
+                    best.ProductUrl);
+                continue;
             }
         }
 
@@ -129,18 +130,29 @@ public class GermaxProductScraperService
         string strategy,
         CancellationToken ct)
     {
-        var searchPath = _settings.SearchPaths.Count > 0
-            ? _settings.SearchPaths[0]
-            : "/?s={term}&post_type=product";
+        var paths = _settings.SearchPaths.Count > 0
+            ? _settings.SearchPaths
+            : new List<string> { "/?s={term}&post_type=product" };
 
-        var url = _settings.BaseUrl.TrimEnd('/')
-                  + searchPath.Replace("{term}", HttpUtility.UrlEncode(term));
+        var allCandidates = new List<GermaxCandidateDto>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        var html = await FetchAsync(url, ct);
-        if (html == null)
-            return new List<GermaxCandidateDto>();
+        foreach (var searchPath in paths)
+        {
+            var url = _settings.BaseUrl.TrimEnd('/')
+                      + searchPath.Replace("{term}", HttpUtility.UrlEncode(term));
 
-        return ParseSearchResults(html, strategy);
+            var html = await FetchAsync(url, ct);
+            if (html == null) continue;
+
+            foreach (var c in ParseSearchResults(html, strategy))
+            {
+                if (seen.Add(c.ProductUrl))
+                    allCandidates.Add(c);
+            }
+        }
+
+        return allCandidates;
     }
 
     private List<GermaxCandidateDto> ParseSearchResults(string html, string strategy)
