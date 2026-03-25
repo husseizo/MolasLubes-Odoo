@@ -2,6 +2,7 @@
 
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using MolasLubes.Infrastructure.Integrations.Germax;
 using MolasLubes.Infrastructure.Integrations.Germax.Dtos;
 using MolasLubes.Infrastructure.Integrations.SapB1.Profiles;
 using SAPbobsCOM;
@@ -18,14 +19,17 @@ public class SapAutoHubSeedReader
     private const string ProfileKey = "AutoHub";
 
     private readonly IntegrationProfilesOptions _profiles;
+    private readonly GermaxScraperSettings _scraperSettings;
     private readonly ILogger<SapAutoHubSeedReader> _logger;
 
     public SapAutoHubSeedReader(
         IOptions<IntegrationProfilesOptions> profileOptions,
+        IOptions<GermaxScraperSettings> scraperOptions,
         ILogger<SapAutoHubSeedReader> logger)
     {
-        _profiles = profileOptions.Value;
-        _logger   = logger;
+        _profiles        = profileOptions.Value;
+        _scraperSettings = scraperOptions.Value;
+        _logger          = logger;
     }
 
     // =====================================================
@@ -97,7 +101,7 @@ public class SapAutoHubSeedReader
                 rs = (Recordset)company.GetBusinessObject(
                     BoObjectTypes.BoRecordset);
 
-                var sql = BuildQuery(watermark);
+                var sql = BuildQuery(watermark, _scraperSettings.AllowedItemGroups);
                 rs.DoQuery(sql);
 
                 while (!rs.EoF)
@@ -143,9 +147,17 @@ public class SapAutoHubSeedReader
         return results;
     }
 
-    private static string BuildQuery(DateTime? watermark)
+    private static string BuildQuery(DateTime? watermark, IReadOnlyList<string> allowedGroups)
     {
-        var baseQuery = @"
+        if (allowedGroups.Count == 0)
+            throw new InvalidOperationException(
+                "GermaxScraper.AllowedItemGroups must contain at least one entry.");
+
+        // Groups come from config, not user input — single-quote escaping is a safety measure
+        var inClause = string.Join(", ",
+            allowedGroups.Select(g => $"'{g.Replace("'", "''")}'"));
+
+        var baseQuery = $@"
 SELECT
     T0.ItemCode,
     T0.ItemName,
@@ -158,7 +170,7 @@ INNER JOIN OITB T1
     ON T0.ItmsGrpCod = T1.ItmsGrpCod
 WHERE
     T0.frozenFor = 'N'
-    AND T1.ItmsGrpNam IN ('Land Rover', 'Volvo')";
+    AND T1.ItmsGrpNam IN ({inClause})";
 
         if (watermark.HasValue)
         {

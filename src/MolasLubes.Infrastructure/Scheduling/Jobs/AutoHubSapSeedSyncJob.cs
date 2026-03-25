@@ -9,6 +9,11 @@ namespace MolasLubes.Infrastructure.Scheduling.Jobs;
 [DisallowConcurrentExecution]
 public class AutoHubSapSeedSyncJob : IJob
 {
+    // Static so it survives across transient instances. On process restart it
+    // resets to null, which forces an immediate full sync — intentional.
+    private static DateTime? _lastFullSyncAt;
+    private static readonly TimeSpan FullSyncInterval = TimeSpan.FromHours(24);
+
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<AutoHubSapSeedSyncJob> _logger;
 
@@ -35,17 +40,25 @@ public class AutoHubSapSeedSyncJob : IJob
         // =============================
         // 1. DETERMINE FULL vs DELTA
         // =============================
+        // Full sync runs:
+        //   a) on first run (no watermark exists)
+        //   b) every 24 h (catches frozen / reclassified items that delta misses,
+        //      because the SAP query only returns frozenFor='N' rows)
         var watermark = cache
             .GetWatermarkAsync()
             .GetAwaiter()
             .GetResult();
 
-        var isFullSync = watermark is null;
+        var now = DateTime.UtcNow;
+        var isFullSync = watermark is null
+            || _lastFullSyncAt is null
+            || (now - _lastFullSyncAt.Value) >= FullSyncInterval;
 
         _logger.LogInformation(
-            "AutoHubSapSeedSyncJob: mode={Mode} | Watermark={Watermark}",
+            "AutoHubSapSeedSyncJob: mode={Mode} | Watermark={Watermark} | LastFull={LastFull}",
             isFullSync ? "FULL" : "DELTA",
-            watermark?.ToString("u") ?? "none");
+            watermark?.ToString("u") ?? "none",
+            _lastFullSyncAt?.ToString("u") ?? "none");
 
         // =============================
         // 2. READ FROM SAP
@@ -71,6 +84,10 @@ public class AutoHubSapSeedSyncJob : IJob
             .UpsertSeedAsync(seeds, isFullSync)
             .GetAwaiter()
             .GetResult();
+
+        // Record the full-sync timestamp only after a successful upsert
+        if (isFullSync)
+            _lastFullSyncAt = now;
 
         _logger.LogInformation(
             "AutoHubSapSeedSyncJob: completed | Inserted={Inserted} | Updated={Updated} | Deactivated={Deactivated}",
