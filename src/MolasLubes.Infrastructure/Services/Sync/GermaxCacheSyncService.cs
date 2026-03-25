@@ -115,4 +115,88 @@ public class GermaxCacheSyncService
         return await _db.GermaxProducts
             .MaxAsync(x => (DateTime?)x.LastSapSeedAt, ct);
     }
+
+    /// <summary>
+    /// Returns up to <paramref name="batchSize"/> active PENDING rows as seed DTOs,
+    /// ordered oldest-first so the queue drains in a stable order.
+    /// </summary>
+    public async Task<List<GermaxSeedDto>> GetPendingAsync(
+        int batchSize,
+        CancellationToken ct = default)
+    {
+        return await _db.GermaxProducts
+            .Where(x => x.IsActive && x.ScrapeStatus == "PENDING")
+            .OrderBy(x => x.LastSapSeedAt)
+            .Take(batchSize)
+            .Select(x => new GermaxSeedDto
+            {
+                ItemCode      = x.ItemCode,
+                ItemName      = x.ItemName,
+                EngineCode    = x.EngineCode,
+                ItemGroupCode = string.Empty,        // not persisted on cache row
+                ItemGroupName = x.ItemGroupName ?? string.Empty
+            })
+            .ToListAsync(ct);
+    }
+
+    /// <summary>
+    /// Writes an enrichment success back to the cache row.
+    /// Sets ScrapeStatus=SCRAPED, populates all product fields, records ScrapedAt.
+    /// </summary>
+    public async Task EnrichAsync(
+        GermaxProductDto dto,
+        CancellationToken ct = default)
+    {
+        var row = await _db.GermaxProducts
+            .FindAsync(new object?[] { dto.ItemCode }, ct);
+
+        if (row == null)
+        {
+            _logger.LogWarning(
+                "GermaxCacheSyncService.EnrichAsync: ItemCode={Code} not found — skipped",
+                dto.ItemCode);
+            return;
+        }
+
+        row.GermaxArticleNumber = dto.GermaxArticleNumber;
+        row.OemPartNumber       = dto.OemPartNumber;
+        row.FitForAuto          = dto.FitForAuto;
+        row.Description         = dto.Description;
+        row.ImageUrl            = dto.ImageUrl;
+        row.AllImageUrls        = dto.AllImageUrls;
+        row.ProductUrl          = dto.ProductUrl;
+        row.MatchMethod         = dto.MatchMethod;
+        row.MatchScore          = dto.MatchScore;
+        row.ScrapedAt           = DateTime.UtcNow;
+        row.ScrapeStatus        = "SCRAPED";
+        row.ScrapeError         = null;
+
+        await _db.SaveChangesAsync(ct);
+
+        _logger.LogDebug(
+            "GermaxCacheSyncService.EnrichAsync: saved | ItemCode={Code} | Method={Method} | Score={Score:F1}",
+            dto.ItemCode, dto.MatchMethod, dto.MatchScore);
+    }
+
+    /// <summary>
+    /// Records a terminal non-success outcome (NO_MATCH or ERROR) on a cache row.
+    /// <paramref name="error"/> is truncated to 1 000 characters to fit the column.
+    /// </summary>
+    public async Task MarkScrapeResultAsync(
+        string itemCode,
+        string status,
+        string? error,
+        CancellationToken ct = default)
+    {
+        var row = await _db.GermaxProducts
+            .FindAsync(new object?[] { itemCode }, ct);
+
+        if (row == null) return;
+
+        row.ScrapeStatus = status;
+        row.ScrapeError  = error is { Length: > 1000 } ? error[..1000] : error;
+        row.ScrapedAt    = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync(ct);
+    }
 }
