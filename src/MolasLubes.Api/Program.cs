@@ -17,6 +17,8 @@ using MolasLubes.Infrastructure.Services.Background;
 using MolasLubes.Infrastructure.Security;
 using MolasLubes.Infrastructure.Integrations.LiquiMoly;
 using MolasLubes.Infrastructure.Integrations.Meguin;
+using MolasLubes.Infrastructure.Integrations.Germax;
+using MolasLubes.Infrastructure.Integrations.SapB1.Profiles;
 using Quartz;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -87,7 +89,7 @@ builder.Services.AddSwaggerGen();
 builder.Services.AddOpenApi();
 
 // =====================================================
-// DATABASES
+// DATABASES — PROFILE A (Molas_Lubes_LTD)
 // =====================================================
 builder.Services.AddDbContext<MolasCacheDbContext>(options =>
     options.UseSqlServer(
@@ -104,7 +106,42 @@ builder.Services.AddDbContext<NeonDbContext>(options =>
         }));
 
 // =====================================================
-// SAP SETTINGS
+// DATABASES — PROFILE B (MOLAS_Live_2021 / AutoHub)
+// =====================================================
+builder.Services.AddDbContext<Live2021CacheDbContext>(options =>
+    options.UseSqlServer(
+        builder.Configuration["IntegrationProfiles:Profiles:AutoHub:ConnectionStrings:CacheDb"],
+        sql =>
+        {
+            sql.MigrationsAssembly("MolasLubes.Infrastructure");
+            sql.MigrationsHistoryTable("__EFMigrationsHistory_Live2021Cache");
+        }));
+
+builder.Services.AddDbContext<AutoHubDbContext>(options =>
+    options.UseNpgsql(
+        builder.Configuration["IntegrationProfiles:Profiles:AutoHub:ConnectionStrings:NeonDb"],
+        npgsql =>
+        {
+            npgsql.MigrationsAssembly("MolasLubes.Infrastructure");
+            npgsql.MigrationsHistoryTable("__EFMigrationsHistory_AutoHub");
+            npgsql.CommandTimeout(120);
+            npgsql.EnableRetryOnFailure(5, TimeSpan.FromSeconds(10), null);
+        }));
+
+// =====================================================
+// INTEGRATION PROFILES (Profile A + Profile B)
+// =====================================================
+builder.Services.Configure<IntegrationProfilesOptions>(
+    builder.Configuration.GetSection(IntegrationProfilesOptions.SectionName));
+
+// =====================================================
+// GERMAX SCRAPER SETTINGS
+// =====================================================
+builder.Services.Configure<GermaxScraperSettings>(
+    builder.Configuration.GetSection(GermaxScraperSettings.SectionName));
+
+// =====================================================
+// SAP SETTINGS (legacy — Profile A backward compat)
 // =====================================================
 builder.Services.Configure<SapSettings>(
     builder.Configuration.GetSection("SAP"));
@@ -400,6 +437,34 @@ using (var scope = app.Services.CreateScope())
     else
     {
         Log.Warning("NeonDb connection string is not configured — skipping PostgreSQL migration.");
+    }
+
+    // Profile B — MOLAS_Live_2021_Cache (SQL Server)
+    var live2021CacheConn = builder.Configuration[
+        "IntegrationProfiles:Profiles:AutoHub:ConnectionStrings:CacheDb"];
+    if (!string.IsNullOrWhiteSpace(live2021CacheConn) && !live2021CacheConn.StartsWith("CHANGE_ME"))
+    {
+        scope.ServiceProvider
+            .GetRequiredService<Live2021CacheDbContext>()
+            .Database.Migrate();
+    }
+    else
+    {
+        Log.Warning("AutoHub CacheDb connection string is not configured — skipping Live2021Cache migration.");
+    }
+
+    // Profile B — MolasAutoHub (Neon/PostgreSQL)
+    var autoHubNeonConn = builder.Configuration[
+        "IntegrationProfiles:Profiles:AutoHub:ConnectionStrings:NeonDb"];
+    if (!string.IsNullOrWhiteSpace(autoHubNeonConn) && !autoHubNeonConn.StartsWith("CHANGE_ME"))
+    {
+        scope.ServiceProvider
+            .GetRequiredService<AutoHubDbContext>()
+            .Database.Migrate();
+    }
+    else
+    {
+        Log.Warning("AutoHub NeonDb connection string is not configured — skipping MolasAutoHub migration.");
     }
 }
 
