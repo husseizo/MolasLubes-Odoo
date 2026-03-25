@@ -60,6 +60,11 @@ public class GermaxProductScraperService
             ? _settings.SearchStrategyOrder
             : new List<string> { "item_code", "item_name_engine_code", "item_name_only" };
 
+        // Tracks whether at least one search HTTP round-trip completed (even if it
+        // returned zero results).  If every strategy fails to reach Germax we throw
+        // so the job records ERROR instead of NO_MATCH, preserving the item for retry.
+        var anySearchReached = false;
+
         foreach (var strategy in strategies)
         {
             ct.ThrowIfCancellationRequested();
@@ -75,6 +80,7 @@ public class GermaxProductScraperService
             try
             {
                 candidates = await SearchCandidatesAsync(term, strategy, ct);
+                anySearchReached = true; // HTTP round-trip completed (results may be empty)
             }
             catch (Exception ex)
             {
@@ -115,6 +121,13 @@ public class GermaxProductScraperService
                 continue;
             }
         }
+
+        // All strategies exhausted without a single successful HTTP response →
+        // this is a transient infrastructure failure, not a genuine "no match".
+        if (!anySearchReached)
+            throw new InvalidOperationException(
+                $"All search strategies failed to reach Germax for ItemCode={seed.ItemCode} " +
+                "— possible transient outage; item will be retried");
 
         _logger.LogInformation(
             "GermaxScraper: no match for ItemCode={Code} after all strategies", seed.ItemCode);
@@ -418,20 +431,12 @@ public class GermaxProductScraperService
 
     private async Task<string?> FetchAsync(string url, CancellationToken ct)
     {
+        await Task.Delay(_settings.DelayBetweenRequestsMs, ct);
+
+        HttpResponseMessage response;
         try
         {
-            await Task.Delay(_settings.DelayBetweenRequestsMs, ct);
-            var response = await _http.GetAsync(url, ct);
-
-            if (!response.IsSuccessStatusCode)
-            {
-                _logger.LogWarning(
-                    "GermaxScraper: HTTP {Status} for {Url}",
-                    (int)response.StatusCode, url);
-                return null;
-            }
-
-            return await response.Content.ReadAsStringAsync(ct);
+            response = await _http.GetAsync(url, ct);
         }
         catch (TaskCanceledException)
         {
@@ -439,8 +444,28 @@ public class GermaxProductScraperService
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "GermaxScraper: fetch error | url={Url}", url);
-            return null;
+            // Network-level failure (DNS, connection refused, timeout) — transient;
+            // let it propagate so callers can distinguish it from a genuine "not found".
+            _logger.LogWarning(ex, "GermaxScraper: network error | url={Url}", url);
+            throw;
         }
+
+        if (response.IsSuccessStatusCode)
+            return await response.Content.ReadAsStringAsync(ct);
+
+        // 5xx: transient server error — propagate so callers record ERROR, not NO_MATCH
+        if ((int)response.StatusCode >= 500)
+        {
+            _logger.LogWarning(
+                "GermaxScraper: HTTP {Status} (transient) | url={Url}",
+                (int)response.StatusCode, url);
+            throw new HttpRequestException(
+                $"HTTP {(int)response.StatusCode} for {url}", null, response.StatusCode);
+        }
+
+        // 4xx: page genuinely doesn't exist — not a transient failure
+        _logger.LogWarning(
+            "GermaxScraper: HTTP {Status} | url={Url}", (int)response.StatusCode, url);
+        return null;
     }
 }

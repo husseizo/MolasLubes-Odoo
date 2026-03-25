@@ -42,19 +42,20 @@ public class GermaxAutoHubSyncService
             .Where(x => x.IsActive && x.ScrapeStatus == "SCRAPED")
             .ToListAsync(ct);
 
-        if (source.Count == 0)
-        {
-            _logger.LogInformation(
-                "GermaxAutoHubSyncService: no active SCRAPED rows in cache — nothing to sync");
-            return;
-        }
-
+        // Always continue to the deactivation pass even when source is empty —
+        // an empty set means ALL existing Neon rows should be deactivated.
         var sourceCodes = new HashSet<string>(
             source.Select(x => x.ItemCode), StringComparer.OrdinalIgnoreCase);
 
         // 2. Load all existing Neon rows for O(1) lookup (and deactivation check)
         var existing = await _autoHubDb.GermaxProducts
             .ToDictionaryAsync(x => x.ItemCode, ct);
+
+        if (source.Count == 0 && existing.Count == 0)
+        {
+            _logger.LogInformation("GermaxAutoHubSyncService: nothing to sync");
+            return;
+        }
 
         var upserted    = 0;
         var deactivated = 0;
