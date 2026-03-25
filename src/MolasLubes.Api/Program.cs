@@ -147,7 +147,7 @@ builder.Services.Configure<SapSettings>(
     builder.Configuration.GetSection("SAP"));
 
 // =====================================================
-// SAP DI SERVICES
+// SAP DI SERVICES — PROFILE A
 // =====================================================
 builder.Services.AddSingleton<SapDiApiConnection>();
 
@@ -195,6 +195,14 @@ builder.Services.AddScoped<SalesOrderStatusService>();
 builder.Services.AddScoped<StockReservationService>();
 builder.Services.AddScoped<ReservationCommitService>();
 builder.Services.AddScoped<CancelSalesOrderService>();
+
+// =====================================================
+// AUTOHUB SERVICES — PROFILE B
+// =====================================================
+builder.Services.AddScoped<
+    MolasLubes.Infrastructure.Integrations.SapB1.DiApi.SapAutoHubSeedReader>();
+builder.Services.AddScoped<
+    MolasLubes.Infrastructure.Services.Sync.GermaxCacheSyncService>();
 
 // =====================================================
 // NEON SYNC SERVICES
@@ -305,6 +313,8 @@ builder.Services.AddTransient<NeonSalesOrderLineSyncJob>();
 builder.Services.AddTransient<NeonPriceListSyncJob>();
 builder.Services.AddTransient<LiquiMolyProductScrapeJob>();
 builder.Services.AddTransient<QuotationToSalesOrderJob>();
+builder.Services.AddTransient<
+    MolasLubes.Infrastructure.Scheduling.Jobs.AutoHubSapSeedSyncJob>();
 
 // =====================================================
 // QUARTZ CONFIGURATION
@@ -401,6 +411,18 @@ builder.Services.AddQuartz(q =>
         .ForJob(new JobKey("LiquiMolyProductScrapeJob"))
         .WithIdentity("LiquiMolyProductScrapeJob-trigger")
         .WithCronSchedule("0 0 2 ? * *")); // daily at 02:00 UTC
+
+    // =========================
+    // AUTOHUB — Profile B
+    // =========================
+    q.AddJob<MolasLubes.Infrastructure.Scheduling.Jobs.AutoHubSapSeedSyncJob>(opts =>
+        opts.WithIdentity("AutoHubSapSeedSyncJob")
+            .StoreDurably());
+
+    q.AddTrigger(t => t
+        .ForJob(new JobKey("AutoHubSapSeedSyncJob"))
+        .WithIdentity("AutoHubSapSeedSyncJob-trigger")
+        .WithCronSchedule("0 0 */6 ? * *")); // every 6 hours
 });
 
 builder.Services.AddQuartzHostedService(o =>
