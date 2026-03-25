@@ -247,17 +247,28 @@ Execution order within one job run:
 
 ## 8. Optional Read API
 
-### New File
+Split into two controllers to keep read access and admin triggers under separate authentication boundaries.
 
-`MolasLubes.Api/Controllers/AutoHub/AutoHubGermaxProductsController.cs`
+### Read Controller
 
-Planned endpoints:
+**File:** `MolasLubes.Api/Controllers/AutoHub/AutoHubGermaxProductsController.cs`
+
+No `ApiKeyAttribute` on the class — apply whatever auth level the rest of the read API uses (e.g. none, or a lighter read key).
 
 | Method | Route | Description |
 |---|---|---|
 | `GET` | `/api/autohub/germax/products` | Paginated list of enriched products |
 | `GET` | `/api/autohub/germax/products/{itemCode}` | Single product detail |
 | `GET` | `/api/autohub/germax/products/pending` | Items awaiting scraping |
+
+### Admin Controller
+
+**File:** `MolasLubes.Api/Controllers/AutoHub/AutoHubAdminController.cs`
+
+Decorated with `[ApiKey]` at the class level — same `ApiKeyAttribute` used by the existing `AdminSyncController`.
+
+| Method | Route | Description |
+|---|---|---|
 | `POST` | `/api/admin/autohub/seed-sync` | Trigger SAP seed sync manually |
 | `POST` | `/api/admin/autohub/germax/scrape` | Trigger Germax enrichment manually |
 | `POST` | `/api/admin/autohub/germax/retry-failed` | Retry ERROR / NO_MATCH rows |
