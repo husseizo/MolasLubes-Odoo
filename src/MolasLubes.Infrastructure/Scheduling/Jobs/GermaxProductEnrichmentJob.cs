@@ -15,6 +15,9 @@ namespace MolasLubes.Infrastructure.Scheduling.Jobs;
 /// Processes PENDING rows in batches of 50 until the queue is empty or the
 /// job is cancelled.  Each item is individually fault-tolerant: an exception
 /// on one item sets ScrapeStatus=ERROR and moves on to the next.
+/// After each batch that produced at least one SCRAPED row, SCRAPED data is
+/// replicated to Neon immediately, so the read API stays no more than one
+/// batch behind during long runs.
 /// </summary>
 [DisallowConcurrentExecution]
 public class GermaxProductEnrichmentJob : IJob
@@ -63,6 +66,8 @@ public class GermaxProductEnrichmentJob : IJob
                     "GermaxProductEnrichmentJob: processing batch | Count={Count}",
                     pending.Count);
 
+                var batchScraped = 0;
+
                 foreach (var seed in pending)
                 {
                     if (ct.IsCancellationRequested) break;
@@ -75,6 +80,7 @@ public class GermaxProductEnrichmentJob : IJob
                         {
                             await cache.EnrichAsync(dto, ct);
                             totalScraped++;
+                            batchScraped++;
                             _logger.LogDebug(
                                 "GermaxProductEnrichmentJob: SCRAPED | ItemCode={Code} | Score={Score:F1}",
                                 seed.ItemCode, dto.MatchScore);
@@ -100,13 +106,18 @@ public class GermaxProductEnrichmentJob : IJob
                         totalError++;
                     }
                 }
+
+                // Replicate to Neon after each batch that produced new SCRAPED rows
+                // so the read API stays current during long runs.
+                if (batchScraped > 0)
+                    await neonSync.SyncAsync(ct);
             }
 
             // =============================
-            // 2. REPLICATE TO NEON
+            // 2. FINAL NEON SYNC
             // =============================
-            // Always sync even if totalScraped == 0 this run, in case a
-            // previous partial run left rows in SCRAPED state not yet replicated.
+            // Run unconditionally: catches any SCRAPED rows that survived from a
+            // previous partial run but were never replicated.
             await neonSync.SyncAsync(ct);
 
             sw.Stop();
