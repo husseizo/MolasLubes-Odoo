@@ -256,6 +256,45 @@ public class LiquiMolyTransferService
                 ErrorMessage = $"Transfer is in status '{header.Status}', only RECEIPT_PENDING can be retried."
             };
 
+        // ── Guard: check if GR already exists in SAP via U_TransferRef ──────────────
+        // Prevents duplicate GR if the previous attempt posted to SAP but the local
+        // save failed before updating the audit record.
+        SapDocumentRef? existingGr = null;
+        try
+        {
+            existingGr = _grWriter.FindExistingReceipt(header.TargetProfile, transferRef);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "LiquiMolyTransfer: could not check for existing GR in SAP | Ref={Ref}", transferRef);
+            // Non-fatal — fall through and attempt creation; SAP will reject duplicates on U_TransferRef
+        }
+
+        if (existingGr != null)
+        {
+            _logger.LogWarning(
+                "LiquiMolyTransfer: GR already exists in SAP, recovering audit | Ref={Ref} | DocNum={Num}",
+                transferRef, existingGr.DocNum);
+
+            header.GoodsReceiptDocEntry = existingGr.DocEntry;
+            header.GoodsReceiptDocNum   = existingGr.DocNum;
+            header.Status               = "COMPLETED";
+            header.CompletedAt          = DateTime.UtcNow;
+            header.ErrorMessage         = null;
+            await _db.SaveChangesAsync(ct);
+
+            return new LiquiMolyTransferApplyResult
+            {
+                TransferRef          = transferRef,
+                Status               = "COMPLETED",
+                GoodsIssueDocEntry   = header.GoodsIssueDocEntry,
+                GoodsIssueDocNum     = header.GoodsIssueDocNum,
+                GoodsReceiptDocEntry = existingGr.DocEntry,
+                GoodsReceiptDocNum   = existingGr.DocNum
+            };
+        }
+
         var grLines = header.Lines
             .Select(l => new GoodsDocumentLine(l.SourceItemCode, l.Quantity, l.TargetItemCode))
             .ToList();

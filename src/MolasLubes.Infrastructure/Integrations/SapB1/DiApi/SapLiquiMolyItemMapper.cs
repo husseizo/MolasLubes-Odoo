@@ -1,6 +1,7 @@
 #pragma warning disable CA1416 // COM interop — Windows only
 
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MolasLubes.Infrastructure.Integrations.SapB1.Profiles;
@@ -69,10 +70,15 @@ WHERE ItemCode = '{safeCode}'
                     return;
                 }
 
-                var brand    = rs.Fields.Item("U_MdlTEST").Value?.ToString() ?? string.Empty;
-                var frozen   = rs.Fields.Item("frozenFor").Value?.ToString() ?? "N";
-                var srcName  = rs.Fields.Item("ItemName").Value?.ToString() ?? string.Empty;
-                var artNum   = rs.Fields.Item("U_Item_Name").Value?.ToString()?.Trim() ?? string.Empty;
+                var brand   = rs.Fields.Item("U_MdlTEST").Value?.ToString() ?? string.Empty;
+                var frozen  = rs.Fields.Item("frozenFor").Value?.ToString() ?? "N";
+                var srcName = rs.Fields.Item("ItemName").Value?.ToString() ?? string.Empty;
+
+                // U_Item_Name in live data is e.g. "3682 TOP TEC ATF 1200 5L".
+                // Extract the leading numeric token as the canonical article number.
+                var rawUItemName = rs.Fields.Item("U_Item_Name").Value?.ToString()?.Trim() ?? string.Empty;
+                var artNumMatch  = Regex.Match(rawUItemName, @"^\d+");
+                var artNum       = artNumMatch.Success ? artNumMatch.Value : rawUItemName;
 
                 Marshal.ReleaseComObject(rs); rs = null;
 

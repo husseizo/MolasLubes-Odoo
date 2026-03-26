@@ -48,14 +48,14 @@ public class SapLiquiMolyStockReader
                 var safeWhs  = warehouseCode.Replace("'", "''");
 
                 rs.DoQuery($@"
-SELECT ISNULL(OnHand, 0) AS OnHand
+SELECT ISNULL(OnHand - IsCommited, 0) AS Available
 FROM OITW
 WHERE ItemCode = '{safeCode}'
   AND WhsCode  = '{safeWhs}'
 ");
 
                 if (!rs.EoF)
-                    qty = Convert.ToDecimal((object)rs.Fields.Item("OnHand").Value);
+                    qty = Convert.ToDecimal((object)rs.Fields.Item("Available").Value);
             }
             catch (Exception ex)
             {
@@ -79,7 +79,7 @@ WHERE ItemCode = '{safeCode}'
         if (threadException != null) throw threadException;
 
         _logger.LogDebug(
-            "SapLiquiMolyStockReader: {Profile} | {ItemCode} @ {Whs} → OnHand={Qty}",
+            "SapLiquiMolyStockReader: {Profile} | {ItemCode} @ {Whs} → Available={Qty}",
             profileKey, itemCode, warehouseCode, qty);
 
         return qty;
