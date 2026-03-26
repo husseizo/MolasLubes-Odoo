@@ -11,9 +11,10 @@ namespace MolasLubes.Infrastructure.Integrations.Germax;
 /// <summary>
 /// Scrapes germaxparts.com to enrich SAP seed items with product data.
 /// Conservative and sequential: MaxConcurrency=1, delay between each request.
-/// Operates in three search strategies in order: item_code →
-/// item_name_engine_code → item_name_only.  Stops at the first strategy
-/// that produces a candidate above the minimum score threshold.
+/// Operates in two search strategies in order: item_name_engine_code →
+/// item_name_only.  Stops at the first strategy that produces a candidate
+/// above the minimum score threshold.  Each OEM alias from a slash-joined
+/// ItemName is tried as a separate search term within each strategy.
 /// </summary>
 public class GermaxProductScraperService
 {
@@ -56,9 +57,11 @@ public class GermaxProductScraperService
             "GermaxScraper: enriching | ItemCode={Code} | Group={Group}",
             seed.ItemCode, seed.ItemGroupName);
 
-        var strategies = _settings.SearchStrategyOrder.Count > 0
+        var strategies = (_settings.SearchStrategyOrder.Count > 0
             ? _settings.SearchStrategyOrder
-            : new List<string> { "item_code", "item_name_engine_code", "item_name_only" };
+            : new List<string> { "item_name_engine_code", "item_name_only" })
+            .Where(s => s != "item_code")   // SAP ItemCode is internal; never search by it
+            .ToList();
 
         // Tracks whether at least one search HTTP round-trip completed (even if it
         // returned zero results).  If every attempt fails to reach Germax we throw
