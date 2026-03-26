@@ -140,23 +140,28 @@ public class GermaxCacheSyncService
     }
 
     /// <summary>
-    /// Returns up to <paramref name="batchSize"/> active ERROR or NO_MATCH rows that
-    /// failed within the last <paramref name="maxAgeDays"/> days, ordered
-    /// oldest-failure-first.  Items older than the window are left alone until
-    /// a manual admin trigger re-queues them.
+    /// Returns up to <paramref name="batchSize"/> active ERROR or NO_MATCH rows ordered
+    /// oldest-failure-first.  When <paramref name="maxAgeDays"/> is provided only rows
+    /// whose <c>ScrapedAt</c> falls within that window are returned; pass <c>null</c>
+    /// to include all failures regardless of age (used by manual admin triggers).
     /// </summary>
     public async Task<List<GermaxSeedDto>> GetRetryableAsync(
         int batchSize,
-        int maxAgeDays = 7,
+        int? maxAgeDays = 7,
         CancellationToken ct = default)
     {
-        var cutoff = DateTime.UtcNow.AddDays(-maxAgeDays);
-
-        return await _db.GermaxProducts
+        var query = _db.GermaxProducts
             .Where(x => x.IsActive
                 && (x.ScrapeStatus == "ERROR" || x.ScrapeStatus == "NO_MATCH")
-                && x.ScrapedAt != null
-                && x.ScrapedAt >= cutoff)
+                && x.ScrapedAt != null);
+
+        if (maxAgeDays.HasValue)
+        {
+            var cutoff = DateTime.UtcNow.AddDays(-maxAgeDays.Value);
+            query = query.Where(x => x.ScrapedAt >= cutoff);
+        }
+
+        return await query
             .OrderBy(x => x.ScrapedAt)
             .Take(batchSize)
             .Select(x => new GermaxSeedDto
