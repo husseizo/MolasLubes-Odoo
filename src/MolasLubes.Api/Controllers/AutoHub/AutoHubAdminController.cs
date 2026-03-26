@@ -47,8 +47,12 @@ public class AutoHubAdminController : ControllerBase
     public async Task<IActionResult> RunGermaxRetryFailed()
     {
         var scheduler = await _schedulerFactory.GetScheduler();
-        await scheduler.TriggerJob(new JobKey("GermaxRetryFailedJob"));
 
-        return Ok(new { Message = "Germax retry-failed job triggered successfully" });
+        // bypassAgeFilter=true so manual triggers can retry stale failures
+        // that fall outside the 7-day window the scheduled job enforces.
+        var jobData = new JobDataMap { ["bypassAgeFilter"] = true };
+        await scheduler.TriggerJob(new JobKey("GermaxRetryFailedJob"), jobData);
+
+        return Ok(new { Message = "Germax retry-failed job triggered successfully (all-time window)" });
     }
 }

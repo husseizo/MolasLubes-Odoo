@@ -48,19 +48,30 @@ public class GermaxRetryFailedJob : IJob
 
             var ct = context.CancellationToken;
 
-            var retryable = await cache.GetRetryableAsync(BatchSize, MaxAgeDays, ct);
+            // A manual admin trigger passes bypassAgeFilter=true in the job data map
+            // so stale failures (> 7 days) can be retried on demand.  Scheduled runs
+            // always use the age window to keep traffic conservative.
+            var bypassAgeFilter =
+                context.MergedJobDataMap.TryGetValue("bypassAgeFilter", out var val)
+                && val is bool flag && flag;
+
+            int? maxAgeDays = bypassAgeFilter ? null : MaxAgeDays;
+
+            var retryable = await cache.GetRetryableAsync(BatchSize, maxAgeDays, ct);
 
             if (retryable.Count == 0)
             {
                 _logger.LogInformation(
-                    "GermaxRetryFailedJob: no retryable items within {Days}d window — done",
-                    MaxAgeDays);
+                    "GermaxRetryFailedJob: no retryable items{Window} — done",
+                    bypassAgeFilter ? " (all-time)" : $" within {MaxAgeDays}d window");
                 return;
             }
 
             _logger.LogInformation(
-                "GermaxRetryFailedJob: retrying {Count} item(s) (age ≤{Days}d, cap={Cap})",
-                retryable.Count, MaxAgeDays, BatchSize);
+                "GermaxRetryFailedJob: retrying {Count} item(s){Window} | cap={Cap}",
+                retryable.Count,
+                bypassAgeFilter ? " (all-time)" : $" (age ≤{MaxAgeDays}d)",
+                BatchSize);
 
             var totalScraped = 0;
             var totalNoMatch = 0;
