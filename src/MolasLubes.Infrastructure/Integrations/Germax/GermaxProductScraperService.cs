@@ -61,68 +61,77 @@ public class GermaxProductScraperService
             : new List<string> { "item_code", "item_name_engine_code", "item_name_only" };
 
         // Tracks whether at least one search HTTP round-trip completed (even if it
-        // returned zero results).  If every strategy fails to reach Germax we throw
+        // returned zero results).  If every attempt fails to reach Germax we throw
         // so the job records ERROR instead of NO_MATCH, preserving the item for retry.
         var anySearchReached = false;
 
         foreach (var strategy in strategies)
         {
-            ct.ThrowIfCancellationRequested();
+            // Each strategy may expand into multiple search terms (one per OEM alias).
+            // item_name_only for "LR016962/LR026221/ADJ134204" tries all three in
+            // order and accepts the first candidate that scores above MinScore.
+            var terms = GetSearchTerms(seed, strategy);
 
-            var term = BuildSearchTerm(seed, strategy);
-            if (string.IsNullOrWhiteSpace(term))
-                continue;
-
-            _logger.LogDebug(
-                "GermaxScraper: strategy={Strategy} | term={Term}", strategy, term);
-
-            List<GermaxCandidateDto> candidates;
-            try
+            foreach (var term in terms)
             {
-                candidates = await SearchCandidatesAsync(term, strategy, ct);
-                anySearchReached = true; // HTTP round-trip completed (results may be empty)
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex,
-                    "GermaxScraper: search failed | strategy={Strategy} | term={Term}",
-                    strategy, term);
-                continue;
-            }
+                ct.ThrowIfCancellationRequested();
 
-            if (candidates.Count == 0)
-            {
+                if (string.IsNullOrWhiteSpace(term))
+                    continue;
+
                 _logger.LogDebug(
-                    "GermaxScraper: no candidates | strategy={Strategy}", strategy);
-                continue;
-            }
+                    "GermaxScraper: strategy={Strategy} | term={Term}", strategy, term);
 
-            var best = ResolveBestCandidate(seed, candidates);
-            if (best == null)
-            {
-                _logger.LogDebug(
-                    "GermaxScraper: no candidate above threshold | strategy={Strategy}", strategy);
-                continue;
-            }
+                List<GermaxCandidateDto> candidates;
+                try
+                {
+                    candidates = await SearchCandidatesAsync(term, strategy, ct);
+                    anySearchReached = true; // HTTP round-trip completed (results may be empty)
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex,
+                        "GermaxScraper: search failed | strategy={Strategy} | term={Term}",
+                        strategy, term);
+                    continue;
+                }
 
-            _logger.LogInformation(
-                "GermaxScraper: match found | strategy={Strategy} | score={Score:F1} | url={Url}",
-                strategy, best.Score, best.ProductUrl);
+                if (candidates.Count == 0)
+                {
+                    _logger.LogDebug(
+                        "GermaxScraper: no candidates | strategy={Strategy} | term={Term}",
+                        strategy, term);
+                    continue;
+                }
 
-            try
-            {
-                return await ScrapeProductPageAsync(seed.ItemCode, best, ct);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex,
-                    "GermaxScraper: page scrape failed | url={Url} — trying next strategy",
-                    best.ProductUrl);
-                continue;
+                var best = ResolveBestCandidate(seed, candidates);
+                if (best == null)
+                {
+                    _logger.LogDebug(
+                        "GermaxScraper: no candidate above threshold | strategy={Strategy} | term={Term}",
+                        strategy, term);
+                    continue;
+                }
+
+                _logger.LogInformation(
+                    "GermaxScraper: match found | strategy={Strategy} | term={Term} | score={Score:F1} | url={Url}",
+                    strategy, term, best.Score, best.ProductUrl);
+
+                try
+                {
+                    return await ScrapeProductPageAsync(seed.ItemCode, best, ct);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex,
+                        "GermaxScraper: page scrape failed | url={Url} — trying next",
+                        best.ProductUrl);
+                    continue; // try next alias or next strategy
+                }
             }
         }
 
-        // All strategies exhausted without a single successful HTTP response →
+        // All strategies and aliases exhausted without a single successful HTTP response →
         // this is a transient infrastructure failure, not a genuine "no match".
         if (!anySearchReached)
             throw new InvalidOperationException(
@@ -255,15 +264,28 @@ public class GermaxProductScraperService
     {
         var score = 0m;
 
-        var normCode  = NormalizeText(seed.ItemCode);
         var normTitle = NormalizeText(candidate.Title ?? string.Empty);
-        var normArt   = NormalizeText(candidate.ArticleNumber ?? string.Empty);
+        var normUrl   = candidate.ProductUrl.ToLowerInvariant();
 
-        // +100: article number extracted from title exactly matches SAP item code
-        if (!string.IsNullOrEmpty(normArt) && normArt == normCode)
-            score += 100m;
+        // SAP ItemName holds OEM / reference codes (e.g. "SEM500050",
+        // "LR016962/LR026221/ADJ134204").  Germax uses its own GL... catalog codes.
+        // Do NOT compare aliases against the Germax article number — they live in
+        // different namespaces.  Instead, look for aliases in the title and URL.
+        var aliases = ExtractAliases(seed.ItemName)
+            .Select(NormalizeText)
+            .Where(a => a.Length >= 4)
+            .ToList();
 
-        // +30: engine code token appears in the product title
+        // +80: any OEM alias appears in the product title — primary match signal.
+        // Germax titles typically list OEM references alongside their own GL... code.
+        if (aliases.Any(a => normTitle.Contains(a)))
+            score += 80m;
+
+        // +40: any OEM alias appears in the product URL slug — secondary confirmation.
+        if (aliases.Any(a => normUrl.Contains(a)))
+            score += 40m;
+
+        // +30: engine code appears in title (often null for Land Rover seeds — skipped)
         if (!string.IsNullOrEmpty(seed.EngineCode))
         {
             var normEngine = NormalizeText(seed.EngineCode);
@@ -271,29 +293,12 @@ public class GermaxProductScraperService
                 score += 30m;
         }
 
-        // +20: at least 2 tokens from ItemName appear in the title
-        var nameTokens = NormalizeText(seed.ItemName)
-            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
-            .Where(t => t.Length > 2)
-            .ToList();
-
-        var matchingTokens = nameTokens.Count(t => normTitle.Contains(t));
-        if (matchingTokens >= 2)
-            score += 20m;
-
-        // +20: item group name appears in title (e.g. "Land Rover")
+        // +20: item group name (e.g. "Land Rover") appears in the title
         if (!string.IsNullOrEmpty(seed.ItemGroupName))
         {
             var normGroup = NormalizeText(seed.ItemGroupName);
             if (!string.IsNullOrEmpty(normGroup) && normTitle.Contains(normGroup))
                 score += 20m;
-        }
-
-        // +15: product URL contains the SAP item code (some Germax URLs embed it)
-        if (!string.IsNullOrEmpty(normCode)
-            && candidate.ProductUrl.Contains(normCode, StringComparison.OrdinalIgnoreCase))
-        {
-            score += 15m;
         }
 
         return score;
@@ -402,22 +407,52 @@ public class GermaxProductScraperService
     // HELPERS
     // =====================================================
 
-    private string BuildSearchTerm(GermaxSeedDto seed, string strategy) =>
-        strategy switch
+    /// <summary>
+    /// Returns the ordered list of search terms to try for this strategy.
+    /// Alias-based strategies (item_name_only, item_name_engine_code) expand
+    /// ItemName into one term per OEM alias so that slash-joined alternates like
+    /// "LR016962/LR026221/ADJ134204" are each tried independently.
+    /// </summary>
+    private IReadOnlyList<string> GetSearchTerms(GermaxSeedDto seed, string strategy)
+    {
+        switch (strategy)
         {
-            "item_code" =>
-                seed.ItemCode,
+            case "item_code":
+                // Internal SAP keys (LR100001) are kept as-is. Germax typically
+                // returns nothing, and the pipeline falls through to item_name_only.
+                return new[] { seed.ItemCode };
 
-            "item_name_engine_code" =>
-                string.IsNullOrWhiteSpace(seed.EngineCode)
-                    ? string.Empty
-                    : $"{seed.ItemName} {seed.EngineCode}",
+            case "item_name_engine_code":
+                if (string.IsNullOrWhiteSpace(seed.EngineCode))
+                    return Array.Empty<string>();
+                var ec = seed.EngineCode.Trim();
+                return ExtractAliases(seed.ItemName)
+                    .Select(a => $"{a} {ec}")
+                    .ToArray();
 
-            "item_name_only" =>
-                seed.ItemName,
+            case "item_name_only":
+                var aliases = ExtractAliases(seed.ItemName);
+                // Fall back to raw ItemName when it contains no tokenisable alias
+                return aliases.Count > 0
+                    ? (IReadOnlyList<string>)aliases
+                    : new[] { seed.ItemName };
 
-            _ => string.Empty
-        };
+            default:
+                return Array.Empty<string>();
+        }
+    }
+
+    /// <summary>
+    /// Splits <paramref name="itemName"/> on common separators (/, whitespace,
+    /// semicolons, commas) and returns distinct tokens that are at least 4 characters.
+    /// E.g. "LR016962/LR026221/ADJ134204" → ["LR016962", "LR026221", "ADJ134204"].
+    /// </summary>
+    private static IReadOnlyList<string> ExtractAliases(string itemName) =>
+        Regex.Split(itemName.Trim(), @"[/\s;,]+")
+             .Where(t => t.Length >= 4)
+             .Distinct(StringComparer.OrdinalIgnoreCase)
+             .ToList()
+             .AsReadOnly();
 
     private static string? ExtractArticleNumber(string? title)
     {
