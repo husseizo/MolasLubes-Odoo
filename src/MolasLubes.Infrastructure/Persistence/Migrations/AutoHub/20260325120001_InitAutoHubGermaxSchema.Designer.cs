@@ -96,6 +96,7 @@ namespace MolasLubes.Infrastructure.Persistence.Migrations.AutoHub
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
                         .HasDefaultValue(true)
                         .HasColumnName("is_active")
                         .HasColumnType("boolean");
@@ -110,8 +111,7 @@ namespace MolasLubes.Infrastructure.Persistence.Migrations.AutoHub
                         .HasColumnName("scrape_error")
                         .HasColumnType("character varying(1000)");
 
-                    b.HasKey("ItemCode")
-                        .HasName("pk_neon_germax_products");
+                    b.HasKey("ItemCode");
 
                     b.HasIndex("GermaxArticleNumber")
                         .HasDatabaseName("ix_neon_germax_products_germax_article_number");

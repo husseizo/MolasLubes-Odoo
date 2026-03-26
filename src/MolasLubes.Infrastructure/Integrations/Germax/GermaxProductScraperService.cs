@@ -11,8 +11,8 @@ namespace MolasLubes.Infrastructure.Integrations.Germax;
 /// <summary>
 /// Scrapes germaxparts.com to enrich SAP seed items with product data.
 /// Conservative and sequential: MaxConcurrency=1, delay between each request.
-/// Operates in three search strategies in order: item_code →
-/// item_name_engine_code → item_name_only.  Stops at the first strategy
+/// Operates in two search strategies in order: item_name_engine_code →
+/// item_name_only.  Stops at the first strategy
 /// that produces a candidate above the minimum score threshold.
 /// </summary>
 public class GermaxProductScraperService
@@ -56,9 +56,11 @@ public class GermaxProductScraperService
             "GermaxScraper: enriching | ItemCode={Code} | Group={Group}",
             seed.ItemCode, seed.ItemGroupName);
 
-        var strategies = _settings.SearchStrategyOrder.Count > 0
-            ? _settings.SearchStrategyOrder
-            : new List<string> { "item_code", "item_name_engine_code", "item_name_only" };
+        var strategies = (_settings.SearchStrategyOrder.Count > 0
+                ? _settings.SearchStrategyOrder
+                : new List<string> { "item_name_engine_code", "item_name_only" })
+            .Where(s => !string.Equals(s, "item_code", StringComparison.OrdinalIgnoreCase))
+            .ToList();
 
         // Tracks whether at least one search HTTP round-trip completed (even if it
         // returned zero results).  If every attempt fails to reach Germax we throw
@@ -417,11 +419,6 @@ public class GermaxProductScraperService
     {
         switch (strategy)
         {
-            case "item_code":
-                // Internal SAP keys (LR100001) are kept as-is. Germax typically
-                // returns nothing, and the pipeline falls through to item_name_only.
-                return new[] { seed.ItemCode };
-
             case "item_name_engine_code":
                 if (string.IsNullOrWhiteSpace(seed.EngineCode))
                     return Array.Empty<string>();
@@ -436,6 +433,12 @@ public class GermaxProductScraperService
                 return aliases.Count > 0
                     ? (IReadOnlyList<string>)aliases
                     : new[] { seed.ItemName };
+
+            case "item_code":
+                // AutoHub ItemCode is an internal SAP key (e.g. LR100170), not a
+                // Germax/OEM lookup value. Intentionally ignored even if present
+                // in configuration so searches only use ItemName aliases.
+                return Array.Empty<string>();
 
             default:
                 return Array.Empty<string>();

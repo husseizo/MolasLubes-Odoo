@@ -36,7 +36,7 @@ namespace MolasLubes.Infrastructure.Persistence.Migrations.AutoHub
                 },
                 constraints: table =>
                 {
-                    table.PrimaryKey("pk_neon_germax_products", x => x.item_code);
+                    table.PrimaryKey("PK_neon_germax_products", x => x.item_code);
                 });
 
             migrationBuilder.CreateIndex(
