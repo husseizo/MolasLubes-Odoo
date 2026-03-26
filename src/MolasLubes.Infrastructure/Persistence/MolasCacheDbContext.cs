@@ -24,6 +24,8 @@ public class MolasCacheDbContext : DbContext
     public DbSet<CachePayment> CachePayment => Set<CachePayment>(); // 🔴 singular by design
     public DbSet<CacheStockReservation> CacheStockReservations => Set<CacheStockReservation>();
     public DbSet<CacheLiquiMolyProduct> CacheLiquiMolyProducts => Set<CacheLiquiMolyProduct>();
+    public DbSet<CacheLiquiMolyTransfer> CacheLiquiMolyTransfers => Set<CacheLiquiMolyTransfer>();
+    public DbSet<CacheLiquiMolyTransferLine> CacheLiquiMolyTransferLines => Set<CacheLiquiMolyTransferLine>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -422,6 +424,58 @@ public class MolasCacheDbContext : DbContext
 
             // ✅ INDEX for fast lookup (NOT PRIMARY KEY)
             entity.HasIndex(x => new { x.ItemCode, x.WarehouseCode });
+        });
+
+        // =====================================================
+        // LIQUI-MOLY TRANSFER AUDIT
+        // =====================================================
+        modelBuilder.Entity<CacheLiquiMolyTransfer>(entity =>
+        {
+            entity.ToTable("CacheLiquiMolyTransfers");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).ValueGeneratedOnAdd();
+
+            entity.Property(x => x.TransferRef).HasMaxLength(30).IsRequired();
+            entity.HasIndex(x => x.TransferRef)
+                  .IsUnique()
+                  .HasDatabaseName("IX_CacheLiquiMolyTransfers_TransferRef");
+
+            entity.Property(x => x.SourceProfile).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.TargetProfile).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.SourceWarehouse).HasMaxLength(20).IsRequired();
+            entity.Property(x => x.TargetWarehouse).HasMaxLength(20).IsRequired();
+            entity.Property(x => x.Comments).HasMaxLength(500);
+            entity.Property(x => x.GoodsIssueDocNum).HasMaxLength(20);
+            entity.Property(x => x.GoodsReceiptDocNum).HasMaxLength(20);
+            entity.Property(x => x.Status).HasMaxLength(20).IsRequired();
+            entity.Property(x => x.ErrorMessage).HasMaxLength(1000);
+
+            entity.HasIndex(x => x.Status)
+                  .HasDatabaseName("IX_CacheLiquiMolyTransfers_Status");
+        });
+
+        modelBuilder.Entity<CacheLiquiMolyTransferLine>(entity =>
+        {
+            entity.ToTable("CacheLiquiMolyTransferLines");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).ValueGeneratedOnAdd();
+
+            entity.Property(x => x.SourceItemCode).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.TargetItemCode).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.ArticleNumber).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.SourceItemName).HasMaxLength(200);
+            entity.Property(x => x.TargetItemName).HasMaxLength(200);
+            entity.Property(x => x.Quantity).HasPrecision(18, 4);
+            entity.Property(x => x.Status).HasMaxLength(20).IsRequired();
+            entity.Property(x => x.ErrorMessage).HasMaxLength(500);
+
+            entity.HasOne(x => x.Transfer)
+                  .WithMany(x => x.Lines)
+                  .HasForeignKey(x => x.TransferId)
+                  .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasIndex(x => x.TransferId)
+                  .HasDatabaseName("IX_CacheLiquiMolyTransferLines_TransferId");
         });
 
         base.OnModelCreating(modelBuilder);
