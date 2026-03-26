@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
 using SAPbobsCOM;
 
@@ -15,6 +16,7 @@ namespace MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 /// large batch operations (hundreds of items) do not accumulate COM objects on
 /// the DI API session.
 /// </summary>
+[SupportedOSPlatform("windows")]
 public class SapItemUomWriter
 {
     private readonly SapDiApiConnection _connection;
@@ -164,6 +166,55 @@ WHERE UomCode = '{safe}' OR UomName = '{safe}'
         }
     }
 
+    /// <summary>
+    /// Reads a small SAP item-master snapshot to help investigate update failures.
+    /// </summary>
+    public SapItemUomDiagnostics? ReadDiagnostics(string itemCode)
+    {
+        if (string.IsNullOrWhiteSpace(itemCode))
+            throw new ArgumentException("itemCode is required");
+
+        var company = _connection.GetConnectedCompany();
+        Recordset? rs = null;
+
+        try
+        {
+            rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
+            var safe = itemCode.Trim().Replace("'", "''");
+
+            rs.DoQuery($@"
+SELECT TOP 1
+    ItemCode,
+    InvntryUom,
+    SalUnitMsr,
+    BuyUnitMsr,
+    UgpEntry,
+    EvalSystem,
+    ManBtchNum,
+    ManSerNum
+FROM OITM
+WHERE ItemCode = '{safe}'
+");
+
+            if (rs.EoF)
+                return null;
+
+            return new SapItemUomDiagnostics(
+                ItemCode: rs.Fields.Item("ItemCode").Value?.ToString() ?? itemCode,
+                InventoryUom: rs.Fields.Item("InvntryUom").Value?.ToString(),
+                SalesUom: rs.Fields.Item("SalUnitMsr").Value?.ToString(),
+                PurchaseUom: rs.Fields.Item("BuyUnitMsr").Value?.ToString(),
+                UomGroupEntry: TryGetInt(rs.Fields.Item("UgpEntry").Value),
+                ValMethod: rs.Fields.Item("EvalSystem").Value?.ToString(),
+                ManageBatchNumbers: IsYes(rs.Fields.Item("ManBtchNum").Value),
+                ManageSerialNumbers: IsYes(rs.Fields.Item("ManSerNum").Value));
+        }
+        finally
+        {
+            if (rs != null) Marshal.ReleaseComObject(rs);
+        }
+    }
+
     // ── Private helpers ──────────────────────────────────
 
     private static bool UomExistsInGroup(Company company, int groupEntry, int uomEntry)
@@ -188,6 +239,19 @@ WHERE UgpEntry = {groupEntry}
         {
             if (rs != null) Marshal.ReleaseComObject(rs);
         }
+    }
+
+    private static int? TryGetInt(object? value)
+    {
+        if (value == null) return null;
+        return int.TryParse(value.ToString(), out var parsed) ? parsed : null;
+    }
+
+    private static bool? IsYes(object? value)
+    {
+        var raw = value?.ToString();
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        return string.Equals(raw, "Y", StringComparison.OrdinalIgnoreCase);
     }
 }
 
@@ -215,3 +279,13 @@ public record ItemUomApplyResult(
     ItemUomOutcome Outcome,
     int? SapErrorCode,
     string? SapErrorMessage);
+
+public record SapItemUomDiagnostics(
+    string ItemCode,
+    string? InventoryUom,
+    string? SalesUom,
+    string? PurchaseUom,
+    int? UomGroupEntry,
+    string? ValMethod,
+    bool? ManageBatchNumbers,
+    bool? ManageSerialNumbers);

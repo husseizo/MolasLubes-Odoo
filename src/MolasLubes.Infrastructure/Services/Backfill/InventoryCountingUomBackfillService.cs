@@ -93,13 +93,48 @@ public class InventoryCountingUomBackfillService
             }
 
             var applyResult = _writer.Apply(row.ItemCode, targetUomEntry.Value);
+            string? sapErrorMessage = applyResult.SapErrorMessage;
+
+            if (applyResult.Outcome == ItemUomOutcome.FAIL_SAP_ERROR)
+            {
+                var postApplyPreflight = _writer.Preflight(row.ItemCode, targetUomEntry.Value);
+                var diagnostics = _writer.ReadDiagnostics(row.ItemCode);
+
+                _logger.LogWarning(
+                    "UomBackfill: post-failure preflight | ItemCode={Code} | Outcome={Outcome} | CurrentUom={CurrentUom} | Group={Group} | InventoryUom={InventoryUom} | SalesUom={SalesUom} | PurchaseUom={PurchaseUom} | UomGroup={UomGroup} | ValMethod={ValMethod} | Batch={Batch} | Serial={Serial}",
+                    row.ItemCode,
+                    postApplyPreflight.Outcome,
+                    postApplyPreflight.CurrentUomEntry,
+                    postApplyPreflight.GroupEntry,
+                    diagnostics?.InventoryUom,
+                    diagnostics?.SalesUom,
+                    diagnostics?.PurchaseUom,
+                    diagnostics?.UomGroupEntry,
+                    diagnostics?.ValMethod,
+                    diagnostics?.ManageBatchNumbers,
+                    diagnostics?.ManageSerialNumbers);
+
+                sapErrorMessage = string.IsNullOrWhiteSpace(applyResult.SapErrorMessage)
+                    ? $"PostApplyPreflight={postApplyPreflight.Outcome}"
+                    : $"{applyResult.SapErrorMessage} | PostApplyPreflight={postApplyPreflight.Outcome}";
+
+                finalRows.Add(new UomBackfillRow
+                {
+                    ItemCode        = row.ItemCode,
+                    Outcome         = applyResult.Outcome.ToString(),
+                    SapErrorCode    = applyResult.SapErrorCode,
+                    SapErrorMessage = sapErrorMessage,
+                    Diagnostics     = diagnostics
+                });
+                continue;
+            }
 
             finalRows.Add(new UomBackfillRow
             {
                 ItemCode        = row.ItemCode,
                 Outcome         = applyResult.Outcome.ToString(),
                 SapErrorCode    = applyResult.SapErrorCode,
-                SapErrorMessage = applyResult.SapErrorMessage
+                SapErrorMessage = sapErrorMessage
             });
         }
 
@@ -126,7 +161,12 @@ public class InventoryCountingUomBackfillService
             TargetUomEntry = targetUomEntry,
             Rows           = rows,
             Totals         = counts,
-            Summary        = string.Join(" | ", counts.Select(kv => $"{kv.Key}={kv.Value}"))
+            Summary        = string.Join(" | ", counts.Select(kv => $"{kv.Key}={kv.Value}")),
+            ExceptionItemCodes = rows
+                .Where(r => r.Outcome == ItemUomOutcome.FAIL_SAP_ERROR.ToString())
+                .Select(r => r.ItemCode)
+                .Distinct()
+                .ToList()
         };
     }
 }
@@ -142,6 +182,7 @@ public class UomBackfillReport
     public Dictionary<string, int> Totals { get; init; } = new();
     public string Summary  { get; init; } = string.Empty;
     public string? Error   { get; init; }
+    public List<string> ExceptionItemCodes { get; init; } = new();
 
     // Set by bulk endpoints; null for explicit-list endpoints.
     public UomSelectionMetadata? Selection { get; init; }
@@ -174,4 +215,5 @@ public class UomBackfillRow
     public string  Outcome         { get; init; } = string.Empty;
     public int?    SapErrorCode    { get; init; }
     public string? SapErrorMessage { get; init; }
+    public SapItemUomDiagnostics? Diagnostics { get; init; }
 }

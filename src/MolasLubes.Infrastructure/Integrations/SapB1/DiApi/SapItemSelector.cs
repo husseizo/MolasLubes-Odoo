@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using SAPbobsCOM;
@@ -10,6 +11,7 @@ namespace MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 /// for bulk operations.  Returns only the codes; classification and updates are
 /// handled downstream by SapItemUomWriter / InventoryCountingUomBackfillService.
 /// </summary>
+[SupportedOSPlatform("windows")]
 public class SapItemSelector
 {
     private readonly SapDiApiConnection _connection;

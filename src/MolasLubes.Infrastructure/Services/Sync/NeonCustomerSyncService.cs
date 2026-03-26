@@ -54,7 +54,6 @@ public class NeonCustomerSyncService
                 .AsNoTracking()
                 .Where(x =>
                     x.IsActive &&
-                    x.LastSapDeltaAt != null &&
                     x.LastSapDeltaAt > lastSync)
                 .Select(x => new NeonCustomer
                 {

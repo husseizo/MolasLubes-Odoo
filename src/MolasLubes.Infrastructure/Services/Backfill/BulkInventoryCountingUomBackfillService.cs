@@ -78,8 +78,15 @@ public class BulkInventoryCountingUomBackfillService
         var report = _backfill.Run(selection.ItemCodes, request.TargetUomCode, dryRun);
 
         // ── 3. Attach selection metadata ──────────────────────────────────
-        return report with
+        return new UomBackfillReport
         {
+            DryRun = report.DryRun,
+            TargetUomCode = report.TargetUomCode,
+            TargetUomEntry = report.TargetUomEntry,
+            Rows = report.Rows,
+            Totals = report.Totals,
+            Summary = report.Summary,
+            Error = report.Error,
             Selection = BuildSelectionMeta(request, take, skip, selection.ItemCodes.Count, selection.HasMore)
         };
     }

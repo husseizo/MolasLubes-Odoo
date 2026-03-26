@@ -100,7 +100,10 @@ ORDER BY d.DocEntry, l.LineNum
                 };
             }
 
-            current.Lines.Add(new SapDeliveryLineDto
+            var currentDelivery = current ?? throw new InvalidOperationException(
+                "Delivery aggregation state was not initialized before reading line data.");
+
+            currentDelivery.Lines.Add(new SapDeliveryLineDto
             {
                 LineNum     = Convert.ToInt32(rs.Fields.Item("LineNum").Value),
                 ItemCode    = rs.Fields.Item("ItemCode").Value?.ToString() ?? "",
