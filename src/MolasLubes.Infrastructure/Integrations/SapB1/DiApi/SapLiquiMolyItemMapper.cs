@@ -116,15 +116,16 @@ WHERE ItemCode = '{safeCode}'
                 rs.DoQuery($@"
 SELECT TOP 1 ItemCode, ItemName
 FROM OITM
-WHERE ItemCode  = '{safeArt}'
-  AND frozenFor = 'N'
+WHERE ItemCode   = '{safeArt}'
+  AND U_MdlTEST  = 'LIQUI MOLY'
+  AND frozenFor  = 'N'
 ORDER BY ItemCode
 ");
 
                 if (rs.EoF)
                 {
                     result = LiquiMolyMappedLine.Fail(sourceItemCode, "TARGET_NOT_FOUND",
-                        $"No active target item with ItemCode='{articleNumber}' in {tgtProfile.Sap.CompanyDB}.");
+                        $"No active LIQUI MOLY target item with ItemCode='{articleNumber}' in {tgtProfile.Sap.CompanyDB}.");
                     return;
                 }
 
@@ -176,14 +177,11 @@ ORDER BY ItemCode
             if (string.IsNullOrWhiteSpace(text))
                 return null;
 
-            var trimmed    = text.Trim();
-            var firstToken = trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
-
-            if (!string.IsNullOrWhiteSpace(firstToken) &&
-                Regex.IsMatch(firstToken, @"^\d{3,6}$"))
-                return firstToken;
-
-            var match = Regex.Match(trimmed, @"\b\d{3,6}\b");
+            // Match the first 3–6 digit sequence that is not part of a longer digit run.
+            // Uses negative lookahead/lookbehind instead of \b so that alpha-suffixed
+            // tokens like "3091DOT" resolve correctly (\b treats digit→letter as within
+            // the same \w run and would skip "3091" in "3091DOT 4 250MLS").
+            var match = Regex.Match(text.Trim(), @"(?<!\d)\d{3,6}(?!\d)");
             return match.Success ? match.Value : null;
         }
 
