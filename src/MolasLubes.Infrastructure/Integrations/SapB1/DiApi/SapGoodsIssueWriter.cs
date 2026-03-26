@@ -53,6 +53,7 @@ public class SapGoodsIssueWriter
                 gi.DocDate  = DateTime.Today;
                 gi.TaxDate  = DateTime.Today;
                 gi.Comments = $"LM Transfer {transferRef} → {targetProfile} | {comments}".Trim();
+                gi.UserFields.Fields.Item("U_TransferRef").Value = transferRef;
 
                 foreach (var line in lines)
                 {

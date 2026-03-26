@@ -1,6 +1,7 @@
 #pragma warning disable CA1416 // COM interop — Windows only
 
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MolasLubes.Infrastructure.Integrations.SapB1.Profiles;
@@ -10,8 +11,14 @@ namespace MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 
 /// <summary>
 /// Maps a single Liqui Moly source item to its counterpart in the target SAP company.
-/// Identity is the Liqui Moly article number stored in U_Item_Name (e.g. "3682").
-/// ItemCodes are internal to each DB and are never assumed to match across companies.
+///
+/// Identity model:
+///   Source: LUB1000xx (internal ItemCode)  →  article number extracted from U_Item_Name / ItemName
+///   Target: OITM.ItemCode == articleNumber  (target DB uses the numeric article number as ItemCode)
+///
+/// Example:
+///   LUB100001 → U_Item_Name "3682 TOP TEC ATF 1200 5L" → article 3682 → target ItemCode "3682"
+///   LUB100016 → U_Item_Name "2512 ATFFLUSH"             → article 2512 → target ItemCode "2512"
 /// </summary>
 public class SapLiquiMolyItemMapper
 {
@@ -69,10 +76,14 @@ WHERE ItemCode = '{safeCode}'
                     return;
                 }
 
-                var brand    = rs.Fields.Item("U_MdlTEST").Value?.ToString() ?? string.Empty;
-                var frozen   = rs.Fields.Item("frozenFor").Value?.ToString() ?? "N";
-                var srcName  = rs.Fields.Item("ItemName").Value?.ToString() ?? string.Empty;
-                var artNum   = rs.Fields.Item("U_Item_Name").Value?.ToString()?.Trim() ?? string.Empty;
+                var brand        = rs.Fields.Item("U_MdlTEST").Value?.ToString() ?? string.Empty;
+                var frozen       = rs.Fields.Item("frozenFor").Value?.ToString() ?? "N";
+                var srcName      = rs.Fields.Item("ItemName").Value?.ToString() ?? string.Empty;
+                var sourceLmName = rs.Fields.Item("U_Item_Name").Value?.ToString()?.Trim() ?? string.Empty;
+
+                // Extract the Liqui Moly article number (3–6 digit token) from U_Item_Name,
+                // falling back to ItemName. First token wins if it is purely numeric.
+                var articleNumber = ExtractArticleNumber(sourceLmName, srcName);
 
                 Marshal.ReleaseComObject(rs); rs = null;
 
@@ -90,31 +101,30 @@ WHERE ItemCode = '{safeCode}'
                     return;
                 }
 
-                if (string.IsNullOrWhiteSpace(artNum))
+                if (string.IsNullOrWhiteSpace(articleNumber))
                 {
                     result = LiquiMolyMappedLine.Fail(sourceItemCode, "NO_ARTICLE_NUM",
-                        $"Item '{sourceItemCode}' has no U_Item_Name (article number).");
+                        $"Item '{sourceItemCode}' has no extractable Liqui Moly article number in U_Item_Name or ItemName.");
                     return;
                 }
 
-                // ── Target lookup ──────────────────────────────────────────
+                // ── Target lookup — match by OITM.ItemCode == articleNumber ───────────
                 tgtCompany = ConnectCompany(tgtProfile.Sap);
                 rs = (Recordset)tgtCompany.GetBusinessObject(BoObjectTypes.BoRecordset);
 
-                var safeArt = artNum.Replace("'", "''");
+                var safeArt = articleNumber.Replace("'", "''");
                 rs.DoQuery($@"
-SELECT TOP 1 ItemCode, ItemName, frozenFor
+SELECT TOP 1 ItemCode, ItemName
 FROM OITM
-WHERE U_Item_Name  = '{safeArt}'
-  AND U_MdlTEST   = 'LIQUI MOLY'
-  AND frozenFor   = 'N'
+WHERE ItemCode  = '{safeArt}'
+  AND frozenFor = 'N'
 ORDER BY ItemCode
 ");
 
                 if (rs.EoF)
                 {
                     result = LiquiMolyMappedLine.Fail(sourceItemCode, "TARGET_NOT_FOUND",
-                        $"No active LIQUI MOLY item with U_Item_Name='{artNum}' in {tgtProfile.Sap.CompanyDB}.");
+                        $"No active target item with ItemCode='{articleNumber}' in {tgtProfile.Sap.CompanyDB}.");
                     return;
                 }
 
@@ -125,7 +135,7 @@ ORDER BY ItemCode
                 {
                     SourceItemCode = sourceItemCode,
                     TargetItemCode = tgtItemCode,
-                    ArticleNumber  = artNum,
+                    ArticleNumber  = articleNumber,
                     SourceItemName = srcName,
                     TargetItemName = tgtName,
                     Outcome        = "OK"
@@ -152,6 +162,33 @@ ORDER BY ItemCode
     }
 
     // ── Helpers ──────────────────────────────────────────
+
+    /// <summary>
+    /// Extracts the Liqui Moly article number (3–6 consecutive digits) from U_Item_Name,
+    /// falling back to ItemName. Prefers the first space-delimited token if it is purely
+    /// numeric, then falls back to the first \b\d{3,6}\b match anywhere in the string.
+    /// Returns null when no numeric token is found (triggers NO_ARTICLE_NUM).
+    /// </summary>
+    private static string? ExtractArticleNumber(string? uItemName, string? itemName)
+    {
+        static string? FindNumber(string? text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return null;
+
+            var trimmed    = text.Trim();
+            var firstToken = trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+
+            if (!string.IsNullOrWhiteSpace(firstToken) &&
+                Regex.IsMatch(firstToken, @"^\d{3,6}$"))
+                return firstToken;
+
+            var match = Regex.Match(trimmed, @"\b\d{3,6}\b");
+            return match.Success ? match.Value : null;
+        }
+
+        return FindNumber(uItemName) ?? FindNumber(itemName);
+    }
 
     private static Company ConnectCompany(SapSettings sap)
     {

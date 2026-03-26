@@ -53,6 +53,7 @@ public class SapGoodsReceiptWriter
                 gr.DocDate  = DateTime.Today;
                 gr.TaxDate  = DateTime.Today;
                 gr.Comments = $"LM Transfer {transferRef} ← {sourceProfile} | {comments}".Trim();
+                gr.UserFields.Fields.Item("U_TransferRef").Value = transferRef;
 
                 foreach (var line in lines)
                 {
@@ -106,6 +107,64 @@ public class SapGoodsReceiptWriter
 
         if (threadException != null) throw threadException;
         return result!;
+    }
+
+    /// <summary>
+    /// Checks the target SAP company for an OIGN whose U_TransferRef matches the given ref.
+    /// Returns the existing document ref if found, or null if no match.
+    /// Used by RetryReceiptAsync to prevent duplicate GR creation.
+    /// </summary>
+    public SapDocumentRef? FindExistingReceipt(string profileKey, string transferRef)
+    {
+        if (!_profiles.Profiles.TryGetValue(profileKey, out var profile))
+            throw new InvalidOperationException($"Profile '{profileKey}' not configured.");
+
+        SapDocumentRef? found = null;
+        Exception? threadException = null;
+
+        var thread = new Thread(() =>
+        {
+            Company? company = null;
+            Recordset? rs    = null;
+
+            try
+            {
+                company = CreateAndConnect(profile.Sap);
+                rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
+
+                var safeRef = transferRef.Replace("'", "''");
+                rs.DoQuery($"SELECT DocEntry, DocNum FROM OIGN WHERE U_TransferRef = '{safeRef}'");
+
+                if (!rs.EoF)
+                {
+                    var docEntry = Convert.ToInt32(rs.Fields.Item("DocEntry").Value);
+                    var docNum   = rs.Fields.Item("DocNum").Value?.ToString() ?? docEntry.ToString();
+                    found = new SapDocumentRef(docEntry, docNum);
+                }
+            }
+            catch (Exception ex)
+            {
+                threadException = ex;
+            }
+            finally
+            {
+                if (rs != null) Marshal.ReleaseComObject(rs);
+                DisconnectAndRelease(company);
+            }
+        });
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+
+        if (threadException != null) throw threadException;
+
+        if (found != null)
+            _logger.LogInformation(
+                "SapGoodsReceiptWriter: found existing receipt | Profile={Profile} | DocEntry={Entry} | DocNum={Num} | Ref={Ref}",
+                profileKey, found.DocEntry, found.DocNum, transferRef);
+
+        return found;
     }
 
     private static Company CreateAndConnect(SapSettings sap)
