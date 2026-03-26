@@ -334,6 +334,8 @@ builder.Services.AddTransient<
     MolasLubes.Infrastructure.Scheduling.Jobs.AutoHubSapSeedSyncJob>();
 builder.Services.AddTransient<
     MolasLubes.Infrastructure.Scheduling.Jobs.GermaxProductEnrichmentJob>();
+builder.Services.AddTransient<
+    MolasLubes.Infrastructure.Scheduling.Jobs.GermaxRetryFailedJob>();
 
 // =====================================================
 // QUARTZ CONFIGURATION
@@ -453,6 +455,17 @@ builder.Services.AddQuartz(q =>
         .ForJob(new JobKey("GermaxProductEnrichmentJob"))
         .WithIdentity("GermaxProductEnrichmentJob-trigger")
         .WithCronSchedule("0 30 1 ? * *")); // nightly at 01:30 UTC
+
+    // Germax retry: 09:00 and 21:00 UTC (avoids overlap with seed sync at 00/06/12/18)
+    // StoreDurably so it can also be triggered via POST /api/admin/autohub/germax/retry-failed
+    q.AddJob<MolasLubes.Infrastructure.Scheduling.Jobs.GermaxRetryFailedJob>(opts =>
+        opts.WithIdentity("GermaxRetryFailedJob")
+            .StoreDurably());
+
+    q.AddTrigger(t => t
+        .ForJob(new JobKey("GermaxRetryFailedJob"))
+        .WithIdentity("GermaxRetryFailedJob-trigger")
+        .WithCronSchedule("0 0 9,21 ? * *")); // 09:00 and 21:00 UTC
 });
 
 builder.Services.AddQuartzHostedService(o =>
