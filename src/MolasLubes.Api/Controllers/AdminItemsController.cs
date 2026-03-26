@@ -20,14 +20,11 @@ public class AdminItemsController : ControllerBase
         _bulkBackfill = bulkBackfill;
     }
 
-    /// <summary>
-    /// Pass A — classify items and return the preflight report without making any changes.
-    /// </summary>
+    // -------------------------------------------------
+    // EXPLICIT DRY-RUN — classify a supplied list, no writes
+    // -------------------------------------------------
     /// <remarks>
-    /// Body example:
-    /// <code>
-    /// { "itemCodes": ["LR100001","LR100002"], "targetUomCode": "EA" }
-    /// </code>
+    /// Body: { "itemCodes": ["LR100001","LR100002"], "targetUomCode": "EA" }
     /// </remarks>
     [HttpPost("uom/dry-run")]
     public IActionResult DryRun([FromBody] UomBackfillRequest request)
@@ -46,10 +43,9 @@ public class AdminItemsController : ControllerBase
         return Ok(report);
     }
 
-    /// <summary>
-    /// Pass B — preflight then update all OK_TO_UPDATE items.
-    /// Items with an invalid UoM group are never touched.
-    /// </summary>
+    // -------------------------------------------------
+    // EXPLICIT APPLY — preflight then update supplied list
+    // -------------------------------------------------
     [HttpPost("uom/apply")]
     public IActionResult Apply([FromBody] UomBackfillRequest request)
     {
@@ -66,15 +62,10 @@ public class AdminItemsController : ControllerBase
 
         return Ok(report);
     }
-}
 
     // -------------------------------------------------
     // BULK DRY-RUN — select by filter, classify, no writes
     // -------------------------------------------------
-    /// <summary>
-    /// Pass A (bulk) — query SAP for items matching the filter, preflight all of them,
-    /// return the report.  No changes are made.
-    /// </summary>
     [HttpPost("uom/bulk/dry-run")]
     public IActionResult BulkDryRun([FromBody] BulkUomBackfillRequest request)
     {
@@ -92,10 +83,6 @@ public class AdminItemsController : ControllerBase
     // -------------------------------------------------
     // BULK APPLY — select by filter, update OK_TO_UPDATE
     // -------------------------------------------------
-    /// <summary>
-    /// Pass B (bulk) — query SAP for items matching the filter, preflight, then update
-    /// only OK_TO_UPDATE items.  FAIL_* items are classified and reported but never touched.
-    /// </summary>
     [HttpPost("uom/bulk/apply")]
     public IActionResult BulkApply([FromBody] BulkUomBackfillRequest request)
     {

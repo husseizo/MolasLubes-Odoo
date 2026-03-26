@@ -161,6 +161,11 @@ public class UomSelectionMetadata
     public int          Skip            { get; init; }
     public bool         ActiveOnly      { get; init; }
     public List<string>? ItemGroupNames { get; init; }
+    /// <summary>
+    /// True when there are more matching items beyond this page.
+    /// Increment Skip by Take and repeat the call to page forward.
+    /// </summary>
+    public bool HasMore { get; init; }
 }
 
 public class UomBackfillRow

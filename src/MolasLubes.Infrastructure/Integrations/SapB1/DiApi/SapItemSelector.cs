@@ -24,12 +24,13 @@ public class SapItemSelector
     }
 
     /// <summary>
-    /// Returns ItemCodes matching the supplied filter.
-    /// Throws <see cref="InvalidOperationException"/> when the filter would
-    /// select the entire item master (no narrowing criteria) and
-    /// <paramref name="confirmAll"/> is false.
+    /// Returns ItemCodes matching the supplied filter, plus a <c>HasMore</c> flag.
+    /// Uses a take+1 probe: fetches one extra row to detect whether additional pages
+    /// exist without a separate COUNT query, then trims the result to <paramref name="take"/>.
+    /// Throws <see cref="InvalidOperationException"/> when no narrowing filter is
+    /// supplied and <paramref name="confirmAll"/> is false.
     /// </summary>
-    public IReadOnlyList<string> SelectItemCodes(
+    public SapItemSelectorResult SelectItemCodes(
         bool activeOnly,
         IReadOnlyList<string>? itemGroupNames,
         IReadOnlyList<string>? itemCodes,
@@ -45,7 +46,8 @@ public class SapItemSelector
                 "Bulk operation requires at least one narrowing filter (itemGroupNames or itemCodes). " +
                 "Set confirmAll=true to operate on the entire active item master.");
 
-        var sql = BuildQuery(activeOnly, itemGroupNames, itemCodes, take, skip);
+        // Fetch take+1 rows: if we get more than take we know there is another page.
+        var sql = BuildQuery(activeOnly, itemGroupNames, itemCodes, take + 1, skip);
 
         _logger.LogInformation(
             "SapItemSelector: querying candidates | ActiveOnly={Active} | Groups={Groups} | CodeFilter={Codes} | Take={Take} | Skip={Skip}",
@@ -71,10 +73,15 @@ public class SapItemSelector
                 rs.MoveNext();
             }
 
-            _logger.LogInformation(
-                "SapItemSelector: matched {Count} item(s)", results.Count);
+            // Trim the probe row and set the flag
+            var hasMore = results.Count > take;
+            if (hasMore) results.RemoveAt(results.Count - 1);
 
-            return results.AsReadOnly();
+            _logger.LogInformation(
+                "SapItemSelector: matched {Count} item(s) | HasMore={HasMore}",
+                results.Count, hasMore);
+
+            return new SapItemSelectorResult(results.AsReadOnly(), hasMore);
         }
         finally
         {
@@ -127,3 +134,7 @@ public class SapItemSelector
         return sb.ToString();
     }
 }
+
+public record SapItemSelectorResult(
+    IReadOnlyList<string> ItemCodes,
+    bool HasMore);
