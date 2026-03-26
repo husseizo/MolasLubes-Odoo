@@ -10,10 +10,14 @@ namespace MolasLubes.Api.Controllers;
 public class AdminItemsController : ControllerBase
 {
     private readonly InventoryCountingUomBackfillService _backfill;
+    private readonly BulkInventoryCountingUomBackfillService _bulkBackfill;
 
-    public AdminItemsController(InventoryCountingUomBackfillService backfill)
+    public AdminItemsController(
+        InventoryCountingUomBackfillService backfill,
+        BulkInventoryCountingUomBackfillService bulkBackfill)
     {
-        _backfill = backfill;
+        _backfill     = backfill;
+        _bulkBackfill = bulkBackfill;
     }
 
     /// <summary>
@@ -56,6 +60,49 @@ public class AdminItemsController : ControllerBase
             return BadRequest(new { Error = "targetUomCode is required" });
 
         var report = _backfill.Run(request.ItemCodes, request.TargetUomCode, dryRun: false);
+
+        if (report.Error != null)
+            return UnprocessableEntity(new { report.Error });
+
+        return Ok(report);
+    }
+}
+
+    // -------------------------------------------------
+    // BULK DRY-RUN — select by filter, classify, no writes
+    // -------------------------------------------------
+    /// <summary>
+    /// Pass A (bulk) — query SAP for items matching the filter, preflight all of them,
+    /// return the report.  No changes are made.
+    /// </summary>
+    [HttpPost("uom/bulk/dry-run")]
+    public IActionResult BulkDryRun([FromBody] BulkUomBackfillRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.TargetUomCode))
+            return BadRequest(new { Error = "targetUomCode is required" });
+
+        var report = _bulkBackfill.Run(request, dryRun: true);
+
+        if (report.Error != null)
+            return UnprocessableEntity(new { report.Error });
+
+        return Ok(report);
+    }
+
+    // -------------------------------------------------
+    // BULK APPLY — select by filter, update OK_TO_UPDATE
+    // -------------------------------------------------
+    /// <summary>
+    /// Pass B (bulk) — query SAP for items matching the filter, preflight, then update
+    /// only OK_TO_UPDATE items.  FAIL_* items are classified and reported but never touched.
+    /// </summary>
+    [HttpPost("uom/bulk/apply")]
+    public IActionResult BulkApply([FromBody] BulkUomBackfillRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.TargetUomCode))
+            return BadRequest(new { Error = "targetUomCode is required" });
+
+        var report = _bulkBackfill.Run(request, dryRun: false);
 
         if (report.Error != null)
             return UnprocessableEntity(new { report.Error });
