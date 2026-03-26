@@ -48,7 +48,8 @@ public class InventoryCountingUomBackfillService
                 "UomBackfill: target UoM '{Uom}' not found in OUOM — aborting", targetUomCode);
             return UomBackfillReport.Failed(
                 $"Target UoM '{targetUomCode}' was not found in SAP (OUOM table). " +
-                "Verify the code or name and retry.");
+                "Verify the code or name and retry.",
+                dryRun);
         }
 
         // ── 2. Preflight every item ───────────────────────────────────────
@@ -142,9 +143,9 @@ public class UomBackfillReport
     public string Summary  { get; init; } = string.Empty;
     public string? Error   { get; init; }
 
-    public static UomBackfillReport Failed(string error) => new()
+    public static UomBackfillReport Failed(string error, bool dryRun) => new()
     {
-        DryRun  = false,
+        DryRun  = dryRun,
         Error   = error,
         Summary = "FAILED"
     };

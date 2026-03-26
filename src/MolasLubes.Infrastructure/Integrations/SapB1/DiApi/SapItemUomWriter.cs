@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using SAPbobsCOM;
 
@@ -9,6 +10,10 @@ namespace MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 /// Intentionally narrow: it only touches InventoryCountingUoMEntry.
 /// It never modifies UoMGroupEntry or any other item master field.
 /// Group repair must be handled as a separate controlled process.
+///
+/// Every COM business object created here is released in a finally block so that
+/// large batch operations (hundreds of items) do not accumulate COM objects on
+/// the DI API session.
 /// </summary>
 public class SapItemUomWriter
 {
@@ -37,22 +42,32 @@ public class SapItemUomWriter
             throw new ArgumentException("uomCode is required");
 
         var company = _connection.GetConnectedCompany();
-        var rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
-        var safe = uomCode.Trim().Replace("'", "''");
+        Recordset? rs = null;
 
-        rs.DoQuery($@"
+        try
+        {
+            rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
+            var safe = uomCode.Trim().Replace("'", "''");
+
+            rs.DoQuery($@"
 SELECT TOP 1 UomEntry
 FROM OUOM
 WHERE UomCode = '{safe}' OR UomName = '{safe}'
 ");
 
-        if (rs.EoF)
-        {
-            _logger.LogWarning("SapItemUomWriter: UoM not found in OUOM | Code={Code}", uomCode);
-            return null;
-        }
+            if (rs.EoF)
+            {
+                _logger.LogWarning(
+                    "SapItemUomWriter: UoM not found in OUOM | Code={Code}", uomCode);
+                return null;
+            }
 
-        return Convert.ToInt32((object)rs.Fields.Item("UomEntry").Value);
+            return Convert.ToInt32((object)rs.Fields.Item("UomEntry").Value);
+        }
+        finally
+        {
+            if (rs != null) Marshal.ReleaseComObject(rs);
+        }
     }
 
     // =====================================================
@@ -68,31 +83,41 @@ WHERE UomCode = '{safe}' OR UomName = '{safe}'
             throw new ArgumentException("itemCode is required");
 
         var company = _connection.GetConnectedCompany();
-        var items   = (Items)company.GetBusinessObject(BoObjectTypes.oItems);
+        Items? items = null;
 
-        if (!items.GetByKey(itemCode))
-            return new ItemUomPreflightResult(itemCode, ItemUomOutcome.NOT_FOUND, null, null);
+        try
+        {
+            items = (Items)company.GetBusinessObject(BoObjectTypes.oItems);
 
-        var currentUomEntry = items.InventoryCountingUoMEntry;
-        var groupEntry      = items.UoMGroupEntry;
+            if (!items.GetByKey(itemCode))
+                return new ItemUomPreflightResult(itemCode, ItemUomOutcome.NOT_FOUND, null, null);
 
-        if (currentUomEntry == targetUomEntry)
-            return new ItemUomPreflightResult(itemCode, ItemUomOutcome.SKIP_ALREADY_SET,
+            var currentUomEntry = items.InventoryCountingUoMEntry;
+            var groupEntry      = items.UoMGroupEntry;
+
+            if (currentUomEntry == targetUomEntry)
+                return new ItemUomPreflightResult(itemCode, ItemUomOutcome.SKIP_ALREADY_SET,
+                    currentUomEntry, groupEntry);
+
+            // A group entry of -1 means the item uses the "manual" UoM mode (no group assigned).
+            // We cannot set a group-bound counting UoM in that state.
+            if (groupEntry <= 0)
+                return new ItemUomPreflightResult(itemCode, ItemUomOutcome.FAIL_INVALID_UOM_GROUP,
+                    currentUomEntry, groupEntry);
+
+            // Verify the target UoM actually exists inside the item's UoM group (UGP1).
+            // UGP1 is keyed by UgpEntry (FK → OUGP.UgpEntry) — not AbsEntry.
+            if (!UomExistsInGroup(company, groupEntry, targetUomEntry))
+                return new ItemUomPreflightResult(itemCode, ItemUomOutcome.FAIL_TARGET_UOM_MISSING,
+                    currentUomEntry, groupEntry);
+
+            return new ItemUomPreflightResult(itemCode, ItemUomOutcome.OK_TO_UPDATE,
                 currentUomEntry, groupEntry);
-
-        // A group entry of -1 means the item uses the "manual" UoM mode (no group assigned).
-        // We cannot set a group-bound counting UoM in that state.
-        if (groupEntry <= 0)
-            return new ItemUomPreflightResult(itemCode, ItemUomOutcome.FAIL_INVALID_UOM_GROUP,
-                currentUomEntry, groupEntry);
-
-        // Verify the target UoM actually exists inside the item's UoM group (UGP1).
-        if (!UomExistsInGroup(company, groupEntry, targetUomEntry))
-            return new ItemUomPreflightResult(itemCode, ItemUomOutcome.FAIL_TARGET_UOM_MISSING,
-                currentUomEntry, groupEntry);
-
-        return new ItemUomPreflightResult(itemCode, ItemUomOutcome.OK_TO_UPDATE,
-            currentUomEntry, groupEntry);
+        }
+        finally
+        {
+            if (items != null) Marshal.ReleaseComObject(items);
+        }
     }
 
     // =====================================================
@@ -106,42 +131,63 @@ WHERE UomCode = '{safe}' OR UomName = '{safe}'
     public ItemUomApplyResult Apply(string itemCode, int targetUomEntry)
     {
         var company = _connection.GetConnectedCompany();
-        var items   = (Items)company.GetBusinessObject(BoObjectTypes.oItems);
+        Items? items = null;
 
-        if (!items.GetByKey(itemCode))
-            return new ItemUomApplyResult(itemCode, ItemUomOutcome.NOT_FOUND, null, null);
-
-        items.InventoryCountingUoMEntry = targetUomEntry;
-
-        int rc = items.Update();
-        if (rc != 0)
+        try
         {
-            company.GetLastError(out int code, out string msg);
-            _logger.LogWarning(
-                "SapItemUomWriter: Update failed | ItemCode={Code} | SapCode={SapCode} | SapMsg={SapMsg}",
-                itemCode, code, msg);
-            return new ItemUomApplyResult(itemCode, ItemUomOutcome.FAIL_SAP_ERROR, code, msg);
+            items = (Items)company.GetBusinessObject(BoObjectTypes.oItems);
+
+            if (!items.GetByKey(itemCode))
+                return new ItemUomApplyResult(itemCode, ItemUomOutcome.NOT_FOUND, null, null);
+
+            items.InventoryCountingUoMEntry = targetUomEntry;
+
+            int rc = items.Update();
+            if (rc != 0)
+            {
+                company.GetLastError(out int code, out string msg);
+                _logger.LogWarning(
+                    "SapItemUomWriter: Update failed | ItemCode={Code} | SapCode={SapCode} | SapMsg={SapMsg}",
+                    itemCode, code, msg);
+                return new ItemUomApplyResult(itemCode, ItemUomOutcome.FAIL_SAP_ERROR, code, msg);
+            }
+
+            _logger.LogInformation(
+                "SapItemUomWriter: InventoryCountingUoMEntry set | ItemCode={Code} | UomEntry={Entry}",
+                itemCode, targetUomEntry);
+
+            return new ItemUomApplyResult(itemCode, ItemUomOutcome.UPDATED, null, null);
         }
-
-        _logger.LogInformation(
-            "SapItemUomWriter: InventoryCountingUoMEntry set | ItemCode={Code} | UomEntry={Entry}",
-            itemCode, targetUomEntry);
-
-        return new ItemUomApplyResult(itemCode, ItemUomOutcome.UPDATED, null, null);
+        finally
+        {
+            if (items != null) Marshal.ReleaseComObject(items);
+        }
     }
 
     // ── Private helpers ──────────────────────────────────
 
     private static bool UomExistsInGroup(Company company, int groupEntry, int uomEntry)
     {
-        var rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
-        rs.DoQuery($@"
+        Recordset? rs = null;
+
+        try
+        {
+            rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
+
+            // UGP1 foreign-key back to the UoM group is UgpEntry, not AbsEntry.
+            // OUGP primary key is also UgpEntry; Items.UoMGroupEntry maps to OITM.UgpEntry.
+            rs.DoQuery($@"
 SELECT TOP 1 UomEntry
 FROM UGP1
-WHERE AbsEntry = {groupEntry}
+WHERE UgpEntry = {groupEntry}
   AND UomEntry = {uomEntry}
 ");
-        return !rs.EoF;
+            return !rs.EoF;
+        }
+        finally
+        {
+            if (rs != null) Marshal.ReleaseComObject(rs);
+        }
     }
 }
 
