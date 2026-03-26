@@ -255,15 +255,27 @@ public class GermaxProductScraperService
     {
         var score = 0m;
 
-        var normCode  = NormalizeText(seed.ItemCode);
         var normTitle = NormalizeText(candidate.Title ?? string.Empty);
         var normArt   = NormalizeText(candidate.ArticleNumber ?? string.Empty);
+        var normUrl   = candidate.ProductUrl.ToLowerInvariant();
 
-        // +100: article number extracted from title exactly matches SAP item code
-        if (!string.IsNullOrEmpty(normArt) && normArt == normCode)
-            score += 100m;
+        // ItemName is the real lookup identity for AutoHub seeds (e.g. "SEM500050",
+        // "LR010672/QJB500080"). Split on / and whitespace to get candidate aliases.
+        var aliases = ExtractAliases(seed.ItemName)
+            .Select(NormalizeText)
+            .Where(a => a.Length >= 4)
+            .ToList();
 
-        // +30: engine code token appears in the product title
+        // +80: any ItemName alias exactly matches the article number extracted from the
+        // Germax title — strongest single signal.
+        // +60 (else): alias appears anywhere in the title — weaker but still confident.
+        // The two are mutually exclusive to avoid double-counting the same alias hit.
+        if (!string.IsNullOrEmpty(normArt) && aliases.Any(a => a == normArt))
+            score += 80m;
+        else if (aliases.Any(a => normTitle.Contains(a)))
+            score += 60m;
+
+        // +30: engine code appears in title (often null for Land Rover seeds — skipped)
         if (!string.IsNullOrEmpty(seed.EngineCode))
         {
             var normEngine = NormalizeText(seed.EngineCode);
@@ -271,29 +283,16 @@ public class GermaxProductScraperService
                 score += 30m;
         }
 
-        // +20: at least 2 tokens from ItemName appear in the title
-        var nameTokens = NormalizeText(seed.ItemName)
-            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
-            .Where(t => t.Length > 2)
-            .ToList();
+        // +30: any ItemName alias appears in the product URL slug
+        if (aliases.Any(a => normUrl.Contains(a)))
+            score += 30m;
 
-        var matchingTokens = nameTokens.Count(t => normTitle.Contains(t));
-        if (matchingTokens >= 2)
-            score += 20m;
-
-        // +20: item group name appears in title (e.g. "Land Rover")
+        // +20: item group name (e.g. "Land Rover") appears in the title
         if (!string.IsNullOrEmpty(seed.ItemGroupName))
         {
             var normGroup = NormalizeText(seed.ItemGroupName);
             if (!string.IsNullOrEmpty(normGroup) && normTitle.Contains(normGroup))
                 score += 20m;
-        }
-
-        // +15: product URL contains the SAP item code (some Germax URLs embed it)
-        if (!string.IsNullOrEmpty(normCode)
-            && candidate.ProductUrl.Contains(normCode, StringComparison.OrdinalIgnoreCase))
-        {
-            score += 15m;
         }
 
         return score;
@@ -405,19 +404,47 @@ public class GermaxProductScraperService
     private string BuildSearchTerm(GermaxSeedDto seed, string strategy) =>
         strategy switch
         {
+            // item_code is kept for compatibility but most AutoHub ItemCodes are internal
+            // sequential keys (e.g. LR100001). If Germax returns nothing, the pipeline
+            // falls through to item_name_only which uses the real part reference.
             "item_code" =>
                 seed.ItemCode,
 
             "item_name_engine_code" =>
                 string.IsNullOrWhiteSpace(seed.EngineCode)
                     ? string.Empty
-                    : $"{seed.ItemName} {seed.EngineCode}",
+                    : $"{ExtractPrimaryAlias(seed.ItemName)} {seed.EngineCode}",
 
+            // Use the first meaningful alias from ItemName as the search term.
+            // For "LR010672/QJB500080" this searches "LR010672" rather than the
+            // slash-joined string, which WooCommerce handles much better.
             "item_name_only" =>
-                seed.ItemName,
+                ExtractPrimaryAlias(seed.ItemName),
 
             _ => string.Empty
         };
+
+    /// <summary>
+    /// Splits <paramref name="itemName"/> on common separators (/, whitespace,
+    /// semicolons, commas) and returns distinct tokens that are at least 4 characters.
+    /// E.g. "LR010672/QJB500080" → ["LR010672", "QJB500080"].
+    /// </summary>
+    private static IReadOnlyList<string> ExtractAliases(string itemName) =>
+        Regex.Split(itemName.Trim(), @"[/\s;,]+")
+             .Where(t => t.Length >= 4)
+             .Distinct(StringComparer.OrdinalIgnoreCase)
+             .ToList()
+             .AsReadOnly();
+
+    /// <summary>
+    /// Returns the first meaningful alias from <paramref name="itemName"/>.
+    /// Falls back to the raw ItemName when no token meets the length threshold.
+    /// </summary>
+    private static string ExtractPrimaryAlias(string itemName)
+    {
+        var aliases = ExtractAliases(itemName);
+        return aliases.Count > 0 ? aliases[0] : itemName;
+    }
 
     private static string? ExtractArticleNumber(string? title)
     {
