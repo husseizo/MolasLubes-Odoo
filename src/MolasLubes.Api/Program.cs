@@ -163,6 +163,7 @@ builder.Services.AddScoped<SapCreditMemoReader>();
 
 builder.Services.AddScoped<SapCustomerWriter>();
 builder.Services.AddScoped<SapItemUomWriter>();
+builder.Services.AddScoped<SapItemSelector>();
 builder.Services.AddScoped<SapSalesOrderCreator>();
 builder.Services.AddScoped<SapSalesOrderCanceler>();
 builder.Services.AddScoped<SapQuotationConverter>();
@@ -198,6 +199,7 @@ builder.Services.AddScoped<StockReservationService>();
 builder.Services.AddScoped<ReservationCommitService>();
 builder.Services.AddScoped<CancelSalesOrderService>();
 builder.Services.AddScoped<InventoryCountingUomBackfillService>();
+builder.Services.AddScoped<BulkInventoryCountingUomBackfillService>();
 
 // =====================================================
 // AUTOHUB SERVICES — PROFILE B

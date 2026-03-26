@@ -143,12 +143,24 @@ public class UomBackfillReport
     public string Summary  { get; init; } = string.Empty;
     public string? Error   { get; init; }
 
+    // Set by bulk endpoints; null for explicit-list endpoints.
+    public UomSelectionMetadata? Selection { get; init; }
+
     public static UomBackfillReport Failed(string error, bool dryRun) => new()
     {
         DryRun  = dryRun,
         Error   = error,
         Summary = "FAILED"
     };
+}
+
+public class UomSelectionMetadata
+{
+    public int          MatchedItems    { get; init; }
+    public int          Take            { get; init; }
+    public int          Skip            { get; init; }
+    public bool         ActiveOnly      { get; init; }
+    public List<string>? ItemGroupNames { get; init; }
 }
 
 public class UomBackfillRow
