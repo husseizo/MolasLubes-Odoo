@@ -11,6 +11,7 @@ namespace MolasLubes.Infrastructure.Integrations.Germax;
 /// <summary>
 /// Scrapes germaxparts.com to enrich SAP seed items with product data.
 /// Conservative and sequential: MaxConcurrency=1, delay between each request.
+/// Operates in two search strategies in order: item_name_engine_code →
 /// item_name_only.  Stops at the first strategy that produces a candidate
 /// above the minimum score threshold. Each OEM alias from a slash-joined
 /// ItemName is tried as a separate search term within each strategy.
@@ -186,6 +187,43 @@ public class GermaxProductScraperService
 
         var candidates = new List<GermaxCandidateDto>();
 
+        // Some Germax searches resolve directly to a product page instead of a
+        // WooCommerce archive grid. In that case, treat the current page itself
+        // as the first candidate before scanning related-product cards.
+        var canonical = doc.DocumentNode
+            .SelectSingleNode("//link[@rel='canonical']")?
+            .GetAttributeValue("href", string.Empty)
+            .Trim();
+
+        var productTitleNode = doc.DocumentNode.SelectSingleNode(
+            "//h1[contains(@class,'product_title')]"
+            + "|//h1[contains(@class,'entry-title')]"
+            + "|//title");
+
+        var productTitle = productTitleNode != null
+            ? HtmlEntity.DeEntitize(productTitleNode.InnerText).Trim()
+            : string.Empty;
+
+        var hasAttributesTable = doc.DocumentNode
+            .SelectSingleNode("//table[contains(@class,'shop_attributes')]") != null;
+
+        if (!string.IsNullOrEmpty(canonical)
+            && canonical.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+            && hasAttributesTable)
+        {
+            candidates.Add(new GermaxCandidateDto
+            {
+                ProductUrl     = canonical,
+                Title          = string.IsNullOrEmpty(productTitle) ? null : productTitle,
+                ArticleNumber  = ExtractArticleNumber(productTitle),
+                SearchStrategy = strategy
+            });
+
+            _logger.LogDebug(
+                "GermaxScraper: direct product page detected | url={Url}",
+                canonical);
+        }
+
         // WooCommerce search result products: li.product inside ul.products
         var productNodes = doc.DocumentNode
             .SelectNodes("//ul[contains(@class,'products')]//li[contains(@class,'product')]");
@@ -224,13 +262,16 @@ public class GermaxProductScraperService
                 ? HtmlEntity.DeEntitize(titleNode.InnerText).Trim()
                 : link.GetAttributeValue("title", string.Empty).Trim();
 
-            candidates.Add(new GermaxCandidateDto
+            if (!candidates.Any(c => string.Equals(c.ProductUrl, href, StringComparison.OrdinalIgnoreCase)))
             {
-                ProductUrl     = href,
-                Title          = string.IsNullOrEmpty(title) ? null : title,
-                ArticleNumber  = ExtractArticleNumber(title),
-                SearchStrategy = strategy
-            });
+                candidates.Add(new GermaxCandidateDto
+                {
+                    ProductUrl     = href,
+                    Title          = string.IsNullOrEmpty(title) ? null : title,
+                    ArticleNumber  = ExtractArticleNumber(title),
+                    SearchStrategy = strategy
+                });
+            }
         }
 
         _logger.LogDebug(
