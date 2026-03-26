@@ -140,6 +140,37 @@ public class GermaxCacheSyncService
     }
 
     /// <summary>
+    /// Returns up to <paramref name="batchSize"/> active ERROR or NO_MATCH rows that
+    /// failed within the last <paramref name="maxAgeDays"/> days, ordered
+    /// oldest-failure-first.  Items older than the window are left alone until
+    /// a manual admin trigger re-queues them.
+    /// </summary>
+    public async Task<List<GermaxSeedDto>> GetRetryableAsync(
+        int batchSize,
+        int maxAgeDays = 7,
+        CancellationToken ct = default)
+    {
+        var cutoff = DateTime.UtcNow.AddDays(-maxAgeDays);
+
+        return await _db.GermaxProducts
+            .Where(x => x.IsActive
+                && (x.ScrapeStatus == "ERROR" || x.ScrapeStatus == "NO_MATCH")
+                && x.ScrapedAt != null
+                && x.ScrapedAt >= cutoff)
+            .OrderBy(x => x.ScrapedAt)
+            .Take(batchSize)
+            .Select(x => new GermaxSeedDto
+            {
+                ItemCode      = x.ItemCode,
+                ItemName      = x.ItemName,
+                EngineCode    = x.EngineCode,
+                ItemGroupCode = string.Empty,
+                ItemGroupName = x.ItemGroupName ?? string.Empty
+            })
+            .ToListAsync(ct);
+    }
+
+    /// <summary>
     /// Writes an enrichment success back to the cache row.
     /// Sets ScrapeStatus=SCRAPED, populates all product fields, records ScrapedAt.
     /// </summary>

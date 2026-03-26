@@ -27,4 +27,28 @@ public class AutoHubAdminController : ControllerBase
 
         return Ok(new { Message = "AutoHub SAP seed sync triggered successfully" });
     }
+
+    // -------------------------------------------------
+    // GERMAX SCRAPE — trigger enrichment job immediately
+    // -------------------------------------------------
+    [HttpPost("germax/scrape")]
+    public async Task<IActionResult> RunGermaxScrape()
+    {
+        var scheduler = await _schedulerFactory.GetScheduler();
+        await scheduler.TriggerJob(new JobKey("GermaxProductEnrichmentJob"));
+
+        return Ok(new { Message = "Germax enrichment job triggered successfully" });
+    }
+
+    // -------------------------------------------------
+    // GERMAX RETRY — trigger retry of recent failures
+    // -------------------------------------------------
+    [HttpPost("germax/retry-failed")]
+    public async Task<IActionResult> RunGermaxRetryFailed()
+    {
+        var scheduler = await _schedulerFactory.GetScheduler();
+        await scheduler.TriggerJob(new JobKey("GermaxRetryFailedJob"));
+
+        return Ok(new { Message = "Germax retry-failed job triggered successfully" });
+    }
 }
