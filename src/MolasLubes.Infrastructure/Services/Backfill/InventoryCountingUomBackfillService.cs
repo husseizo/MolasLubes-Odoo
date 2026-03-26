@@ -4,7 +4,7 @@ using MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 namespace MolasLubes.Infrastructure.Services.Backfill;
 
 /// <summary>
-/// Orchestrates a two-pass process for setting InventoryCountingUoMEntry on SAP items.
+/// Orchestrates a two-pass process for setting DefaultCountingUoMEntry on SAP items.
 ///
 /// Pass A (DryRun=true):  classifies every item, returns the report, makes no changes.
 /// Pass B (DryRun=false): preflights then updates only OK_TO_UPDATE items.

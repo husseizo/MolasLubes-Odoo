@@ -5,9 +5,9 @@ using SAPbobsCOM;
 namespace MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 
 /// <summary>
-/// Low-level SAP DI API writer for setting the Inventory Counting UoM on items.
+/// Low-level SAP DI API writer for setting the default inventory counting UoM on items.
 ///
-/// Intentionally narrow: it only touches InventoryCountingUoMEntry.
+/// Intentionally narrow: it only touches DefaultCountingUoMEntry.
 /// It never modifies UoMGroupEntry or any other item master field.
 /// Group repair must be handled as a separate controlled process.
 ///
@@ -92,7 +92,7 @@ WHERE UomCode = '{safe}' OR UomName = '{safe}'
             if (!items.GetByKey(itemCode))
                 return new ItemUomPreflightResult(itemCode, ItemUomOutcome.NOT_FOUND, null, null);
 
-            var currentUomEntry = items.InventoryCountingUoMEntry;
+            var currentUomEntry = items.DefaultCountingUoMEntry;
             var groupEntry      = items.UoMGroupEntry;
 
             if (currentUomEntry == targetUomEntry)
@@ -125,7 +125,7 @@ WHERE UomCode = '{safe}' OR UomName = '{safe}'
     // =====================================================
 
     /// <summary>
-    /// Sets InventoryCountingUoMEntry on the item and calls Update().
+    /// Sets DefaultCountingUoMEntry on the item and calls Update().
     /// Returns UPDATED on success, FAIL_SAP_ERROR on SAP rejection.
     /// </summary>
     public ItemUomApplyResult Apply(string itemCode, int targetUomEntry)
@@ -140,7 +140,7 @@ WHERE UomCode = '{safe}' OR UomName = '{safe}'
             if (!items.GetByKey(itemCode))
                 return new ItemUomApplyResult(itemCode, ItemUomOutcome.NOT_FOUND, null, null);
 
-            items.InventoryCountingUoMEntry = targetUomEntry;
+            items.DefaultCountingUoMEntry = targetUomEntry;
 
             int rc = items.Update();
             if (rc != 0)
@@ -153,7 +153,7 @@ WHERE UomCode = '{safe}' OR UomName = '{safe}'
             }
 
             _logger.LogInformation(
-                "SapItemUomWriter: InventoryCountingUoMEntry set | ItemCode={Code} | UomEntry={Entry}",
+                "SapItemUomWriter: DefaultCountingUoMEntry set | ItemCode={Code} | UomEntry={Entry}",
                 itemCode, targetUomEntry);
 
             return new ItemUomApplyResult(itemCode, ItemUomOutcome.UPDATED, null, null);
