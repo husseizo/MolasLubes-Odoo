@@ -41,11 +41,11 @@ public class BulkInventoryCountingUomBackfillService
         var skip = Math.Max(request.Skip, 0);
 
         // ── 1. Select candidate item codes ────────────────────────────────
-        IReadOnlyList<string> selectedCodes;
+        SapItemSelectorResult selection;
 
         try
         {
-            selectedCodes = _selector.SelectItemCodes(
+            selection = _selector.SelectItemCodes(
                 activeOnly:     request.ActiveOnly,
                 itemGroupNames: request.ItemGroupNames,
                 itemCodes:      request.ItemCodes,
@@ -58,28 +58,29 @@ public class BulkInventoryCountingUomBackfillService
             return UomBackfillReport.Failed(ex.Message, dryRun);
         }
 
-        if (selectedCodes.Count == 0)
+        if (selection.ItemCodes.Count == 0)
         {
             return new UomBackfillReport
             {
                 DryRun         = dryRun,
                 TargetUomCode  = request.TargetUomCode,
                 Summary        = "NO_ITEMS_MATCHED",
-                Selection      = BuildSelectionMeta(request, take, skip, 0)
+                Selection      = BuildSelectionMeta(request, take, skip, 0, hasMore: false)
             };
         }
 
         _logger.LogInformation(
-            "BulkUomBackfill: {Mode} | TargetUoM={Uom} | Items={Count}",
-            dryRun ? "DRY-RUN" : "APPLY", request.TargetUomCode, selectedCodes.Count);
+            "BulkUomBackfill: {Mode} | TargetUoM={Uom} | Items={Count} | HasMore={HasMore}",
+            dryRun ? "DRY-RUN" : "APPLY",
+            request.TargetUomCode, selection.ItemCodes.Count, selection.HasMore);
 
         // ── 2. Delegate to explicit-list service (preflight + optional apply) ─
-        var report = _backfill.Run(selectedCodes, request.TargetUomCode, dryRun);
+        var report = _backfill.Run(selection.ItemCodes, request.TargetUomCode, dryRun);
 
         // ── 3. Attach selection metadata ──────────────────────────────────
         return report with
         {
-            Selection = BuildSelectionMeta(request, take, skip, selectedCodes.Count)
+            Selection = BuildSelectionMeta(request, take, skip, selection.ItemCodes.Count, selection.HasMore)
         };
     }
 
@@ -87,13 +88,15 @@ public class BulkInventoryCountingUomBackfillService
         BulkUomBackfillRequest request,
         int take,
         int skip,
-        int matched) => new()
+        int matched,
+        bool hasMore) => new()
     {
         MatchedItems   = matched,
         Take           = take,
         Skip           = skip,
         ActiveOnly     = request.ActiveOnly,
-        ItemGroupNames = request.ItemGroupNames
+        ItemGroupNames = request.ItemGroupNames,
+        HasMore        = hasMore
     };
 }
 
