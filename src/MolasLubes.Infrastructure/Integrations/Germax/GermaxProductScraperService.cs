@@ -335,10 +335,9 @@ public class GermaxProductScraperService
             .GetAttributeValue("href", null);
         dto.ProductUrl = string.IsNullOrEmpty(canonical) ? candidate.ProductUrl : canonical;
 
-        // Article number — from candidate title first, then attribute table
-        dto.GermaxArticleNumber = candidate.ArticleNumber;
-
         // Attributes table (WooCommerce shop_attributes)
+        // Parse first so the explicit "Germax" attribute takes priority over
+        // whatever article number was inferred from the search-result title.
         var attrRows = doc.DocumentNode
             .SelectNodes("//table[contains(@class,'shop_attributes')]//tr");
 
@@ -358,13 +357,17 @@ public class GermaxProductScraperService
                 var lbl = label.ToLowerInvariant();
 
                 if (lbl.Contains("germax"))
-                    dto.GermaxArticleNumber ??= value;
+                    dto.GermaxArticleNumber = value;  // page attribute wins outright
                 else if (lbl.Contains("oem"))
                     dto.OemPartNumber = value;
                 else if (lbl.Contains("fit") || lbl.Contains("vehicle"))
                     dto.FitForAuto = value;
             }
         }
+
+        // Fall back to the article number inferred from the search-result title
+        // only when the product page itself had no explicit Germax attribute.
+        dto.GermaxArticleNumber ??= candidate.ArticleNumber;
 
         // Description — short description first, then long-form tab
         var shortDesc = doc.DocumentNode
