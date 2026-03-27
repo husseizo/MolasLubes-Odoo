@@ -229,6 +229,30 @@ public class LiquiMolyReplenishmentService
         return (items, hasMore);
     }
 
+    /// <summary>
+    /// Like ListAsync but filters on multiple statuses in a single query,
+    /// preserving correct skip/take semantics across the combined result set.
+    /// Used by the approvals report which needs APPROVED + REJECTED together.
+    /// </summary>
+    public async Task<(IReadOnlyList<CacheLiquiMolyReplenishmentRequest> Items, bool HasMore)>
+        ListByStatusesAsync(IReadOnlyList<string> statuses, int skip, int take, CancellationToken ct = default)
+    {
+        take = Math.Clamp(take, 1, 200);
+
+        var items = await _db.CacheLiquiMolyReplenishmentRequests
+            .Where(r => statuses.Contains(r.Status))
+            .OrderByDescending(r => r.ApprovedAt ?? r.RejectedAt ?? r.CreatedAt)
+            .Skip(skip)
+            .Take(take + 1)
+            .Include(r => r.Lines)
+            .ToListAsync(ct);
+
+        var hasMore = items.Count > take;
+        if (hasMore) items.RemoveAt(items.Count - 1);
+
+        return (items, hasMore);
+    }
+
     // ── Private ──────────────────────────────────────────────────────
 
     private async Task<CacheLiquiMolyReplenishmentRequest> LoadOrThrow(
