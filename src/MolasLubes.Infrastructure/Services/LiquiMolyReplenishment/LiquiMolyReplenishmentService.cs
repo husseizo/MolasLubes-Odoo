@@ -44,6 +44,7 @@ public class LiquiMolyReplenishmentService
         var rows = _analyzer.Analyze(
             request.SourceProfile,
             request.TargetProfile,
+            request.SourceWarehouse,
             request.TargetWarehouse,
             request.TargetDays);
 
@@ -69,20 +70,21 @@ public class LiquiMolyReplenishmentService
         {
             header.Lines.Add(new CacheLiquiMolyReplenishmentRequestLine
             {
-                SourceItemCode    = row.SourceItemCode,
-                TargetItemCode    = row.TargetItemCode,
-                ArticleNumber     = row.ArticleNumber,
-                ItemName          = row.ItemName,
-                CurrentStockTarget = row.CurrentStockTarget,
-                QtySold30d        = row.QtySold30d,
-                QtySold60d        = row.QtySold60d,
-                QtySold90d        = row.QtySold90d,
-                AvgDailySales30d  = row.AvgDailySales30d,
-                DaysOfStock       = row.DaysOfStock,
-                SuggestedQty      = row.SuggestedQty,
-                TrendCategory     = row.TrendCategory,
-                Priority          = row.Priority,
-                ExecutionStatus   = "PENDING"
+                SourceItemCode        = row.SourceItemCode,
+                TargetItemCode        = row.TargetItemCode,
+                ArticleNumber         = row.ArticleNumber,
+                ItemName              = row.ItemName,
+                CurrentStockTarget    = row.CurrentStockTarget,
+                AvailableSupplierStock = row.AvailableSupplierStock,
+                QtySold30d            = row.QtySold30d,
+                QtySold60d            = row.QtySold60d,
+                QtySold90d            = row.QtySold90d,
+                AvgDailySales30d      = row.AvgDailySales30d,
+                DaysOfStock           = row.DaysOfStock,
+                SuggestedQty          = row.SuggestedQty,
+                TrendCategory         = row.TrendCategory,
+                Priority              = row.Priority,
+                ExecutionStatus       = "PENDING"
             });
         }
 

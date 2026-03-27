@@ -34,6 +34,83 @@ public class SapLiquiMolySourceMapReader
     }
 
     /// <summary>
+    /// Returns a dictionary keyed by extracted article number → (ItemCode, AvailableStock).
+    /// Joins OITW for the given warehouse so the analyzer can cap suggested quantities by
+    /// what the supplier actually has on hand minus committed.
+    /// Items with no extractable article number are skipped.
+    /// </summary>
+    public IReadOnlyDictionary<string, SourceItemData> ReadSourceItemMap(
+        string profileKey, string warehouseCode)
+    {
+        if (!_profiles.Profiles.TryGetValue(profileKey, out var profile))
+            throw new InvalidOperationException($"Profile '{profileKey}' not configured.");
+
+        var map = new Dictionary<string, SourceItemData>(StringComparer.OrdinalIgnoreCase);
+        Exception? threadException = null;
+
+        var thread = new Thread(() =>
+        {
+            Company? company = null;
+            Recordset? rs    = null;
+
+            try
+            {
+                company = CreateAndConnect(profile.Sap);
+                rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
+
+                var safeWhs = warehouseCode.Replace("'", "''");
+                rs.DoQuery($@"
+SELECT i.ItemCode, i.ItemName, i.U_Item_Name,
+       ISNULL(w.OnHand,     0) AS OnHand,
+       ISNULL(w.IsCommited, 0) AS Committed
+FROM OITM i
+LEFT JOIN OITW w ON w.ItemCode = i.ItemCode
+                AND w.WhsCode  = '{safeWhs}'
+WHERE i.U_MdlTEST = 'LIQUI MOLY'
+  AND i.frozenFor = 'N'
+ORDER BY i.ItemCode
+");
+
+                while (!rs.EoF)
+                {
+                    var itemCode  = rs.Fields.Item("ItemCode").Value?.ToString() ?? string.Empty;
+                    var itemName  = rs.Fields.Item("ItemName").Value?.ToString();
+                    var uItemName = rs.Fields.Item("U_Item_Name").Value?.ToString()?.Trim();
+                    var onHand    = Convert.ToDecimal((object)rs.Fields.Item("OnHand").Value);
+                    var committed = Convert.ToDecimal((object)rs.Fields.Item("Committed").Value);
+
+                    var artNum = ExtractArticleNumber(uItemName, itemName);
+                    if (artNum != null && !map.ContainsKey(artNum))
+                        map[artNum] = new SourceItemData(itemCode, onHand - committed);
+
+                    rs.MoveNext();
+                }
+            }
+            catch (Exception ex)
+            {
+                threadException = ex;
+            }
+            finally
+            {
+                if (rs != null) Marshal.ReleaseComObject(rs);
+                DisconnectAndRelease(company);
+            }
+        });
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+
+        if (threadException != null) throw threadException;
+
+        _logger.LogInformation(
+            "SapLiquiMolySourceMapReader: {Profile} @ {Whs} → {Count} article→item mappings",
+            profileKey, warehouseCode, map.Count);
+
+        return map;
+    }
+
+    /// <summary>
     /// Returns a dictionary keyed by extracted article number → source ItemCode.
     /// Items whose U_Item_Name and ItemName yield no numeric token are skipped.
     /// </summary>
@@ -148,3 +225,9 @@ ORDER BY ItemCode
         Marshal.ReleaseComObject(company);
     }
 }
+
+/// <summary>
+/// Source item identity + current available stock in a specific warehouse.
+/// Available = OnHand - IsCommited (SAP B1 definition).
+/// </summary>
+public record SourceItemData(string ItemCode, decimal AvailableStock);

@@ -83,10 +83,13 @@ public class LiquiMolyReplenishmentExecutionService
 
         header.Status = result.Status switch
         {
-            "COMPLETED"      => "EXECUTED",
+            "COMPLETED"       => "EXECUTED",
             "RECEIPT_PENDING" => "PARTIAL",
-            _                => "FAILED"
+            _                 => "FAILED"
         };
+
+        // Update per-line execution status from the transfer preflight outcome rows
+        UpdateLineStatuses(header.Lines, result);
 
         await _db.SaveChangesAsync(ct);
 
@@ -133,7 +136,12 @@ public class LiquiMolyReplenishmentExecutionService
         };
 
         if (header.Status == "EXECUTED")
+        {
             header.ExecutedAt = DateTime.UtcNow;
+            // GR succeeded on retry — promote all GI_ISSUED lines to EXECUTED
+            foreach (var line in header.Lines.Where(l => l.ExecutionStatus == "GI_ISSUED"))
+                line.ExecutionStatus = "EXECUTED";
+        }
 
         await _db.SaveChangesAsync(ct);
 
@@ -141,6 +149,51 @@ public class LiquiMolyReplenishmentExecutionService
     }
 
     // ── Private ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Propagates per-line outcomes from the transfer result back to the
+    /// replenishment request lines so the execution audit is complete.
+    ///
+    /// Status values:
+    ///   EXECUTED  — line shipped and received (GI + GR both posted)
+    ///   GI_ISSUED — GI posted, GR pending (RECEIPT_PENDING / PARTIAL)
+    ///   FAILED    — preflight rejected this line or overall failure
+    /// </summary>
+    private static void UpdateLineStatuses(
+        IEnumerable<CacheLiquiMolyReplenishmentRequestLine> lines,
+        LiquiMolyTransferApplyResult result)
+    {
+        // Build lookup from transfer preflight rows by SourceItemCode
+        var outcomeLookup = result.Lines
+            .ToDictionary(l => l.SourceItemCode, l => l, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var line in lines)
+        {
+            if (!outcomeLookup.TryGetValue(line.SourceItemCode, out var row))
+            {
+                // Line not present in result — shouldn't happen; mark conservatively
+                line.ExecutionStatus  = result.Status == "COMPLETED" ? "EXECUTED" : "FAILED";
+                line.ExecutionMessage = "Line not found in transfer result.";
+                continue;
+            }
+
+            if (row.Outcome != "OK")
+            {
+                line.ExecutionStatus  = "FAILED";
+                line.ExecutionMessage = row.Message;
+            }
+            else
+            {
+                line.ExecutionStatus = result.Status switch
+                {
+                    "COMPLETED"       => "EXECUTED",
+                    "RECEIPT_PENDING" => "GI_ISSUED",  // GI posted, GR still pending
+                    _                 => "FAILED"
+                };
+                line.ExecutionMessage = result.Status == "FAILED" ? result.ErrorMessage : null;
+            }
+        }
+    }
 
     private async Task<CacheLiquiMolyReplenishmentRequest> LoadApprovedOrThrow(
         string requestRef, CancellationToken ct)
