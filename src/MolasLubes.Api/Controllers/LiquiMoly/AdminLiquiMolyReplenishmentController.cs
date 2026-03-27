@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using MolasLubes.Api.Security;
 using MolasLubes.Application.LiquiMolyReplenishment;
+using MolasLubes.Domain.Entities.Cache;
 using MolasLubes.Infrastructure.Security;
 using MolasLubes.Infrastructure.Services.LiquiMolyReplenishment;
 
@@ -171,7 +172,7 @@ public class AdminLiquiMolyReplenishmentController : ControllerBase
         catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
 
         var header = await _service.GetAsync(requestRef, ct);
-        return header == null ? NotFound() : Ok(header);
+        return header == null ? NotFound() : Ok(ToRequestResponse(header));
     }
 
     [HttpGet]
@@ -186,8 +187,95 @@ public class AdminLiquiMolyReplenishmentController : ControllerBase
         catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
 
         var (items, hasMore) = await _service.ListAsync(status, skip, take, ct);
-        return Ok(new { items, hasMore, count = items.Count });
+        return Ok(new
+        {
+            items = items.Select(ToRequestSummaryResponse),
+            hasMore,
+            count = items.Count
+        });
     }
+
+    private static object ToRequestResponse(CacheLiquiMolyReplenishmentRequest header) => new
+    {
+        header.Id,
+        header.RequestRef,
+        header.SourceProfile,
+        header.TargetProfile,
+        header.SourceWarehouse,
+        header.TargetWarehouse,
+        header.Status,
+        header.RequestedBySapUser,
+        header.ApprovedBySapUser,
+        header.RejectedBySapUser,
+        header.ExecutedBySapUser,
+        header.CreatedAt,
+        header.SubmittedAt,
+        header.ApprovedAt,
+        header.RejectedAt,
+        header.ExecutedAt,
+        header.Comments,
+        header.RejectionReason,
+        header.TransferRef,
+        header.GoodsIssueDocEntry,
+        header.GoodsIssueDocNum,
+        header.GoodsReceiptDocEntry,
+        header.GoodsReceiptDocNum,
+        header.ErrorMessage,
+        Lines = header.Lines
+            .OrderBy(l => l.Id)
+            .Select(ToLineResponse)
+            .ToList()
+    };
+
+    private static object ToRequestSummaryResponse(CacheLiquiMolyReplenishmentRequest header) => new
+    {
+        header.Id,
+        header.RequestRef,
+        header.SourceProfile,
+        header.TargetProfile,
+        header.SourceWarehouse,
+        header.TargetWarehouse,
+        header.Status,
+        header.RequestedBySapUser,
+        header.ApprovedBySapUser,
+        header.RejectedBySapUser,
+        header.ExecutedBySapUser,
+        header.CreatedAt,
+        header.SubmittedAt,
+        header.ApprovedAt,
+        header.RejectedAt,
+        header.ExecutedAt,
+        header.Comments,
+        header.RejectionReason,
+        header.TransferRef,
+        header.GoodsIssueDocNum,
+        header.GoodsReceiptDocNum,
+        header.ErrorMessage,
+        lineCount = header.Lines.Count
+    };
+
+    private static object ToLineResponse(CacheLiquiMolyReplenishmentRequestLine line) => new
+    {
+        line.Id,
+        line.RequestId,
+        line.SourceItemCode,
+        line.TargetItemCode,
+        line.ArticleNumber,
+        line.ItemName,
+        line.CurrentStockTarget,
+        line.AvailableSupplierStock,
+        line.QtySold30d,
+        line.QtySold60d,
+        line.QtySold90d,
+        line.AvgDailySales30d,
+        line.DaysOfStock,
+        line.SuggestedQty,
+        line.TrendCategory,
+        line.Priority,
+        line.ApprovedQty,
+        line.ExecutionStatus,
+        line.ExecutionMessage
+    };
 }
 
 // ── Report endpoints (separate route prefix) ─────────────────────────────────
