@@ -26,6 +26,8 @@ public class MolasCacheDbContext : DbContext
     public DbSet<CacheLiquiMolyProduct> CacheLiquiMolyProducts => Set<CacheLiquiMolyProduct>();
     public DbSet<CacheLiquiMolyTransfer> CacheLiquiMolyTransfers => Set<CacheLiquiMolyTransfer>();
     public DbSet<CacheLiquiMolyTransferLine> CacheLiquiMolyTransferLines => Set<CacheLiquiMolyTransferLine>();
+    public DbSet<CacheLiquiMolyReplenishmentRequest> CacheLiquiMolyReplenishmentRequests => Set<CacheLiquiMolyReplenishmentRequest>();
+    public DbSet<CacheLiquiMolyReplenishmentRequestLine> CacheLiquiMolyReplenishmentRequestLines => Set<CacheLiquiMolyReplenishmentRequestLine>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -476,6 +478,74 @@ public class MolasCacheDbContext : DbContext
 
             entity.HasIndex(x => x.TransferId)
                   .HasDatabaseName("IX_CacheLiquiMolyTransferLines_TransferId");
+        });
+
+        // =====================================================
+        // LIQUI-MOLY REPLENISHMENT REQUESTS
+        // =====================================================
+        modelBuilder.Entity<CacheLiquiMolyReplenishmentRequest>(entity =>
+        {
+            entity.ToTable("CacheLiquiMolyReplenishmentRequests");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).ValueGeneratedOnAdd();
+
+            entity.Property(x => x.RequestRef).HasMaxLength(30).IsRequired();
+            entity.HasIndex(x => x.RequestRef)
+                  .IsUnique()
+                  .HasDatabaseName("IX_CacheLMReplenishmentRequests_RequestRef");
+
+            entity.Property(x => x.SourceProfile).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.TargetProfile).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.SourceWarehouse).HasMaxLength(20).IsRequired();
+            entity.Property(x => x.TargetWarehouse).HasMaxLength(20).IsRequired();
+            entity.Property(x => x.Status).HasMaxLength(20).IsRequired();
+
+            entity.Property(x => x.RequestedBySapUser).HasMaxLength(50);
+            entity.Property(x => x.ApprovedBySapUser).HasMaxLength(50);
+            entity.Property(x => x.RejectedBySapUser).HasMaxLength(50);
+            entity.Property(x => x.ExecutedBySapUser).HasMaxLength(50);
+
+            entity.Property(x => x.Comments).HasMaxLength(500);
+            entity.Property(x => x.RejectionReason).HasMaxLength(500);
+            entity.Property(x => x.TransferRef).HasMaxLength(30);
+            entity.Property(x => x.GoodsIssueDocNum).HasMaxLength(20);
+            entity.Property(x => x.GoodsReceiptDocNum).HasMaxLength(20);
+            entity.Property(x => x.ErrorMessage).HasMaxLength(1000);
+
+            entity.HasIndex(x => x.Status)
+                  .HasDatabaseName("IX_CacheLMReplenishmentRequests_Status");
+        });
+
+        modelBuilder.Entity<CacheLiquiMolyReplenishmentRequestLine>(entity =>
+        {
+            entity.ToTable("CacheLiquiMolyReplenishmentRequestLines");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).ValueGeneratedOnAdd();
+
+            entity.Property(x => x.SourceItemCode).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.TargetItemCode).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.ArticleNumber).HasMaxLength(20).IsRequired();
+            entity.Property(x => x.ItemName).HasMaxLength(200);
+            entity.Property(x => x.TrendCategory).HasMaxLength(20);
+            entity.Property(x => x.ExecutionStatus).HasMaxLength(20).IsRequired();
+            entity.Property(x => x.ExecutionMessage).HasMaxLength(500);
+
+            entity.Property(x => x.CurrentStockTarget).HasPrecision(18, 4);
+            entity.Property(x => x.QtySold30d).HasPrecision(18, 4);
+            entity.Property(x => x.QtySold60d).HasPrecision(18, 4);
+            entity.Property(x => x.QtySold90d).HasPrecision(18, 4);
+            entity.Property(x => x.AvgDailySales30d).HasPrecision(18, 4);
+            entity.Property(x => x.DaysOfStock).HasPrecision(18, 2);
+            entity.Property(x => x.SuggestedQty).HasPrecision(18, 4);
+            entity.Property(x => x.ApprovedQty).HasPrecision(18, 4);
+
+            entity.HasOne(x => x.Request)
+                  .WithMany(x => x.Lines)
+                  .HasForeignKey(x => x.RequestId)
+                  .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasIndex(x => x.RequestId)
+                  .HasDatabaseName("IX_CacheLMReplenishmentRequestLines_RequestId");
         });
 
         base.OnModelCreating(modelBuilder);
