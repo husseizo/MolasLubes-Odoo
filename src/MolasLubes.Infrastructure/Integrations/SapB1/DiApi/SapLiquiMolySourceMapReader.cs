@@ -59,33 +59,30 @@ public class SapLiquiMolySourceMapReader
                 rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
 
                 var safeWhs = warehouseCode.Replace("'", "''");
-                rs.DoQuery($@"
-IF COL_LENGTH('OITM', 'U_MdlTEST') IS NOT NULL
-   AND COL_LENGTH('OITM', 'U_Item_Name') IS NOT NULL
-BEGIN
-    SELECT i.ItemCode, i.ItemName, i.U_Item_Name,
-           ISNULL(w.OnHand,     0) AS OnHand,
-           ISNULL(w.IsCommited, 0) AS Committed
-    FROM OITM i
-    LEFT JOIN OITW w ON w.ItemCode = i.ItemCode
-                    AND w.WhsCode  = '{safeWhs}'
-    WHERE i.U_MdlTEST = 'LIQUI MOLY'
-      AND i.frozenFor = 'N'
-    ORDER BY i.ItemCode
-END
-ELSE
-BEGIN
-    SELECT i.ItemCode, i.ItemName,
-           CAST(NULL AS NVARCHAR(254)) AS U_Item_Name,
-           ISNULL(w.OnHand,     0) AS OnHand,
-           ISNULL(w.IsCommited, 0) AS Committed
-    FROM OITM i
-    LEFT JOIN OITW w ON w.ItemCode = i.ItemCode
-                    AND w.WhsCode  = '{safeWhs}'
-    WHERE i.frozenFor = 'N'
-      AND TRY_CONVERT(INT, i.ItemCode) IS NOT NULL
-    ORDER BY i.ItemCode
-END
+                var hasLiquiMolyUdfs = HasLiquiMolyUdfs(rs);
+                rs.DoQuery(hasLiquiMolyUdfs
+                    ? $@"
+SELECT i.ItemCode, i.ItemName, i.U_Item_Name,
+       ISNULL(w.OnHand,     0) AS OnHand,
+       ISNULL(w.IsCommited, 0) AS Committed
+FROM OITM i
+LEFT JOIN OITW w ON w.ItemCode = i.ItemCode
+                AND w.WhsCode  = '{safeWhs}'
+WHERE i.U_MdlTEST = 'LIQUI MOLY'
+  AND i.frozenFor = 'N'
+ORDER BY i.ItemCode
+"
+                    : $@"
+SELECT i.ItemCode, i.ItemName,
+       CAST(NULL AS NVARCHAR(254)) AS U_Item_Name,
+       ISNULL(w.OnHand,     0) AS OnHand,
+       ISNULL(w.IsCommited, 0) AS Committed
+FROM OITM i
+LEFT JOIN OITW w ON w.ItemCode = i.ItemCode
+                AND w.WhsCode  = '{safeWhs}'
+WHERE i.frozenFor = 'N'
+  AND TRY_CONVERT(INT, i.ItemCode) IS NOT NULL
+ORDER BY i.ItemCode
 ");
 
                 while (!rs.EoF)
@@ -149,25 +146,22 @@ END
                 company = CreateAndConnect(profile.Sap);
                 rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
 
-                rs.DoQuery(@"
-IF COL_LENGTH('OITM', 'U_MdlTEST') IS NOT NULL
-   AND COL_LENGTH('OITM', 'U_Item_Name') IS NOT NULL
-BEGIN
-    SELECT ItemCode, ItemName, U_Item_Name
-    FROM OITM
-    WHERE U_MdlTEST = 'LIQUI MOLY'
-      AND frozenFor = 'N'
-    ORDER BY ItemCode
-END
-ELSE
-BEGIN
-    SELECT ItemCode, ItemName,
-           CAST(NULL AS NVARCHAR(254)) AS U_Item_Name
-    FROM OITM
-    WHERE frozenFor = 'N'
-      AND TRY_CONVERT(INT, ItemCode) IS NOT NULL
-    ORDER BY ItemCode
-END
+                var hasLiquiMolyUdfs = HasLiquiMolyUdfs(rs);
+                rs.DoQuery(hasLiquiMolyUdfs
+                    ? @"
+SELECT ItemCode, ItemName, U_Item_Name
+FROM OITM
+WHERE U_MdlTEST = 'LIQUI MOLY'
+  AND frozenFor = 'N'
+ORDER BY ItemCode
+"
+                    : @"
+SELECT ItemCode, ItemName,
+       CAST(NULL AS NVARCHAR(254)) AS U_Item_Name
+FROM OITM
+WHERE frozenFor = 'N'
+  AND TRY_CONVERT(INT, ItemCode) IS NOT NULL
+ORDER BY ItemCode
 ");
 
                 while (!rs.EoF)
@@ -222,6 +216,20 @@ END
         }
 
         return FindNumber(uItemName) ?? FindNumber(itemName) ?? FindNumber(itemCode);
+    }
+
+    private static bool HasLiquiMolyUdfs(Recordset rs)
+    {
+        rs.DoQuery(@"
+SELECT
+    CASE
+        WHEN COL_LENGTH('OITM', 'U_MdlTEST') IS NOT NULL
+         AND COL_LENGTH('OITM', 'U_Item_Name') IS NOT NULL
+        THEN 1 ELSE 0
+    END AS HasUdfs
+");
+
+        return Convert.ToInt32(rs.Fields.Item("HasUdfs").Value) == 1;
     }
 
     private static Company CreateAndConnect(SapSettings sap)
