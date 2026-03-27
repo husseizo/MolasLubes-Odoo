@@ -299,8 +299,10 @@ public class AdminLiquiMolyReportsController : ControllerBase
         try { _roleService.Authorize(actorSapUserCode, LiquiMolyRole.Viewer); }
         catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
 
+        // Include all statuses that carry an approval decision so execution
+        // transitions (EXECUTING → EXECUTED/PARTIAL/FAILED) never erase the audit trail.
         var (items, hasMore) = await _service.ListByStatusesAsync(
-            new[] { "APPROVED", "REJECTED" }, skip, take, ct);
+            new[] { "APPROVED", "REJECTED", "EXECUTING", "EXECUTED", "PARTIAL", "FAILED" }, skip, take, ct);
 
         var rows = items.Select(r => new
         {
