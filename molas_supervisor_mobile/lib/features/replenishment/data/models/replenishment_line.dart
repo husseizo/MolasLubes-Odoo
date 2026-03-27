@@ -1,59 +1,125 @@
-import 'package:freezed_annotation/freezed_annotation.dart';
-
-part 'replenishment_line.freezed.dart';
-part 'replenishment_line.g.dart';
-
-/// Trend categories returned by the backend.
 enum TrendCategory {
-  @JsonValue('FastMoving')
-  fastMoving,
-  @JsonValue('LowStock')
-  lowStock,
-  @JsonValue('Normal')
-  normal,
-  @JsonValue('SlowMoving')
-  slowMoving,
-  @JsonValue('DeadStock')
-  deadStock,
-  @JsonValue('Inactive')
-  inactive,
+  fastMoving('FAST_MOVING'),
+  lowStock('LOW_STOCK'),
+  normal('NORMAL'),
+  slowMoving('SLOW_MOVING'),
+  deadStock('DEAD_STOCK'),
+  inactive('INACTIVE');
+
+  const TrendCategory(this.apiValue);
+
+  final String apiValue;
+
+  static TrendCategory fromApi(String? value) {
+    return TrendCategory.values.firstWhere(
+      (item) => item.apiValue == value,
+      orElse: () => TrendCategory.inactive,
+    );
+  }
 }
 
-/// Per-line execution status.
 enum LineExecutionStatus {
-  @JsonValue('PENDING')
-  pending,
-  @JsonValue('EXECUTED')
-  executed,
-  @JsonValue('GI_ISSUED')
-  giIssued,
-  @JsonValue('FAILED')
-  failed,
+  pending('PENDING'),
+  executed('EXECUTED'),
+  giIssued('GI_ISSUED'),
+  failed('FAILED');
+
+  const LineExecutionStatus(this.apiValue);
+
+  final String apiValue;
+
+  static LineExecutionStatus fromApi(String? value) {
+    return LineExecutionStatus.values.firstWhere(
+      (item) => item.apiValue == value,
+      orElse: () => LineExecutionStatus.pending,
+    );
+  }
 }
 
-@freezed
-class ReplenishmentLine with _$ReplenishmentLine {
-  const factory ReplenishmentLine({
-    required int id,
-    required String articleNumber,
-    required String sourceItemCode,
-    required String targetItemCode,
-    required String itemDescription,
-    required double currentStock,
-    required double availableSupplierStock,
-    required double qtySold30d,
-    required double qtySold60d,
-    required double qtySold90d,
-    required double avgDailySales30d,
-    required double daysOfStock,
-    required TrendCategory trendCategory,
-    required int priority,
-    required double suggestedQty,
-    double? approvedQty,
-    required LineExecutionStatus executionStatus,
-    String? executionMessage,
-  }) = _ReplenishmentLine;
+class ReplenishmentLine {
+  const ReplenishmentLine({
+    required this.id,
+    required this.requestId,
+    required this.sourceItemCode,
+    required this.targetItemCode,
+    required this.articleNumber,
+    required this.itemName,
+    required this.currentStockTarget,
+    required this.availableSupplierStock,
+    required this.qtySold30d,
+    required this.qtySold60d,
+    required this.qtySold90d,
+    required this.avgDailySales30d,
+    required this.daysOfStock,
+    required this.suggestedQty,
+    required this.trendCategory,
+    required this.priority,
+    required this.approvedQty,
+    required this.executionStatus,
+    required this.executionMessage,
+  });
 
-  factory ReplenishmentLine.fromJson(Map<String, dynamic> json) =>
-      _$ReplenishmentLineFromJson(json);
+  final int id;
+  final int requestId;
+  final String sourceItemCode;
+  final String targetItemCode;
+  final String articleNumber;
+  final String? itemName;
+  final double currentStockTarget;
+  final double availableSupplierStock;
+  final double qtySold30d;
+  final double qtySold60d;
+  final double qtySold90d;
+  final double avgDailySales30d;
+  final double daysOfStock;
+  final double suggestedQty;
+  final TrendCategory trendCategory;
+  final int priority;
+  final double? approvedQty;
+  final LineExecutionStatus executionStatus;
+  final String? executionMessage;
+
+  factory ReplenishmentLine.fromJson(Map<String, dynamic> json) {
+    return ReplenishmentLine(
+      id: _readInt(json['id']),
+      requestId: _readInt(json['requestId']),
+      sourceItemCode: json['sourceItemCode']?.toString() ?? '',
+      targetItemCode: json['targetItemCode']?.toString() ?? '',
+      articleNumber: json['articleNumber']?.toString() ?? '',
+      itemName: json['itemName']?.toString(),
+      currentStockTarget: _readDouble(json['currentStockTarget']),
+      availableSupplierStock: _readDouble(json['availableSupplierStock']),
+      qtySold30d: _readDouble(json['qtySold30d']),
+      qtySold60d: _readDouble(json['qtySold60d']),
+      qtySold90d: _readDouble(json['qtySold90d']),
+      avgDailySales30d: _readDouble(json['avgDailySales30d']),
+      daysOfStock: _readDouble(json['daysOfStock']),
+      suggestedQty: _readDouble(json['suggestedQty']),
+      trendCategory: TrendCategory.fromApi(json['trendCategory']?.toString()),
+      priority: _readInt(json['priority']),
+      approvedQty: _readNullableDouble(json['approvedQty']),
+      executionStatus:
+          LineExecutionStatus.fromApi(json['executionStatus']?.toString()),
+      executionMessage: json['executionMessage']?.toString(),
+    );
+  }
+
+  static int _readInt(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    return int.tryParse(value?.toString() ?? '') ?? 0;
+  }
+
+  static double _readDouble(dynamic value) {
+    if (value is double) return value;
+    if (value is num) return value.toDouble();
+    return double.tryParse(value?.toString() ?? '') ?? 0;
+  }
+
+  static double? _readNullableDouble(dynamic value) {
+    if (value == null) return null;
+    if (value is double) return value;
+    if (value is num) return value.toDouble();
+    return double.tryParse(value.toString());
+  }
 }

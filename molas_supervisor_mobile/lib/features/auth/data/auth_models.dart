@@ -1,51 +1,55 @@
-import 'package:freezed_annotation/freezed_annotation.dart';
+class LoginRequest {
+  const LoginRequest({
+    required this.sapUserCode,
+    required this.password,
+  });
 
-part 'auth_models.freezed.dart';
-part 'auth_models.g.dart';
+  final String sapUserCode;
+  final String password;
 
-// ---------------------------------------------------------------------------
-// Login request / response
-// ---------------------------------------------------------------------------
-
-@freezed
-class LoginRequest with _$LoginRequest {
-  const factory LoginRequest({
-    required String sapUserCode,
-    required String password,
-  }) = _LoginRequest;
-
-  factory LoginRequest.fromJson(Map<String, dynamic> json) =>
-      _$LoginRequestFromJson(json);
+  Map<String, dynamic> toJson() => {
+        'sapUserCode': sapUserCode,
+        'password': password,
+      };
 }
 
-@freezed
-class LoginResponse with _$LoginResponse {
-  const factory LoginResponse({
-    required String token,
-    required String refreshToken,
-    required String sapUserCode,
-    required String role,
-    required String expiresAt,
-  }) = _LoginResponse;
+class LoginResponse {
+  const LoginResponse({
+    required this.token,
+    required this.refreshToken,
+    required this.sapUserCode,
+    required this.role,
+    required this.expiresAt,
+  });
 
-  factory LoginResponse.fromJson(Map<String, dynamic> json) =>
-      _$LoginResponseFromJson(json);
+  final String token;
+  final String refreshToken;
+  final String sapUserCode;
+  final String role;
+  final String expiresAt;
+
+  factory LoginResponse.fromJson(Map<String, dynamic> json) => LoginResponse(
+        token: json['token']?.toString() ?? '',
+        refreshToken: json['refreshToken']?.toString() ?? '',
+        sapUserCode: json['sapUserCode']?.toString() ?? '',
+        role: json['role']?.toString() ?? '',
+        expiresAt: json['expiresAt']?.toString() ?? '',
+      );
 }
 
-// ---------------------------------------------------------------------------
-// Auth state (held in Riverpod)
-// ---------------------------------------------------------------------------
+class AuthState {
+  const AuthState({
+    required this.sapUserCode,
+    required this.role,
+    required this.isAuthenticated,
+  });
 
-@freezed
-class AuthState with _$AuthState {
-  const factory AuthState({
-    required String sapUserCode,
-    required String role,
-    @Default(true) bool isAuthenticated,
-  }) = _AuthState;
+  const AuthState.unauthenticated()
+      : sapUserCode = '',
+        role = '',
+        isAuthenticated = false;
 
-  const factory AuthState.unauthenticated() = _Unauthenticated;
-
-  factory AuthState.fromJson(Map<String, dynamic> json) =>
-      _$AuthStateFromJson(json);
+  final String sapUserCode;
+  final String role;
+  final bool isAuthenticated;
 }

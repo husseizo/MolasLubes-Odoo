@@ -45,7 +45,11 @@ class AuthRepository {
 
     if (sapUserCode == null || role == null) return null;
 
-    return AuthState(sapUserCode: sapUserCode, role: role);
+    return AuthState(
+      sapUserCode: sapUserCode,
+      role: role,
+      isAuthenticated: true,
+    );
   }
 
   /// Clears all stored credentials.
