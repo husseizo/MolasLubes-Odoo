@@ -51,7 +51,7 @@ public class LiquiMolyReplenishmentService
         // Only create lines for items that need replenishment
         var actionable = rows.Where(r => r.SuggestedQty > 0).ToList();
 
-        var requestRef = _refGen.Generate();
+        var requestRef = await GenerateUniqueRequestRefAsync(ct);
 
         var header = new CacheLiquiMolyReplenishmentRequest
         {
@@ -266,5 +266,23 @@ public class LiquiMolyReplenishmentService
             throw new KeyNotFoundException($"Replenishment request '{requestRef}' not found.");
 
         return header;
+    }
+
+    private async Task<string> GenerateUniqueRequestRefAsync(CancellationToken ct)
+    {
+        // ReplenishmentRefGenerator is process-local. After an API restart its counter
+        // resets, so we must guard against collisions with refs already persisted in SQL.
+        for (var attempt = 0; attempt < 100; attempt++)
+        {
+            var candidate = _refGen.Generate();
+            var exists = await _db.CacheLiquiMolyReplenishmentRequests
+                .AnyAsync(r => r.RequestRef == candidate, ct);
+
+            if (!exists)
+                return candidate;
+        }
+
+        throw new InvalidOperationException(
+            "Unable to generate a unique replenishment request reference after 100 attempts.");
     }
 }
