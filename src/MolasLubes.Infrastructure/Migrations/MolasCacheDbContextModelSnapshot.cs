@@ -421,6 +421,9 @@ namespace MolasLubes.Infrastructure.Migrations
                     b.Property<bool>("IsActive")
                         .HasColumnType("bit");
 
+                    b.Property<decimal?>("Liter")
+                        .HasColumnType("decimal(8,3)");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
@@ -428,9 +431,6 @@ namespace MolasLubes.Infrastructure.Migrations
                     b.Property<string>("PackagingSize")
                         .HasMaxLength(30)
                         .HasColumnType("nvarchar(30)");
-
-                    b.Property<decimal?>("Liter")
-                        .HasColumnType("decimal(8,3)");
 
                     b.Property<string>("ProductInfoPdfUrl")
                         .HasMaxLength(500)
@@ -447,12 +447,12 @@ namespace MolasLubes.Infrastructure.Migrations
                     b.Property<DateTime>("ScrapedAt")
                         .HasColumnType("datetime2");
 
-                    b.Property<string>("Specifications")
-                        .HasColumnType("nvarchar(max)");
-
                     b.Property<string>("SpecGrade")
                         .HasMaxLength(50)
                         .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("Specifications")
+                        .HasColumnType("nvarchar(max)");
 
                     b.Property<string>("SubCategory")
                         .HasMaxLength(100)
@@ -467,6 +467,340 @@ namespace MolasLubes.Infrastructure.Migrations
                     b.HasIndex("ScrapedAt");
 
                     b.ToTable("CacheLiquiMolyProducts", (string)null);
+                });
+
+            modelBuilder.Entity("MolasLubes.Domain.Entities.Cache.CacheLiquiMolyReplenishmentRequest", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime?>("ApprovedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("ApprovedBySapUser")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("Comments")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("ErrorMessage")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<DateTime?>("ExecutedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("ExecutedBySapUser")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<int?>("GoodsIssueDocEntry")
+                        .HasColumnType("int");
+
+                    b.Property<string>("GoodsIssueDocNum")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<int?>("GoodsReceiptDocEntry")
+                        .HasColumnType("int");
+
+                    b.Property<string>("GoodsReceiptDocNum")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<DateTime?>("RejectedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("RejectedBySapUser")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("RejectionReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("RequestRef")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
+                    b.Property<string>("RequestedBySapUser")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("SourceProfile")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("SourceWarehouse")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<DateTime?>("SubmittedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("TargetProfile")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("TargetWarehouse")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("TransferRef")
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RequestRef")
+                        .IsUnique()
+                        .HasDatabaseName("IX_CacheLMReplenishmentRequests_RequestRef");
+
+                    b.HasIndex("Status")
+                        .HasDatabaseName("IX_CacheLMReplenishmentRequests_Status");
+
+                    b.ToTable("CacheLiquiMolyReplenishmentRequests", (string)null);
+                });
+
+            modelBuilder.Entity("MolasLubes.Domain.Entities.Cache.CacheLiquiMolyReplenishmentRequestLine", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<decimal?>("ApprovedQty")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<string>("ArticleNumber")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<decimal>("AvailableSupplierStock")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<decimal>("AvgDailySales30d")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<decimal>("CurrentStockTarget")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<decimal>("DaysOfStock")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("ExecutionMessage")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("ExecutionStatus")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("ItemName")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<int>("Priority")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("QtySold30d")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<decimal>("QtySold60d")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<decimal>("QtySold90d")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<int>("RequestId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("SourceItemCode")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<decimal>("SuggestedQty")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<string>("TargetItemCode")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("TrendCategory")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RequestId")
+                        .HasDatabaseName("IX_CacheLMReplenishmentRequestLines_RequestId");
+
+                    b.ToTable("CacheLiquiMolyReplenishmentRequestLines", (string)null);
+                });
+
+            modelBuilder.Entity("MolasLubes.Domain.Entities.Cache.CacheLiquiMolyTransfer", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Comments")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("ErrorMessage")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<int?>("GoodsIssueDocEntry")
+                        .HasColumnType("int");
+
+                    b.Property<string>("GoodsIssueDocNum")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<int?>("GoodsReceiptDocEntry")
+                        .HasColumnType("int");
+
+                    b.Property<string>("GoodsReceiptDocNum")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("SourceProfile")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("SourceWarehouse")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("TargetProfile")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("TargetWarehouse")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("TransferRef")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Status")
+                        .HasDatabaseName("IX_CacheLiquiMolyTransfers_Status");
+
+                    b.HasIndex("TransferRef")
+                        .IsUnique()
+                        .HasDatabaseName("IX_CacheLiquiMolyTransfers_TransferRef");
+
+                    b.ToTable("CacheLiquiMolyTransfers", (string)null);
+                });
+
+            modelBuilder.Entity("MolasLubes.Domain.Entities.Cache.CacheLiquiMolyTransferLine", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("ArticleNumber")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("ErrorMessage")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<decimal>("Quantity")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<string>("SourceItemCode")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("SourceItemName")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("TargetItemCode")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("TargetItemName")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<int>("TransferId")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TransferId")
+                        .HasDatabaseName("IX_CacheLiquiMolyTransferLines_TransferId");
+
+                    b.ToTable("CacheLiquiMolyTransferLines", (string)null);
                 });
 
             modelBuilder.Entity("MolasLubes.Domain.Entities.Cache.CachePayment", b =>
@@ -488,10 +822,6 @@ namespace MolasLubes.Infrastructure.Migrations
                     b.Property<int>("InvoiceDocEntry")
                         .HasColumnType("int");
 
-                    b.Property<decimal>("SumApplied")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("decimal(18,2)");
-
                     b.Property<string>("OdooErrorMsg")
                         .HasColumnType("nvarchar(max)");
 
@@ -512,6 +842,10 @@ namespace MolasLubes.Infrastructure.Migrations
 
                     b.Property<int>("SapDocNum")
                         .HasColumnType("int");
+
+                    b.Property<decimal>("SumApplied")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
 
                     b.Property<decimal>("TotalPaid")
                         .HasPrecision(18, 2)
@@ -712,12 +1046,12 @@ namespace MolasLubes.Infrastructure.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
 
+                    b.Property<int>("LineNum")
+                        .HasColumnType("int");
+
                     b.Property<decimal>("LineTotal")
                         .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
-
-                    b.Property<int>("LineNum")
-                        .HasColumnType("int");
 
                     b.Property<string>("OdooSalesOrderLineId")
                         .HasMaxLength(20)
@@ -812,6 +1146,28 @@ namespace MolasLubes.Infrastructure.Migrations
                     b.Navigation("Invoice");
                 });
 
+            modelBuilder.Entity("MolasLubes.Domain.Entities.Cache.CacheLiquiMolyReplenishmentRequestLine", b =>
+                {
+                    b.HasOne("MolasLubes.Domain.Entities.Cache.CacheLiquiMolyReplenishmentRequest", "Request")
+                        .WithMany("Lines")
+                        .HasForeignKey("RequestId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Request");
+                });
+
+            modelBuilder.Entity("MolasLubes.Domain.Entities.Cache.CacheLiquiMolyTransferLine", b =>
+                {
+                    b.HasOne("MolasLubes.Domain.Entities.Cache.CacheLiquiMolyTransfer", "Transfer")
+                        .WithMany("Lines")
+                        .HasForeignKey("TransferId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Transfer");
+                });
+
             modelBuilder.Entity("MolasLubes.Domain.Entities.Cache.CacheSalesOrderLine", b =>
                 {
                     b.HasOne("MolasLubes.Domain.Entities.Cache.CacheSalesOrder", "SalesOrder")
@@ -830,6 +1186,16 @@ namespace MolasLubes.Infrastructure.Migrations
                 });
 
             modelBuilder.Entity("MolasLubes.Domain.Entities.Cache.CacheInvoice", b =>
+                {
+                    b.Navigation("Lines");
+                });
+
+            modelBuilder.Entity("MolasLubes.Domain.Entities.Cache.CacheLiquiMolyReplenishmentRequest", b =>
+                {
+                    b.Navigation("Lines");
+                });
+
+            modelBuilder.Entity("MolasLubes.Domain.Entities.Cache.CacheLiquiMolyTransfer", b =>
                 {
                     b.Navigation("Lines");
                 });
