@@ -45,7 +45,7 @@ public class AdminLiquiMolyReplenishmentController : ControllerBase
             var (requestRef, rows) = await _service.GenerateDraftAsync(request, ct);
             return Ok(new { requestRef, rowCount = rows.Count, rows });
         }
-        catch (UnauthorizedAccessException ex) { return Forbid(ex.Message); }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
         catch (Exception ex)                   { return StatusCode(500, ex.Message); }
     }
 
@@ -62,7 +62,7 @@ public class AdminLiquiMolyReplenishmentController : ControllerBase
             var header = await _service.SubmitForApprovalAsync(requestRef, request, ct);
             return Ok(new { header.RequestRef, header.Status, header.SubmittedAt });
         }
-        catch (UnauthorizedAccessException ex) { return Forbid(ex.Message); }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
         catch (KeyNotFoundException ex)        { return NotFound(ex.Message); }
         catch (InvalidOperationException ex)   { return BadRequest(ex.Message); }
         catch (Exception ex)                   { return StatusCode(500, ex.Message); }
@@ -88,7 +88,7 @@ public class AdminLiquiMolyReplenishmentController : ControllerBase
                 lineCount = header.Lines.Count
             });
         }
-        catch (UnauthorizedAccessException ex) { return Forbid(ex.Message); }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
         catch (KeyNotFoundException ex)        { return NotFound(ex.Message); }
         catch (InvalidOperationException ex)   { return BadRequest(ex.Message); }
         catch (Exception ex)                   { return StatusCode(500, ex.Message); }
@@ -114,7 +114,7 @@ public class AdminLiquiMolyReplenishmentController : ControllerBase
                 header.RejectionReason
             });
         }
-        catch (UnauthorizedAccessException ex) { return Forbid(ex.Message); }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
         catch (KeyNotFoundException ex)        { return NotFound(ex.Message); }
         catch (InvalidOperationException ex)   { return BadRequest(ex.Message); }
         catch (Exception ex)                   { return StatusCode(500, ex.Message); }
@@ -133,7 +133,7 @@ public class AdminLiquiMolyReplenishmentController : ControllerBase
             var result = await _execService.ExecuteApprovedRequestAsync(requestRef, request, ct);
             return Ok(result);
         }
-        catch (UnauthorizedAccessException ex) { return Forbid(ex.Message); }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
         catch (KeyNotFoundException ex)        { return NotFound(ex.Message); }
         catch (InvalidOperationException ex)   { return BadRequest(ex.Message); }
         catch (Exception ex)                   { return StatusCode(500, ex.Message); }
@@ -153,7 +153,7 @@ public class AdminLiquiMolyReplenishmentController : ControllerBase
             var result = await _execService.RetryExecutionAsync(requestRef, request, ct);
             return Ok(result);
         }
-        catch (UnauthorizedAccessException ex) { return Forbid(ex.Message); }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
         catch (KeyNotFoundException ex)        { return NotFound(ex.Message); }
         catch (InvalidOperationException ex)   { return BadRequest(ex.Message); }
         catch (Exception ex)                   { return StatusCode(500, ex.Message); }
@@ -168,7 +168,7 @@ public class AdminLiquiMolyReplenishmentController : ControllerBase
         CancellationToken ct = default)
     {
         try { _roleService.Authorize(actorSapUserCode, LiquiMolyRole.Viewer); }
-        catch (UnauthorizedAccessException ex) { return Forbid(ex.Message); }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
 
         var header = await _service.GetAsync(requestRef, ct);
         return header == null ? NotFound() : Ok(header);
@@ -183,7 +183,7 @@ public class AdminLiquiMolyReplenishmentController : ControllerBase
         CancellationToken ct = default)
     {
         try { _roleService.Authorize(actorSapUserCode, LiquiMolyRole.Viewer); }
-        catch (UnauthorizedAccessException ex) { return Forbid(ex.Message); }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
 
         var (items, hasMore) = await _service.ListAsync(status, skip, take, ct);
         return Ok(new { items, hasMore, count = items.Count });
@@ -230,7 +230,7 @@ public class AdminLiquiMolyReportsController : ControllerBase
             var rows = _analyzer.Analyze(sourceProfile, targetProfile, sourceWarehouse, targetWarehouse, targetDays);
             return Ok(new { count = rows.Count, rows });
         }
-        catch (UnauthorizedAccessException ex) { return Forbid(ex.Message); }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
         catch (Exception ex)                   { return StatusCode(500, ex.Message); }
     }
 
@@ -254,7 +254,7 @@ public class AdminLiquiMolyReportsController : ControllerBase
                 .ToList();
             return Ok(new { count = rows.Count, rows });
         }
-        catch (UnauthorizedAccessException ex) { return Forbid(ex.Message); }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
         catch (Exception ex)                   { return StatusCode(500, ex.Message); }
     }
 
@@ -267,7 +267,7 @@ public class AdminLiquiMolyReportsController : ControllerBase
         CancellationToken ct = default)
     {
         try { _roleService.Authorize(actorSapUserCode, LiquiMolyRole.Viewer); }
-        catch (UnauthorizedAccessException ex) { return Forbid(ex.Message); }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
 
         var (items, hasMore) = await _service.ListAsync("EXECUTED", skip, take, ct);
         var rows = items.Select(r => new
@@ -285,7 +285,10 @@ public class AdminLiquiMolyReportsController : ControllerBase
         return Ok(new { rows, hasMore });
     }
 
-    /// <summary>Recent approval/rejection history.</summary>
+    /// <summary>
+    /// Chronological approval/rejection history across both APPROVED and REJECTED records.
+    /// skip/take operate over the combined result set, not per-status.
+    /// </summary>
     [HttpGet("approvals")]
     public async Task<IActionResult> Approvals(
         [FromQuery] string actorSapUserCode = "",
@@ -294,28 +297,25 @@ public class AdminLiquiMolyReportsController : ControllerBase
         CancellationToken ct = default)
     {
         try { _roleService.Authorize(actorSapUserCode, LiquiMolyRole.Viewer); }
-        catch (UnauthorizedAccessException ex) { return Forbid(ex.Message); }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
 
-        // Return both APPROVED and REJECTED records
-        var (approvedItems, _) = await _service.ListAsync("APPROVED", skip, take / 2, ct);
-        var (rejectedItems, _) = await _service.ListAsync("REJECTED", skip, take / 2, ct);
+        var (items, hasMore) = await _service.ListByStatusesAsync(
+            new[] { "APPROVED", "REJECTED" }, skip, take, ct);
 
-        var rows = approvedItems.Concat(rejectedItems)
-            .OrderByDescending(r => r.ApprovedAt ?? r.RejectedAt)
-            .Select(r => new
-            {
-                r.RequestRef,
-                r.Status,
-                r.RequestedBySapUser,
-                r.ApprovedBySapUser,
-                r.RejectedBySapUser,
-                r.RejectionReason,
-                r.SubmittedAt,
-                r.ApprovedAt,
-                r.RejectedAt,
-                r.Comments
-            });
+        var rows = items.Select(r => new
+        {
+            r.RequestRef,
+            r.Status,
+            r.RequestedBySapUser,
+            r.ApprovedBySapUser,
+            r.RejectedBySapUser,
+            r.RejectionReason,
+            r.SubmittedAt,
+            r.ApprovedAt,
+            r.RejectedAt,
+            r.Comments
+        });
 
-        return Ok(new { rows });
+        return Ok(new { rows, hasMore, count = items.Count });
     }
 }
