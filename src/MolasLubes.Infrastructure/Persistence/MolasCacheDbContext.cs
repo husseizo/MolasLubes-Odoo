@@ -531,6 +531,7 @@ public class MolasCacheDbContext : DbContext
             entity.Property(x => x.ExecutionMessage).HasMaxLength(500);
 
             entity.Property(x => x.CurrentStockTarget).HasPrecision(18, 4);
+            entity.Property(x => x.AvailableSupplierStock).HasPrecision(18, 4);
             entity.Property(x => x.QtySold30d).HasPrecision(18, 4);
             entity.Property(x => x.QtySold60d).HasPrecision(18, 4);
             entity.Property(x => x.QtySold90d).HasPrecision(18, 4);

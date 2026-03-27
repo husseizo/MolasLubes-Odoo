@@ -16,8 +16,9 @@ public class CacheLiquiMolyReplenishmentRequestLine
     public string? ItemName       { get; set; }
 
     // Demand snapshot at draft time
-    public decimal CurrentStockTarget { get; set; }  // AutoHub stock at draft time
-    public decimal QtySold30d         { get; set; }
+    public decimal CurrentStockTarget    { get; set; }  // AutoHub stock at draft time
+    public decimal AvailableSupplierStock { get; set; } // MolasLubes available at draft time
+    public decimal QtySold30d            { get; set; }
     public decimal QtySold60d         { get; set; }
     public decimal QtySold90d         { get; set; }
     public decimal AvgDailySales30d   { get; set; }

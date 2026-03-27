@@ -13,11 +13,14 @@ public class LiquiMolyRecommendationRow
     public string? ItemName       { get; init; }
 
     // Demand snapshot (from AutoHub / MOLAS_Live_2021)
-    public decimal CurrentStockTarget { get; init; }
-    public decimal QtySold30d         { get; init; }
-    public decimal QtySold60d         { get; init; }
-    public decimal QtySold90d         { get; init; }
-    public decimal AvgDailySales30d   { get; init; }
+    public decimal CurrentStockTarget    { get; init; }
+    public decimal QtySold30d            { get; init; }
+    public decimal QtySold60d            { get; init; }
+    public decimal QtySold90d            { get; init; }
+    public decimal AvgDailySales30d      { get; init; }
+
+    // Supplier stock (from MolasLubes / Molas_Lubes_LTD)
+    public decimal AvailableSupplierStock { get; init; }
 
     // Derived metrics
     public decimal DaysOfStock  { get; init; }

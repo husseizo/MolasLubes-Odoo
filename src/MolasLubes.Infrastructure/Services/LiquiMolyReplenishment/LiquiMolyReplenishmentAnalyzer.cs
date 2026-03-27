@@ -39,19 +39,22 @@ public class LiquiMolyReplenishmentAnalyzer
     /// </summary>
     /// <param name="sourceProfile">MolasLubes (supplier) profile key.</param>
     /// <param name="targetProfile">AutoHub (consumer) profile key.</param>
-    /// <param name="targetWarehouse">AutoHub warehouse to check stock against.</param>
+    /// <param name="sourceWarehouse">MolasLubes warehouse to check supplier stock against.</param>
+    /// <param name="targetWarehouse">AutoHub warehouse to check demand stock against.</param>
     /// <param name="targetDays">Number of coverage days for the suggested quantity formula.</param>
     public IReadOnlyList<LiquiMolyRecommendationRow> Analyze(
         string sourceProfile,
         string targetProfile,
+        string sourceWarehouse,
         string targetWarehouse,
         int    targetDays = TargetDaysDefault)
     {
-        // 1. Read all LM demand items from AutoHub
+        // 1. Read all LM demand items from AutoHub (target)
         var demandItems = _demandReader.ReadDemandItems(targetProfile, targetWarehouse);
 
-        // 2. Read article-number → MolasLubes ItemCode map
-        var sourceMap = _sourceMapReader.ReadArticleMap(sourceProfile);
+        // 2. Read article-number → (ItemCode, AvailableStock) from MolasLubes (source).
+        //    This is the supplier side: SuggestedQty will be capped to what they can ship.
+        var sourceMap = _sourceMapReader.ReadSourceItemMap(sourceProfile, sourceWarehouse);
 
         var rows = new List<LiquiMolyRecommendationRow>();
 
@@ -60,7 +63,7 @@ public class LiquiMolyReplenishmentAnalyzer
             // In AutoHub, ItemCode IS the article number (e.g. "3682")
             var articleNumber = item.ItemCode;
 
-            if (!sourceMap.TryGetValue(articleNumber, out var sourceItemCode))
+            if (!sourceMap.TryGetValue(articleNumber, out var srcData))
             {
                 _logger.LogDebug(
                     "Analyzer: skipping '{Article}' — no source item in {Profile}",
@@ -73,9 +76,13 @@ public class LiquiMolyReplenishmentAnalyzer
                 ? Math.Round(item.Available / avgDailySales, 2)
                 : (item.Available > 0 ? 999m : 0m);
 
-            var suggestedQty = avgDailySales > 0
+            // Raw demand-driven quantity; then cap by what the supplier can actually ship.
+            var rawSuggestedQty = avgDailySales > 0
                 ? Math.Max(0m, Math.Ceiling(targetDays * avgDailySales - item.Available))
                 : 0m;
+
+            var supplierAvailable = Math.Max(0m, srcData.AvailableStock);
+            var suggestedQty      = Math.Min(rawSuggestedQty, supplierAvailable);
 
             var (trend, priority) = Classify(
                 item.Available, item.QtySold30d, item.QtySold60d, item.QtySold90d,
@@ -83,19 +90,20 @@ public class LiquiMolyReplenishmentAnalyzer
 
             rows.Add(new LiquiMolyRecommendationRow
             {
-                SourceItemCode    = sourceItemCode,
-                TargetItemCode    = item.ItemCode,
-                ArticleNumber     = articleNumber,
-                ItemName          = item.ItemName,
-                CurrentStockTarget = item.Available,
-                QtySold30d        = item.QtySold30d,
-                QtySold60d        = item.QtySold60d,
-                QtySold90d        = item.QtySold90d,
-                AvgDailySales30d  = avgDailySales,
-                DaysOfStock       = daysOfStock,
-                SuggestedQty      = suggestedQty,
-                TrendCategory     = trend,
-                Priority          = priority
+                SourceItemCode        = srcData.ItemCode,
+                TargetItemCode        = item.ItemCode,
+                ArticleNumber         = articleNumber,
+                ItemName              = item.ItemName,
+                CurrentStockTarget    = item.Available,
+                AvailableSupplierStock = supplierAvailable,
+                QtySold30d            = item.QtySold30d,
+                QtySold60d            = item.QtySold60d,
+                QtySold90d            = item.QtySold90d,
+                AvgDailySales30d      = avgDailySales,
+                DaysOfStock           = daysOfStock,
+                SuggestedQty          = suggestedQty,
+                TrendCategory         = trend,
+                Priority              = priority
             });
         }
 
