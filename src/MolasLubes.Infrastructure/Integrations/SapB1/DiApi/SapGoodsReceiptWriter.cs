@@ -54,6 +54,8 @@ public class SapGoodsReceiptWriter
                 gr.TaxDate  = DateTime.Today;
                 gr.Comments = $"LM Transfer {transferRef} ← {sourceProfile} | {comments}".Trim();
                 gr.UserFields.Fields.Item("U_TransferRef").Value = transferRef;
+                gr.UserFields.Fields.Item("U_FromDb").Value      = sourceProfile;
+                gr.UserFields.Fields.Item("U_ToDb").Value        = profileKey;
 
                 foreach (var line in lines)
                 {

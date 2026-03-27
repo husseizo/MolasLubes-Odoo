@@ -15,6 +15,7 @@ using MolasLubes.Infrastructure.Services.Stock;
 using MolasLubes.Infrastructure.Services.Sync;
 using MolasLubes.Infrastructure.Services.Backfill;
 using MolasLubes.Infrastructure.Services.LiquiMolyTransfers;
+using MolasLubes.Infrastructure.Services.LiquiMolyReplenishment;
 using MolasLubes.Infrastructure.Services.Background;
 using MolasLubes.Infrastructure.Security;
 using MolasLubes.Infrastructure.Integrations.LiquiMoly;
@@ -207,6 +208,24 @@ builder.Services.AddScoped<InventoryCountingUomBackfillService>();
 builder.Services.AddScoped<BulkInventoryCountingUomBackfillService>();
 builder.Services.AddSingleton<TransferRefGenerator>();
 builder.Services.AddScoped<LiquiMolyTransferService>();
+
+// =====================================================
+// LIQUI-MOLY REPLENISHMENT — Phases 1–6
+// =====================================================
+builder.Services.Configure<MolasLubes.Infrastructure.Security.LiquiMolyPermissionsOptions>(
+    builder.Configuration.GetSection(
+        MolasLubes.Infrastructure.Security.LiquiMolyPermissionsOptions.SectionName));
+
+builder.Services.AddScoped<MolasLubes.Infrastructure.Integrations.SapB1.DiApi.SapUserReader>();
+builder.Services.AddScoped<MolasLubes.Infrastructure.Security.LiquiMolyRoleService>();
+
+builder.Services.AddScoped<MolasLubes.Infrastructure.Integrations.SapB1.DiApi.SapLiquiMolyDemandReader>();
+builder.Services.AddScoped<MolasLubes.Infrastructure.Integrations.SapB1.DiApi.SapLiquiMolySourceMapReader>();
+builder.Services.AddScoped<LiquiMolyReplenishmentAnalyzer>();
+
+builder.Services.AddSingleton<ReplenishmentRefGenerator>();
+builder.Services.AddScoped<LiquiMolyReplenishmentService>();
+builder.Services.AddScoped<LiquiMolyReplenishmentExecutionService>();
 
 // =====================================================
 // AUTOHUB SERVICES — PROFILE B

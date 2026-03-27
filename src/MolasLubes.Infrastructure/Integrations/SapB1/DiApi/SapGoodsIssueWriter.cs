@@ -54,6 +54,8 @@ public class SapGoodsIssueWriter
                 gi.TaxDate  = DateTime.Today;
                 gi.Comments = $"LM Transfer {transferRef} → {targetProfile} | {comments}".Trim();
                 gi.UserFields.Fields.Item("U_TransferRef").Value = transferRef;
+                gi.UserFields.Fields.Item("U_FromDb").Value      = profileKey;
+                gi.UserFields.Fields.Item("U_ToDb").Value        = targetProfile;
 
                 foreach (var line in lines)
                 {
@@ -108,6 +110,65 @@ public class SapGoodsIssueWriter
 
         if (threadException != null) throw threadException;
         return result!;
+    }
+
+    /// <summary>
+    /// Checks the source SAP company for an OIGE whose U_TransferRef matches the given ref.
+    /// Returns the existing document ref if found, or null if no match.
+    /// Symmetric to SapGoodsReceiptWriter.FindExistingReceipt — used when retrying after a
+    /// partial failure to avoid duplicate GI creation.
+    /// </summary>
+    public SapDocumentRef? FindGoodsIssueByTransferRef(string profileKey, string transferRef)
+    {
+        if (!_profiles.Profiles.TryGetValue(profileKey, out var profile))
+            throw new InvalidOperationException($"Profile '{profileKey}' not configured.");
+
+        SapDocumentRef? found = null;
+        Exception? threadException = null;
+
+        var thread = new Thread(() =>
+        {
+            Company? company = null;
+            Recordset? rs    = null;
+
+            try
+            {
+                company = CreateAndConnect(profile.Sap);
+                rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
+
+                var safeRef = transferRef.Replace("'", "''");
+                rs.DoQuery($"SELECT DocEntry, DocNum FROM OIGE WHERE U_TransferRef = '{safeRef}'");
+
+                if (!rs.EoF)
+                {
+                    var docEntry = Convert.ToInt32(rs.Fields.Item("DocEntry").Value);
+                    var docNum   = rs.Fields.Item("DocNum").Value?.ToString() ?? docEntry.ToString();
+                    found = new SapDocumentRef(docEntry, docNum);
+                }
+            }
+            catch (Exception ex)
+            {
+                threadException = ex;
+            }
+            finally
+            {
+                if (rs != null) Marshal.ReleaseComObject(rs);
+                DisconnectAndRelease(company);
+            }
+        });
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+
+        if (threadException != null) throw threadException;
+
+        if (found != null)
+            _logger.LogInformation(
+                "SapGoodsIssueWriter: found existing GI | Profile={Profile} | DocEntry={Entry} | DocNum={Num} | Ref={Ref}",
+                profileKey, found.DocEntry, found.DocNum, transferRef);
+
+        return found;
     }
 
     private static Company CreateAndConnect(SapSettings sap)
