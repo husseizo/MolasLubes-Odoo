@@ -60,15 +60,32 @@ public class SapLiquiMolySourceMapReader
 
                 var safeWhs = warehouseCode.Replace("'", "''");
                 rs.DoQuery($@"
-SELECT i.ItemCode, i.ItemName, i.U_Item_Name,
-       ISNULL(w.OnHand,     0) AS OnHand,
-       ISNULL(w.IsCommited, 0) AS Committed
-FROM OITM i
-LEFT JOIN OITW w ON w.ItemCode = i.ItemCode
-                AND w.WhsCode  = '{safeWhs}'
-WHERE i.U_MdlTEST = 'LIQUI MOLY'
-  AND i.frozenFor = 'N'
-ORDER BY i.ItemCode
+IF COL_LENGTH('OITM', 'U_MdlTEST') IS NOT NULL
+   AND COL_LENGTH('OITM', 'U_Item_Name') IS NOT NULL
+BEGIN
+    SELECT i.ItemCode, i.ItemName, i.U_Item_Name,
+           ISNULL(w.OnHand,     0) AS OnHand,
+           ISNULL(w.IsCommited, 0) AS Committed
+    FROM OITM i
+    LEFT JOIN OITW w ON w.ItemCode = i.ItemCode
+                    AND w.WhsCode  = '{safeWhs}'
+    WHERE i.U_MdlTEST = 'LIQUI MOLY'
+      AND i.frozenFor = 'N'
+    ORDER BY i.ItemCode
+END
+ELSE
+BEGIN
+    SELECT i.ItemCode, i.ItemName,
+           CAST(NULL AS NVARCHAR(254)) AS U_Item_Name,
+           ISNULL(w.OnHand,     0) AS OnHand,
+           ISNULL(w.IsCommited, 0) AS Committed
+    FROM OITM i
+    LEFT JOIN OITW w ON w.ItemCode = i.ItemCode
+                    AND w.WhsCode  = '{safeWhs}'
+    WHERE i.frozenFor = 'N'
+      AND TRY_CONVERT(INT, i.ItemCode) IS NOT NULL
+    ORDER BY i.ItemCode
+END
 ");
 
                 while (!rs.EoF)
@@ -79,7 +96,7 @@ ORDER BY i.ItemCode
                     var onHand    = Convert.ToDecimal((object)rs.Fields.Item("OnHand").Value);
                     var committed = Convert.ToDecimal((object)rs.Fields.Item("Committed").Value);
 
-                    var artNum = ExtractArticleNumber(uItemName, itemName);
+                    var artNum = ExtractArticleNumber(uItemName, itemName, itemCode);
                     if (artNum != null && !map.ContainsKey(artNum))
                         map[artNum] = new SourceItemData(itemCode, onHand - committed);
 
@@ -133,11 +150,24 @@ ORDER BY i.ItemCode
                 rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
 
                 rs.DoQuery(@"
-SELECT ItemCode, ItemName, U_Item_Name
-FROM OITM
-WHERE U_MdlTEST = 'LIQUI MOLY'
-  AND frozenFor = 'N'
-ORDER BY ItemCode
+IF COL_LENGTH('OITM', 'U_MdlTEST') IS NOT NULL
+   AND COL_LENGTH('OITM', 'U_Item_Name') IS NOT NULL
+BEGIN
+    SELECT ItemCode, ItemName, U_Item_Name
+    FROM OITM
+    WHERE U_MdlTEST = 'LIQUI MOLY'
+      AND frozenFor = 'N'
+    ORDER BY ItemCode
+END
+ELSE
+BEGIN
+    SELECT ItemCode, ItemName,
+           CAST(NULL AS NVARCHAR(254)) AS U_Item_Name
+    FROM OITM
+    WHERE frozenFor = 'N'
+      AND TRY_CONVERT(INT, ItemCode) IS NOT NULL
+    ORDER BY ItemCode
+END
 ");
 
                 while (!rs.EoF)
@@ -146,7 +176,7 @@ ORDER BY ItemCode
                     var itemName    = rs.Fields.Item("ItemName").Value?.ToString();
                     var uItemName   = rs.Fields.Item("U_Item_Name").Value?.ToString()?.Trim();
 
-                    var artNum = ExtractArticleNumber(uItemName, itemName);
+                    var artNum = ExtractArticleNumber(uItemName, itemName, itemCode);
                     if (artNum != null && !map.ContainsKey(artNum))
                         map[artNum] = itemCode;
 
@@ -182,7 +212,7 @@ ORDER BY ItemCode
     /// <summary>
     /// Mirrors SapLiquiMolyItemMapper.ExtractArticleNumber — must stay in sync.
     /// </summary>
-    private static string? ExtractArticleNumber(string? uItemName, string? itemName)
+    private static string? ExtractArticleNumber(string? uItemName, string? itemName, string? itemCode)
     {
         static string? FindNumber(string? text)
         {
@@ -191,7 +221,7 @@ ORDER BY ItemCode
             return match.Success ? match.Value : null;
         }
 
-        return FindNumber(uItemName) ?? FindNumber(itemName);
+        return FindNumber(uItemName) ?? FindNumber(itemName) ?? FindNumber(itemCode);
     }
 
     private static Company CreateAndConnect(SapSettings sap)
