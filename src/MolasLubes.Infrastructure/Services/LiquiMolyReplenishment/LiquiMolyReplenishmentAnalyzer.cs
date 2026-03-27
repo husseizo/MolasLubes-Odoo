@@ -60,8 +60,15 @@ public class LiquiMolyReplenishmentAnalyzer
 
         foreach (var item in demandItems)
         {
-            // In AutoHub, ItemCode IS the article number (e.g. "3682")
-            var articleNumber = item.ItemCode;
+            var articleNumber = item.ArticleNumber;
+
+            if (string.IsNullOrWhiteSpace(articleNumber))
+            {
+                _logger.LogDebug(
+                    "Analyzer: skipping target item '{ItemCode}' - no extractable article number",
+                    item.ItemCode);
+                continue;
+            }
 
             if (!sourceMap.TryGetValue(articleNumber, out var srcData))
             {

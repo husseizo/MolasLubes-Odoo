@@ -1,6 +1,7 @@
 #pragma warning disable CA1416 // COM interop — Windows only
 
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MolasLubes.Infrastructure.Integrations.SapB1.Profiles;
@@ -75,16 +76,20 @@ ORDER BY i.ItemCode
 
                 while (!rs.EoF)
                 {
-                    var onHand    = Convert.ToDecimal((object)rs.Fields.Item("OnHand").Value);
-                    var committed = Convert.ToDecimal((object)rs.Fields.Item("Committed").Value);
+                    var itemCode      = rs.Fields.Item("ItemCode").Value?.ToString() ?? string.Empty;
+                    var itemName      = rs.Fields.Item("ItemName").Value?.ToString();
+                    var onHand        = Convert.ToDecimal((object)rs.Fields.Item("OnHand").Value);
+                    var committed     = Convert.ToDecimal((object)rs.Fields.Item("Committed").Value);
+                    var articleNumber = ExtractArticleNumber(itemName, itemCode);
 
                     results.Add(new LiquiMolyDemandItem(
-                        ItemCode:   rs.Fields.Item("ItemCode").Value?.ToString() ?? string.Empty,
-                        ItemName:   rs.Fields.Item("ItemName").Value?.ToString(),
-                        Available:  onHand - committed,
-                        QtySold30d: Convert.ToDecimal((object)rs.Fields.Item("Qty30d").Value),
-                        QtySold60d: Convert.ToDecimal((object)rs.Fields.Item("Qty60d").Value),
-                        QtySold90d: Convert.ToDecimal((object)rs.Fields.Item("Qty90d").Value)));
+                        ItemCode:      itemCode,
+                        ItemName:      itemName,
+                        ArticleNumber: articleNumber,
+                        Available:     onHand - committed,
+                        QtySold30d:    Convert.ToDecimal((object)rs.Fields.Item("Qty30d").Value),
+                        QtySold60d:    Convert.ToDecimal((object)rs.Fields.Item("Qty60d").Value),
+                        QtySold90d:    Convert.ToDecimal((object)rs.Fields.Item("Qty90d").Value)));
 
                     rs.MoveNext();
                 }
@@ -114,6 +119,18 @@ ORDER BY i.ItemCode
     }
 
     // ── Helpers ──────────────────────────────────────────
+
+    private static string? ExtractArticleNumber(string? itemName, string? itemCode)
+    {
+        static string? FindNumber(string? text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return null;
+            var match = Regex.Match(text.Trim(), @"(?<!\d)\d{3,6}(?!\d)");
+            return match.Success ? match.Value : null;
+        }
+
+        return FindNumber(itemName) ?? FindNumber(itemCode);
+    }
 
     private static Company CreateAndConnect(SapSettings sap)
     {
@@ -149,11 +166,13 @@ ORDER BY i.ItemCode
 
 /// <summary>
 /// Raw demand metrics for one Liqui Moly item in the target company.
-/// ItemCode in the target DB equals the Liqui Moly article number (e.g. "3682").
+/// ArticleNumber is extracted from the target-side ItemName / ItemCode so demand
+/// can be joined to MolasLubes numeric article ItemCodes.
 /// </summary>
 public record LiquiMolyDemandItem(
     string  ItemCode,
     string? ItemName,
+    string? ArticleNumber,
     decimal Available,
     decimal QtySold30d,
     decimal QtySold60d,
