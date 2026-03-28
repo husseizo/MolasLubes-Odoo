@@ -75,6 +75,10 @@ var syncSettings = builder.Configuration
     .GetSection("SyncSettings")
     .Get<SyncSettings>() ?? new SyncSettings();
 
+var quartzMaxConcurrency = Math.Max(
+    1,
+    builder.Configuration.GetValue<int?>("QuartzConcurrency:MaxConcurrency") ?? 1);
+
 // =====================================================
 // 🔐 API SECURITY
 // =====================================================
@@ -375,7 +379,7 @@ builder.Services.AddQuartz(q =>
 {
     q.UseDefaultThreadPool(tp =>
     {
-        tp.MaxConcurrency = 1; // single pipeline execution
+        tp.MaxConcurrency = quartzMaxConcurrency;
     });
 
     void RegisterJob<T>(string name, string cron) where T : IJob
