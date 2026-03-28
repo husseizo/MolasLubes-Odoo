@@ -70,6 +70,7 @@ public class GermaxAutoHubSyncService
                 neon.EngineCode          = row.EngineCode;
                 neon.GermaxArticleNumber = row.GermaxArticleNumber;
                 neon.OemPartNumber       = row.OemPartNumber;
+                neon.PartsCatalog        = row.PartsCatalog;
                 neon.FitForAuto          = row.FitForAuto;
                 neon.Description         = row.Description;
                 neon.ImageUrl            = row.ImageUrl;
@@ -93,6 +94,7 @@ public class GermaxAutoHubSyncService
                     EngineCode           = row.EngineCode,
                     GermaxArticleNumber  = row.GermaxArticleNumber,
                     OemPartNumber        = row.OemPartNumber,
+                    PartsCatalog         = row.PartsCatalog,
                     FitForAuto           = row.FitForAuto,
                     Description          = row.Description,
                     ImageUrl             = row.ImageUrl,

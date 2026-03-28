@@ -390,6 +390,7 @@ public class MolasCacheDbContext : DbContext
             entity.Property(x => x.AllImageUrls);               // JSON array of strings
             entity.Property(x => x.Approvals);                  // JSON array of strings
             entity.Property(x => x.Specifications);             // JSON object (key-value)
+            entity.Property(x => x.OverviewProperties);         // JSON array of strings
 
             // PDF downloads
             entity.Property(x => x.ProductInfoPdfUrl).HasMaxLength(500);

@@ -549,7 +549,7 @@ using (var scope = app.Services.CreateScope())
         Log.Warning("AutoHub CacheDb connection string is not configured — skipping Live2021Cache migration.");
     }
 
-    // Profile B — MolasAutoHub (Neon/PostgreSQL)
+    // Profile B — Parts_Catalog (PostgreSQL for AutoHub / Germax)
     var autoHubNeonConn = builder.Configuration[
         "IntegrationProfiles:Profiles:AutoHub:ConnectionStrings:NeonDb"];
     if (!string.IsNullOrWhiteSpace(autoHubNeonConn) && !autoHubNeonConn.StartsWith("CHANGE_ME"))
@@ -560,7 +560,7 @@ using (var scope = app.Services.CreateScope())
     }
     else
     {
-        Log.Warning("AutoHub NeonDb connection string is not configured — skipping MolasAutoHub migration.");
+        Log.Warning("AutoHub NeonDb connection string is not configured — skipping Parts_Catalog migration.");
     }
 }
 

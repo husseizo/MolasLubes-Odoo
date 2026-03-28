@@ -377,6 +377,7 @@ public class NeonDbContext : DbContext
             e.Property(x => x.AllImageUrls);                    // JSON array of strings
             e.Property(x => x.Approvals);                       // JSON array of strings
             e.Property(x => x.Specifications);                  // JSON object (key-value)
+            e.Property(x => x.OverviewProperties);              // JSON array of strings
 
             // PDF downloads
             e.Property(x => x.ProductInfoPdfUrl).HasMaxLength(500);

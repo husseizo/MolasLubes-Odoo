@@ -25,6 +25,10 @@ public class GermaxProductScraperService
     private static readonly Regex ArticlePattern =
         new(@"\b([A-Z]{1,3}\d{3,6})\b", RegexOptions.Compiled);
 
+    private static readonly Regex OemPartTokenPattern =
+        new(@"\b(?=[A-Z0-9-]{4,20}\b)(?=[A-Z0-9-]*[A-Z])(?=[A-Z0-9-]*\d)[A-Z0-9-]+\b",
+            RegexOptions.Compiled);
+
     private readonly HttpClient _http;
     private readonly GermaxScraperSettings _settings;
     private readonly ILogger<GermaxProductScraperService> _logger;
@@ -399,7 +403,10 @@ public class GermaxProductScraperService
                 if (lbl.Contains("germax"))
                     dto.GermaxArticleNumber = value;  // page attribute wins outright
                 else if (lbl.Contains("oem"))
+                {
                     dto.OemPartNumber = value;
+                    dto.PartsCatalog  = SerializePartsCatalog(ExtractOemPartNumbers(value));
+                }
                 else if (lbl.Contains("fit") || lbl.Contains("vehicle"))
                     dto.FitForAuto = value;
             }
@@ -447,6 +454,26 @@ public class GermaxProductScraperService
             itemCode, dto.GermaxArticleNumber, dto.OemPartNumber, imageUrls.Count);
 
         return dto;
+    }
+
+    private static List<string> ExtractOemPartNumbers(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return new List<string>();
+
+        return OemPartTokenPattern
+            .Matches(value.ToUpperInvariant())
+            .Select(match => match.Value.Trim())
+            .Where(token => token.Length >= 4)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static string? SerializePartsCatalog(List<string> partNumbers)
+    {
+        return partNumbers.Count == 0
+            ? null
+            : JsonSerializer.Serialize(partNumbers);
     }
 
     // =====================================================

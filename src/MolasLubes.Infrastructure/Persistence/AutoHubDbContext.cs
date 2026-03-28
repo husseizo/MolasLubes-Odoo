@@ -4,7 +4,7 @@ using MolasLubes.Domain.Entities.Neon;
 namespace MolasLubes.Infrastructure.Persistence;
 
 /// <summary>
-/// EF Core context for the MolasAutoHub Neon/PostgreSQL database (Profile B).
+/// EF Core context for the Parts_Catalog PostgreSQL database (Profile B).
 /// Dedicated to AutoHub / Germax entities — never shares tables with NeonDbContext.
 /// </summary>
 public class AutoHubDbContext : DbContext
@@ -50,6 +50,9 @@ public class AutoHubDbContext : DbContext
 
             e.Property(x => x.OemPartNumber)
              .HasColumnName("oem_part_number");
+
+            e.Property(x => x.PartsCatalog)
+             .HasColumnName("parts_catalog");
 
             e.Property(x => x.FitForAuto)
              .HasColumnName("fit_for_auto");

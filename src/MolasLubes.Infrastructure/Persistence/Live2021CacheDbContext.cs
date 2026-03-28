@@ -39,6 +39,7 @@ public class Live2021CacheDbContext : DbContext
             entity.Property(x => x.EngineCode).HasMaxLength(100);
             entity.Property(x => x.GermaxArticleNumber).HasMaxLength(50);
             entity.Property(x => x.OemPartNumber).HasMaxLength(255);
+            entity.Property(x => x.PartsCatalog);
             entity.Property(x => x.ProductUrl).HasMaxLength(500);
             entity.Property(x => x.ImageUrl).HasMaxLength(500);
             entity.Property(x => x.MatchMethod).HasMaxLength(50);

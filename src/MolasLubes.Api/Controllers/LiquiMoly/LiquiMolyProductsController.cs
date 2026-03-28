@@ -1,7 +1,9 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using MolasLubes.Api.Security;
 using MolasLubes.Infrastructure.Persistence;
+using MolasLubes.Infrastructure.Services.Sync;
 using Quartz;
 
 namespace MolasLubes.Api.Controllers.LiquiMoly;
@@ -107,8 +109,9 @@ public class LiquiMolyProductsController : ControllerBase
             AllImageUrls = Deserialise<List<string>>(p.AllImageUrls),
 
             // ── Approvals & Specifications ────────────────────────────
-            Approvals      = Deserialise<List<string>>(p.Approvals),
-            Specifications = Deserialise<Dictionary<string, string>>(p.Specifications),
+            Approvals          = Deserialise<List<string>>(p.Approvals),
+            Specifications     = Deserialise<Dictionary<string, string>>(p.Specifications),
+            OverviewProperties = Deserialise<List<string>>(p.OverviewProperties),
 
             // ── Downloads ─────────────────────────────────────────────
             p.ProductInfoPdfUrl,
@@ -152,13 +155,18 @@ public class LiquiMolyProductsController : ControllerBase
 
 [ApiController]
 [Route("api/admin/liquimoly")]
+[ServiceFilter(typeof(ApiKeyAttribute))]
 public class AdminLiquiMolyController : ControllerBase
 {
     private readonly ISchedulerFactory _schedulerFactory;
+    private readonly LiquiMolyNeonSyncService _neonSyncService;
 
-    public AdminLiquiMolyController(ISchedulerFactory schedulerFactory)
+    public AdminLiquiMolyController(
+        ISchedulerFactory schedulerFactory,
+        LiquiMolyNeonSyncService neonSyncService)
     {
         _schedulerFactory = schedulerFactory;
+        _neonSyncService = neonSyncService;
     }
 
     // POST /api/admin/liquimoly/scrape
@@ -169,5 +177,17 @@ public class AdminLiquiMolyController : ControllerBase
         await scheduler.TriggerJob(new JobKey("LiquiMolyProductScrapeJob"));
 
         return Ok(new { Message = "Liqui-Moly product scrape triggered" });
+    }
+
+    // POST /api/admin/liquimoly/sync-neon
+    [HttpPost("sync-neon")]
+    public async Task<IActionResult> SyncNeon(CancellationToken ct)
+    {
+        await _neonSyncService.SyncFromCacheAsync(ct);
+
+        return Ok(new
+        {
+            Message = "Liqui-Moly cache sync to Neon completed successfully"
+        });
     }
 }

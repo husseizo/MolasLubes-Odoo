@@ -46,6 +46,9 @@ public class NeonLiquiMolyProduct
     /// <summary>Technical specifications as a JSON object (e.g. {"Viscosity class":"SAE 5W-30"}).</summary>
     public string? Specifications  { get; set; }          // JSON-serialised Dictionary<string,string>
 
+    /// <summary>Overview properties / benefits as a JSON array.</summary>
+    public string? OverviewProperties { get; set; }       // JSON-serialised List<string>
+
     // =============================
     // DOWNLOADS
     // =============================

@@ -89,6 +89,10 @@ namespace MolasLubes.Infrastructure.Persistence.Migrations.AutoHub
                         .HasColumnType("text")
                         .HasColumnName("oem_part_number");
 
+                    b.Property<string>("PartsCatalog")
+                        .HasColumnType("text")
+                        .HasColumnName("parts_catalog");
+
                     b.Property<string>("ProductUrl")
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)")

@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using MolasLubes.Api.Security;
+using MolasLubes.Infrastructure.Services.Sync;
 using Quartz;
 
 namespace MolasLubes.Api.Controllers.AutoHub;
@@ -10,10 +11,14 @@ namespace MolasLubes.Api.Controllers.AutoHub;
 public class AutoHubAdminController : ControllerBase
 {
     private readonly ISchedulerFactory _schedulerFactory;
+    private readonly GermaxAutoHubSyncService _germaxSyncService;
 
-    public AutoHubAdminController(ISchedulerFactory schedulerFactory)
+    public AutoHubAdminController(
+        ISchedulerFactory schedulerFactory,
+        GermaxAutoHubSyncService germaxSyncService)
     {
         _schedulerFactory = schedulerFactory;
+        _germaxSyncService = germaxSyncService;
     }
 
     // -------------------------------------------------
@@ -54,5 +59,19 @@ public class AutoHubAdminController : ControllerBase
         await scheduler.TriggerJob(new JobKey("GermaxRetryFailedJob"), jobData);
 
         return Ok(new { Message = "Germax retry-failed job triggered successfully (all-time window)" });
+    }
+
+    // -------------------------------------------------
+    // GERMAX SYNC — push SCRAPED cache rows to Parts_Catalog
+    // -------------------------------------------------
+    [HttpPost("germax/sync-neon")]
+    public async Task<IActionResult> RunGermaxSyncNeon(CancellationToken ct)
+    {
+        await _germaxSyncService.SyncAsync(ct);
+
+        return Ok(new
+        {
+            Message = "Germax cache sync to Parts_Catalog completed successfully"
+        });
     }
 }

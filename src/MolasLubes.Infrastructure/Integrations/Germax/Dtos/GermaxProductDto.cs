@@ -5,6 +5,7 @@ public class GermaxProductDto
     public string   ItemCode            { get; set; } = string.Empty;
     public string?  GermaxArticleNumber { get; set; }
     public string?  OemPartNumber       { get; set; }
+    public string?  PartsCatalog        { get; set; }
     public string?  FitForAuto          { get; set; }
     public string?  Description         { get; set; }
     public string?  ProductUrl          { get; set; }

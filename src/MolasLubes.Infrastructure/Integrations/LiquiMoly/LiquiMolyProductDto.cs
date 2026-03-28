@@ -46,6 +46,12 @@ public class LiquiMolyProductDto
     /// </summary>
     public Dictionary<string, string> Specifications { get; set; } = new();
 
+    /// <summary>
+    /// Bullet-point overview properties / benefits from the product detail page.
+    /// Stored in scrape order.
+    /// </summary>
+    public List<string> OverviewProperties { get; set; } = new();
+
     // ─── Downloads ─────────────────────────────────────────────────────────────
     /// <summary>Direct URL to the English Production / Product Information PDF.</summary>
     public string? ProductInfoPdfUrl { get; set; }

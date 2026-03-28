@@ -48,6 +48,9 @@ namespace MolasLubes.Infrastructure.Persistence.Migrations.Live2021Cache
                         .HasMaxLength(255)
                         .HasColumnType("nvarchar(255)");
 
+                    b.Property<string>("PartsCatalog")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<string>("FitForAuto")
                         .HasColumnType("nvarchar(max)");
 

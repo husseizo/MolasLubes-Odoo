@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using MolasLubes.Domain.Entities.Cache;
 using MolasLubes.Domain.Entities.Neon;
 using MolasLubes.Infrastructure.Integrations.LiquiMoly;
 using MolasLubes.Infrastructure.Persistence;
@@ -13,6 +14,7 @@ namespace MolasLubes.Infrastructure.Services.Sync;
 /// </summary>
 public class LiquiMolyNeonSyncService
 {
+    private readonly MolasCacheDbContext                    _cache;
     private readonly NeonDbContext                          _neon;
     private readonly ILogger<LiquiMolyNeonSyncService>     _logger;
 
@@ -22,11 +24,79 @@ public class LiquiMolyNeonSyncService
     };
 
     public LiquiMolyNeonSyncService(
+        MolasCacheDbContext cache,
         NeonDbContext neon,
         ILogger<LiquiMolyNeonSyncService> logger)
     {
+        _cache  = cache;
         _neon   = neon;
         _logger = logger;
+    }
+
+    // =====================================================
+    // FULL SYNC — CACHE → NEON
+    // =====================================================
+    public async Task SyncFromCacheAsync(CancellationToken ct = default)
+    {
+        _logger.LogInformation("[LiquiMoly][Neon] Cache sync started");
+
+        var source = await _cache.CacheLiquiMolyProducts
+            .AsNoTracking()
+            .Where(x => x.IsActive)
+            .ToListAsync(ct);
+
+        var sourceArticles = new HashSet<string>(
+            source.Select(x => x.ArticleNumber),
+            StringComparer.OrdinalIgnoreCase);
+
+        var existing = await _neon.LiquiMolyProducts
+            .ToDictionaryAsync(x => x.ArticleNumber, ct);
+
+        if (source.Count == 0 && existing.Count == 0)
+        {
+            _logger.LogInformation("[LiquiMoly][Neon] Cache sync found nothing to replicate");
+            return;
+        }
+
+        var strategy = _neon.Database.CreateExecutionStrategy();
+
+        await strategy.ExecuteAsync(async () =>
+        {
+            await using var tx = await _neon.Database.BeginTransactionAsync(ct);
+
+            var upserted = 0;
+            var deactivated = 0;
+
+            foreach (var row in source)
+            {
+                if (existing.TryGetValue(row.ArticleNumber, out var neon))
+                {
+                    MapFromCache(row, neon);
+                }
+                else
+                {
+                    _neon.LiquiMolyProducts.Add(BuildEntityFromCache(row));
+                }
+
+                upserted++;
+            }
+
+            foreach (var neon in existing.Values)
+            {
+                if (neon.IsActive && !sourceArticles.Contains(neon.ArticleNumber))
+                {
+                    neon.IsActive = false;
+                    deactivated++;
+                }
+            }
+
+            await _neon.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+
+            _logger.LogInformation(
+                "[LiquiMoly][Neon] Cache sync completed | Upserted={Upserted} | Deactivated={Deactivated}",
+                upserted, deactivated);
+        });
     }
 
     // =====================================================
@@ -151,7 +221,45 @@ public class LiquiMolyNeonSyncService
             ? JsonSerializer.Serialize(dto.Specifications, _json)
             : null;
 
+        entity.OverviewProperties    = dto.OverviewProperties.Count > 0
+            ? JsonSerializer.Serialize(dto.OverviewProperties, _json)
+            : null;
+
         entity.ProductInfoPdfUrl     = dto.ProductInfoPdfUrl;
         entity.SafetyDataSheetPdfUrl = dto.SafetyDataSheetPdfUrl;
+    }
+
+    private static NeonLiquiMolyProduct BuildEntityFromCache(CacheLiquiMolyProduct row)
+    {
+        var entity = new NeonLiquiMolyProduct
+        {
+            ArticleNumber = row.ArticleNumber,
+            Name          = row.Name,
+        };
+
+        MapFromCache(row, entity);
+        return entity;
+    }
+
+    private static void MapFromCache(CacheLiquiMolyProduct row, NeonLiquiMolyProduct entity)
+    {
+        entity.Name                  = row.Name;
+        entity.Category              = row.Category;
+        entity.SubCategory           = row.SubCategory;
+        entity.Description           = row.Description;
+        entity.SpecGrade             = row.SpecGrade;
+        entity.PackagingSize         = row.PackagingSize;
+        entity.Liter                 = row.Liter;
+        entity.ImageUrl              = row.ImageUrl;
+        entity.ProductUrl            = row.ProductUrl;
+        entity.IsActive              = row.IsActive;
+        entity.ScrapedAt             = row.ScrapedAt;
+        entity.AllPackagingSizes     = row.AllPackagingSizes;
+        entity.AllImageUrls          = row.AllImageUrls;
+        entity.Approvals             = row.Approvals;
+        entity.Specifications        = row.Specifications;
+        entity.OverviewProperties    = row.OverviewProperties;
+        entity.ProductInfoPdfUrl     = row.ProductInfoPdfUrl;
+        entity.SafetyDataSheetPdfUrl = row.SafetyDataSheetPdfUrl;
     }
 }

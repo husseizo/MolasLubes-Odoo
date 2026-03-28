@@ -432,6 +432,9 @@ namespace MolasLubes.Infrastructure.Migrations
                         .HasMaxLength(30)
                         .HasColumnType("nvarchar(30)");
 
+                    b.Property<string>("OverviewProperties")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<string>("ProductInfoPdfUrl")
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");

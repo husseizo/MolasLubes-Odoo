@@ -456,6 +456,7 @@ public class LiquiMolyProductScraperService
         var images      = ExtractAllImages(doc, requestedSku);
         var (cat, sub)  = ExtractCategories(doc);
         var approvals   = ExtractApprovals(doc);
+        var overviewProperties = ExtractOverviewProperties(doc);
 
         // Sizes come from the category listing pages (captured during index build).
         // The product detail page loads them via JS, so HTML extraction is unreliable.
@@ -504,6 +505,7 @@ public class LiquiMolyProductScraperService
             SubCategory           = sub,
             Specifications        = new Dictionary<string, string>(),
             Approvals             = approvals,
+            OverviewProperties    = overviewProperties,
             SpecGrade             = specGrade,
             ProductInfoPdfUrl     = pdf,
             SafetyDataSheetPdfUrl = sds,
@@ -742,6 +744,27 @@ public class LiquiMolyProductScraperService
             .Select(p => p.Trim())
             .Where(p => p.Length > 2 && p.Length < 120) // skip blanks and runaway paragraphs
             .Distinct()
+            .ToList();
+    }
+
+    /// <summary>
+    /// Extracts the bullet-point overview properties shown in the product overview block:
+    /// div.product.attribute.properties ul.check-list li.value span
+    /// This includes items inside the hidden "show more" container.
+    /// </summary>
+    private static List<string> ExtractOverviewProperties(HtmlDocument doc)
+    {
+        var nodes = doc.DocumentNode.SelectNodes(
+            "//div[contains(@class,'product') and contains(@class,'attribute') and contains(@class,'properties')]" +
+            "//ul[contains(@class,'check-list')]//li[contains(@class,'value')]//span");
+
+        if (nodes == null || nodes.Count == 0)
+            return new List<string>();
+
+        return nodes
+            .Select(node => HtmlEntity.DeEntitize(node.InnerText.Trim()))
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
 
