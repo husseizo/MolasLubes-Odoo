@@ -1,5 +1,9 @@
-﻿using Microsoft.EntityFrameworkCore;
+﻿using System.Text;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
 using MolasLubes.Api.Security;
+using MolasLubes.Infrastructure.Security;
 using Serilog;
 using Serilog.Events;
 using Serilog.Sinks.SystemConsole.Themes;
@@ -17,7 +21,6 @@ using MolasLubes.Infrastructure.Services.Backfill;
 using MolasLubes.Infrastructure.Services.LiquiMolyTransfers;
 using MolasLubes.Infrastructure.Services.LiquiMolyReplenishment;
 using MolasLubes.Infrastructure.Services.Background;
-using MolasLubes.Infrastructure.Security;
 using MolasLubes.Infrastructure.Integrations.LiquiMoly;
 using MolasLubes.Infrastructure.Integrations.Meguin;
 using MolasLubes.Infrastructure.Integrations.Germax;
@@ -82,6 +85,41 @@ builder.Services.Configure<ApiKeyOptions>(
     builder.Configuration.GetSection("ApiSecurity"));
 
 builder.Services.AddScoped<ApiKeyAttribute>();
+
+// ── JWT Auth ──────────────────────────────────────────────────────────────────
+builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.SectionName));
+builder.Services.AddSingleton<RefreshTokenStore>();
+builder.Services.AddScoped<AppUserRepository>();
+builder.Services.AddScoped<JwtService>();
+
+var jwtOpts = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>()!;
+builder.Services
+    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(opts =>
+    {
+        opts.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey         = new SymmetricSecurityKey(
+                                           Encoding.UTF8.GetBytes(jwtOpts.SecretKey)),
+            ValidateIssuer           = true,
+            ValidIssuer              = jwtOpts.Issuer,
+            ValidateAudience         = true,
+            ValidAudience            = jwtOpts.Audience,
+            ClockSkew                = TimeSpan.Zero
+        };
+    });
+builder.Services.AddAuthorization();
+
+// ── CORS ──────────────────────────────────────────────────────────────────────
+builder.Services.AddCors(o => o.AddPolicy("WebApp", p =>
+    p.WithOrigins(
+        "http://localhost:3000",
+        "https://admin.molaslubes.co.za"   // production origin
+    )
+    .AllowAnyHeader()
+    .AllowAnyMethod()
+    .AllowCredentials()));
 
 // =====================================================
 // CORE
@@ -574,6 +612,10 @@ else
 {
     app.UseHttpsRedirection();
 }
+
+app.UseCors("WebApp");
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapControllers();
 
