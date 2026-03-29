@@ -15,7 +15,6 @@ public class NeonGermaxProduct
     // =============================
     public string? GermaxArticleNumber { get; set; }
     public string? OemPartNumber       { get; set; }
-    public string? PartsCatalog        { get; set; }   // JSON array of all OEM part numbers
     public string? FitForAuto          { get; set; }
     public string? Description         { get; set; }
     public string? ImageUrl            { get; set; }

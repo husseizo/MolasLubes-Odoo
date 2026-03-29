@@ -61,7 +61,6 @@ public class AutoHubGermaxProductsController : ControllerBase
                 x.ItemCode.Contains(s) ||
                 (x.GermaxArticleNumber != null && x.GermaxArticleNumber.Contains(s)) ||
                 (x.OemPartNumber       != null && x.OemPartNumber.Contains(s))       ||
-                (x.PartsCatalog        != null && x.PartsCatalog.Contains(s))        ||
                 (x.FitForAuto          != null && x.FitForAuto.Contains(s)));
         }
 
@@ -147,7 +146,6 @@ public class AutoHubGermaxProductsController : ControllerBase
             // ── Germax enrichment ──────────────────────────────────────
             p.GermaxArticleNumber,
             p.OemPartNumber,
-            PartsCatalog = Deserialize<List<string>>(p.PartsCatalog),
             p.FitForAuto,
             p.Description,
             p.ProductUrl,

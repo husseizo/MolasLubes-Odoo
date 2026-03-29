@@ -402,10 +402,12 @@ public class GermaxProductScraperService
 
                 if (lbl.Contains("germax"))
                     dto.GermaxArticleNumber = value;  // page attribute wins outright
-                else if (lbl.Contains("oem"))
+                else if (IsOemPartNumberLabel(lbl))
                 {
-                    dto.OemPartNumber = value;
-                    dto.PartsCatalog  = SerializePartsCatalog(ExtractOemPartNumbers(value));
+                    var oemPartNumbers = ExtractOemPartNumbers(value);
+                    dto.OemPartNumber = oemPartNumbers.Count > 0
+                        ? string.Join(" ", oemPartNumbers)
+                        : value;
                 }
                 else if (lbl.Contains("fit") || lbl.Contains("vehicle"))
                     dto.FitForAuto = value;
@@ -469,11 +471,13 @@ public class GermaxProductScraperService
             .ToList();
     }
 
-    private static string? SerializePartsCatalog(List<string> partNumbers)
+    private static bool IsOemPartNumberLabel(string label)
     {
-        return partNumbers.Count == 0
-            ? null
-            : JsonSerializer.Serialize(partNumbers);
+        return label.Contains("oem")
+            && (label.Contains("part")
+                || label.Contains("number")
+                || label.Contains("reference")
+                || label.Contains("ref"));
     }
 
     // =====================================================

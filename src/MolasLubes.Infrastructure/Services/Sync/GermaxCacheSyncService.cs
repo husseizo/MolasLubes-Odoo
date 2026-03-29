@@ -196,7 +196,6 @@ public class GermaxCacheSyncService
 
         row.GermaxArticleNumber = dto.GermaxArticleNumber;
         row.OemPartNumber       = dto.OemPartNumber;
-        row.PartsCatalog        = dto.PartsCatalog;
         row.FitForAuto          = dto.FitForAuto;
         row.Description         = dto.Description;
         row.ImageUrl            = dto.ImageUrl;
