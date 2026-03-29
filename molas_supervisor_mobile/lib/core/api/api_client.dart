@@ -121,9 +121,10 @@ class ApiClient {
   }
 
   static String? _extractMessage(dynamic body) {
-    if (body is Map<String, dynamic>) {
-      return (body['message'] ?? body['title'] ?? body['error'])?.toString();
+    if (body is Map) {
+      return (body['message'] ?? body['error'] ?? body['title'])?.toString();
     }
+    if (body is String && body.isNotEmpty) return body;
     return null;
   }
 }
