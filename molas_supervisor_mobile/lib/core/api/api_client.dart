@@ -110,21 +110,21 @@ class ApiClient {
       401 => const UnauthorizedException(),
       403 => const ForbiddenException(),
       404 => const NotFoundException(),
-      409 => ConflictException(serverMessage ?? 'Conflict with current state.'),
+      409 => ConflictException(serverMessage),
       422 => body is Map<String, dynamic> && body.containsKey('errors')
           ? ValidationException.fromErrors(
               body['errors'] as Map<String, dynamic>)
-          : ValidationException(serverMessage ?? 'Validation failed.'),
-      >= 500 => ServerException(serverMessage ?? 'Server error. Please try again.'),
-      _ => UnknownApiException(serverMessage ?? 'An unexpected error occurred.'),
+          : ValidationException(serverMessage),
+      >= 500 => ServerException(serverMessage),
+      _ => UnknownApiException(serverMessage),
     };
   }
 
-  static String? _extractMessage(dynamic body) {
-    if (body is Map) {
-      return (body['message'] ?? body['error'] ?? body['title'])?.toString();
+  static String _extractMessage(dynamic data) {
+    if (data is Map) {
+      return (data['message'] ?? data['error'] ?? data['title'] ?? 'Unknown error').toString();
     }
-    if (body is String && body.isNotEmpty) return body;
-    return null;
+    if (data is String && data.isNotEmpty) return data;
+    return 'An error occurred';
   }
 }
