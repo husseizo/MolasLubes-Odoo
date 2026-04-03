@@ -34,8 +34,6 @@ public class NeonInvoiceSyncService
 
         await strategy.ExecuteAsync(async () =>
         {
-            await using var tx = await _neonDb.Database.BeginTransactionAsync();
-
             // -------------------------------------------------
             // 1️⃣ SAFE LAST SYNC (UTC)
             // -------------------------------------------------
@@ -168,6 +166,8 @@ public class NeonInvoiceSyncService
                 .Where(l => keys.Contains(l.InvoiceEntry))
                 .ToListAsync();
 
+            await using var tx = await _neonDb.Database.BeginTransactionAsync();
+
             _neonDb.InvoiceLines.RemoveRange(existingLines);
             _neonDb.InvoiceLines.AddRange(cacheLines);
 
@@ -200,8 +200,6 @@ public class NeonInvoiceSyncService
 
         await strategy.ExecuteAsync(async () =>
         {
-            await using var tx = await _neonDb.Database.BeginTransactionAsync();
-
             // -------------------------------------------------
             // 1️⃣ READ ALL FROM CACHE (HEADERS)
             // -------------------------------------------------
@@ -315,6 +313,8 @@ public class NeonInvoiceSyncService
             var existingLines = await _neonDb.InvoiceLines
                 .Where(l => keys.Contains(l.InvoiceEntry))
                 .ToListAsync();
+
+            await using var tx = await _neonDb.Database.BeginTransactionAsync();
 
             _neonDb.InvoiceLines.RemoveRange(existingLines);
             _neonDb.InvoiceLines.AddRange(cacheLines);
