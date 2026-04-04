@@ -22,6 +22,7 @@ using MolasLubes.Infrastructure.Integrations.LiquiMoly;
 using MolasLubes.Infrastructure.Integrations.Meguin;
 using MolasLubes.Infrastructure.Integrations.Germax;
 using MolasLubes.Infrastructure.Integrations.SapB1.Profiles;
+using Microsoft.OpenApi;
 using Quartz;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -92,7 +93,28 @@ builder.Services.AddScoped<ApiKeyAttribute>();
 // =====================================================
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(options =>
+{
+    const string apiKeyScheme = "ApiKey";
+
+    options.AddSecurityDefinition(apiKeyScheme, new OpenApiSecurityScheme
+    {
+        Description = "Enter the API key for protected endpoints using the X-Api-Key header.",
+        Type = SecuritySchemeType.ApiKey,
+        Name = "X-Api-Key",
+        In = ParameterLocation.Header
+    });
+
+    options.AddSecurityRequirement(document => new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecuritySchemeReference(apiKeyScheme, document, null),
+            new List<string>()
+        }
+    });
+});
+
+
 builder.Services.AddOpenApi();
 
 // =====================================================
@@ -571,7 +593,10 @@ using (var scope = app.Services.CreateScope())
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
-    app.UseSwaggerUI();
+    app.UseSwaggerUI(options =>
+    {
+        options.EnablePersistAuthorization();
+    });
     app.MapOpenApi();
 }
 else
