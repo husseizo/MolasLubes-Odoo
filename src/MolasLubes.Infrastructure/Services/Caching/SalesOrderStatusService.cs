@@ -43,7 +43,7 @@ public class SalesOrderStatusService
         {
             _logger.LogWarning(
                 "⚠ Order not found in cache | SapDocEntry={SapDocEntry} OdooSalesOrderIdFallback={OdooId}",
-                sapDocEntry, odooSalesOrderIdFallback ?? "N/A");
+                sapDocEntry, string.IsNullOrEmpty(odooSalesOrderIdFallback) ? "N/A (empty)" : odooSalesOrderIdFallback);
             return;
         }
 
@@ -68,8 +68,8 @@ public class SalesOrderStatusService
         // ❌ Not open → ignore (no exception)
         if (order.DocStatus != "O")
         {
-            _logger.LogWarning(
-                "⚠ Invalid state transition to Delivered | SapDocEntry={SapDocEntry} | CurrentStatus={Status}",
+            _logger.LogDebug(
+                "ℹ Order not in Open state → skipping | SapDocEntry={SapDocEntry} | CurrentStatus={Status}",
                 sapDocEntry,
                 order.DocStatus);
             return;

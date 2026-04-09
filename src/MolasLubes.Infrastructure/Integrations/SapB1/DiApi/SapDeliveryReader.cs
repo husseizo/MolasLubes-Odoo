@@ -151,10 +151,19 @@ ORDER BY d.DocEntry, l.LineNum
     /// <summary>
     /// Computes convenience header fields from accumulated lines before yielding.
     /// </summary>
-    private static SapDeliveryDto Finalise(SapDeliveryDto dto)
+    private SapDeliveryDto Finalise(SapDeliveryDto dto)
     {
         dto.BaseOrderEntry    = dto.Lines.FirstOrDefault()?.BaseEntry ?? 0;
         dto.DeliveredQuantity = dto.Lines.Sum(l => l.Quantity);
+
+        // Diagnostic logging for fallback lookup debugging
+        if (string.IsNullOrEmpty(dto.OdooParentSalesOrderId))
+        {
+            _logger.LogDebug(
+                "ℹ Delivery has no parent SO Odoo ID | DocEntry={DocEntry} BaseOrderEntry={BaseOrderEntry}",
+                dto.DocEntry, dto.BaseOrderEntry);
+        }
+
         return dto;
     }
 
