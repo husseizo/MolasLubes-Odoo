@@ -56,7 +56,7 @@ public class DeliveryDeltaSyncJob : IJob
         foreach (var d in deliveries)
         {
             if (d.BaseOrderEntry > 0)
-                await orderStatus.MarkOrderDeliveredAsync(d.BaseOrderEntry);
+                await orderStatus.MarkOrderDeliveredAsync(d.BaseOrderEntry, d.OdooParentSalesOrderId);
         }
 
         _logger.LogInformation("✅ Delivery Sync completed");

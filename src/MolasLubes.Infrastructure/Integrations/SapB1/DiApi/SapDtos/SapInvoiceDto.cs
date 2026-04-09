@@ -35,6 +35,12 @@ public class SapInvoiceLineDto
     public int BaseEntry { get; set; }   // ODLN / ORDR DocEntry
     public int BaseLine { get; set; }
 
+    /// <summary>
+    /// Parent sales order's U_Odoo_SO_ID (from ORDR when BaseEntry references ODLN).
+    /// Extracted to enable fallback lookup when marking orders as delivered.
+    /// </summary>
+    public string? OdooParentSalesOrderId { get; set; }
+
     // 🔗 ODOO LINE UDFs (INV1)
     public string? OdooInvoiceLineId { get; set; }
     public string? OdooStatus { get; set; }

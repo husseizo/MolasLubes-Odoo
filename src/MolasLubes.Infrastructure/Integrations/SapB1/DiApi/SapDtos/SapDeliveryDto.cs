@@ -25,6 +25,12 @@ public class SapDeliveryDto
     /// <summary>Sum of all line quantities — computed from Lines.</summary>
     public decimal DeliveredQuantity { get; set; }
 
+    /// <summary>
+    /// Parent sales order's U_Odoo_SO_ID (from ORDR).
+    /// Extracted to enable fallback lookup when marking orders as delivered.
+    /// </summary>
+    public string? OdooParentSalesOrderId { get; set; }
+
     // =========================
     // 🔗 ODOO HEADER UDFs (ODLN)
     // =========================

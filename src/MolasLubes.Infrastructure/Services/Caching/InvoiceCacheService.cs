@@ -149,7 +149,7 @@ public class InvoiceCacheService
             foreach (var line in inv.Lines)
             {
                 if (line.BaseEntry > 0)
-                    await _orderStatus.MarkOrderDeliveredAsync(line.BaseEntry);
+                    await _orderStatus.MarkOrderDeliveredAsync(line.BaseEntry, line.OdooParentSalesOrderId);
             }
         }
 

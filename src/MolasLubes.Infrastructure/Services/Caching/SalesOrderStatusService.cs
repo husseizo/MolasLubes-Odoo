@@ -20,16 +20,30 @@ public class SalesOrderStatusService
     /// <summary>
     /// Marks cached sales order as Delivered (SAP DocStatus = C)
     /// </summary>
-    public async Task MarkOrderDeliveredAsync(int sapDocEntry)
+    public async Task MarkOrderDeliveredAsync(int sapDocEntry, string? odooSalesOrderIdFallback = null)
     {
         var order = await _db.CacheSalesOrders
             .FirstOrDefaultAsync(o => o.SapDocEntry == sapDocEntry);
 
+        // 🔄 Fallback: Try lookup by Odoo Sales Order ID if primary lookup failed
+        if (order == null && !string.IsNullOrEmpty(odooSalesOrderIdFallback))
+        {
+            order = await _db.CacheSalesOrders
+                .FirstOrDefaultAsync(o => o.OdooSalesOrderId == odooSalesOrderIdFallback);
+
+            if (order != null)
+            {
+                _logger.LogInformation(
+                    "ℹ Order found via Odoo ID fallback | SapDocEntry={SapDocEntry} OdooSalesOrderId={OdooId}",
+                    sapDocEntry, odooSalesOrderIdFallback);
+            }
+        }
+
         if (order == null)
         {
             _logger.LogWarning(
-                "⚠ Order not found in cache | SapDocEntry={SapDocEntry}",
-                sapDocEntry);
+                "⚠ Order not found in cache | SapDocEntry={SapDocEntry} OdooSalesOrderIdFallback={OdooId}",
+                sapDocEntry, odooSalesOrderIdFallback ?? "N/A");
             return;
         }
 

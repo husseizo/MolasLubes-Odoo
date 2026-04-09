@@ -49,6 +49,9 @@ SELECT
     d.{OdooUdfs.LastSync}    AS HdrLastSync,
     d.{OdooUdfs.ErrorMsg}    AS HdrErrorMsg,
     d.{OdooUdfs.DeliveryId}  AS OdooDeliveryId,
+    
+    -- 🔗 Parent sales order's Odoo ID (fallback for order lookup)
+    o.U_Odoo_SO_ID           AS OdooParentSalesOrderId,
 
     l.LineNum,
     l.ItemCode,
@@ -67,6 +70,7 @@ SELECT
 
 FROM ODLN d
 INNER JOIN DLN1 l ON d.DocEntry = l.DocEntry
+LEFT JOIN ORDR o ON l.BaseEntry = o.DocEntry
 WHERE {whereClause}
 ORDER BY d.DocEntry, l.LineNum
 ");
@@ -92,7 +96,8 @@ ORDER BY d.DocEntry, l.LineNum
                     SapUpdateDate = (DateTime)rs.Fields.Item("UpdateDate").Value,
                     IsCancelled   = rs.Fields.Item("CANCELED").Value?.ToString() == "Y",
 
-                    OdooDeliveryId = rs.Fields.Item("OdooDeliveryId").Value?.ToString(),
+                    OdooDeliveryId         = rs.Fields.Item("OdooDeliveryId").Value?.ToString(),
+                    OdooParentSalesOrderId = rs.Fields.Item("OdooParentSalesOrderId").Value?.ToString(),
                     OdooStatus     = rs.Fields.Item("HdrStatus").Value?.ToString(),
                     OdooSyncDir    = rs.Fields.Item("HdrSyncDir").Value?.ToString(),
                     OdooErrorMsg   = rs.Fields.Item("HdrErrorMsg").Value?.ToString(),
