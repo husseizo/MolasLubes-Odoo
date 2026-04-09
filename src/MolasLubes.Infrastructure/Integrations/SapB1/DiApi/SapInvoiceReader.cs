@@ -34,17 +34,23 @@ public class SapInvoiceReader
         var invoiceLineParentOrderMap = new Dictionary<(int docEntry, int lineNum), string?>(); 
 
         // Query to fetch parent SO's U_Odoo_SO_ID for each invoice line
-        // Invoices can reference ODLN (delivery) or ORDR (sales order) directly
+        // Invoice lines can reference: 1) ORDR (sales order) directly, or 2) ODLN (delivery)
+        // For ODLN reference, we hop through DLN1 to find the parent ORDR
         rs.DoQuery($@"
 SELECT
     iv.DocEntry           AS InvoiceDocEntry,
     ivl.LineNum           AS LineNum,
-    COALESCE(o.U_Odoo_SO_ID, o2.U_Odoo_SO_ID) AS ParendOdooSoId
+    COALESCE(
+        -- Case 1: BaseEntry is a sales order (ORDR)
+        (SELECT U_Odoo_SO_ID FROM ORDR WHERE DocEntry = ivl.BaseEntry),
+        -- Case 2: BaseEntry is a delivery (ODLN), get parent SO from first delivery line
+        (SELECT TOP 1 o.U_Odoo_SO_ID 
+         FROM DLN1 dl 
+         JOIN ORDR o ON dl.BaseEntry = o.DocEntry 
+         WHERE dl.DocEntry = ivl.BaseEntry)
+    ) AS ParentOdooSoId
 FROM OINV iv
 INNER JOIN INV1 ivl ON iv.DocEntry = ivl.DocEntry
-LEFT JOIN ODLN d ON ivl.BaseEntry = d.DocEntry AND d.DocObjectType = 'O'
-LEFT JOIN ORDR o ON ivl.BaseEntry = o.DocEntry
-LEFT JOIN ORDR o2 ON d.DocEntry > 0 AND d.DocEntry = (SELECT MAX(DocEntry) FROM DLN1 WHERE BaseEntry = o2.DocEntry)
 WHERE iv.DocDate >= '{sqlDate}'
 ");
 
@@ -52,7 +58,7 @@ WHERE iv.DocDate >= '{sqlDate}'
         {
             var invoiceDocEntry = Convert.ToInt32(rs.Fields.Item("InvoiceDocEntry").Value);
             var lineNum = Convert.ToInt32(rs.Fields.Item("LineNum").Value);
-            var parentOdooSoId = rs.Fields.Item("ParendOdooSoId").Value?.ToString();
+            var parentOdooSoId = rs.Fields.Item("ParentOdooSoId").Value?.ToString();
             invoiceLineParentOrderMap[(invoiceDocEntry, lineNum)] = parentOdooSoId;
             rs.MoveNext();
         }
