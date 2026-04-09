@@ -52,14 +52,32 @@ public class InvoiceCacheService
                 //    systems (e.g. Odoo confirming the line was synced).
                 //    Match on BaseEntry+BaseLine which uniquely identifies the
                 //    source delivery line and is stable across SAP re-reads.
-                var existingLineMap = exists.Lines
-                    .ToDictionary(l => (l.BaseEntry, l.BaseLine));
+                //    For orphaned lines (BaseEntry=0), use line index as fallback.
+                var existingLinesList = exists.Lines.ToList();
+                var existingLineMap = existingLinesList
+                    .Select((line, idx) => new { line, idx })
+                    .ToDictionary(
+                        x => GetLineMatchKey(x.line.BaseEntry, x.line.BaseLine, x.idx),
+                        x => x.line);
 
                 var mergedLines = new List<CacheInvoiceLine>();
+                var incomingLinesList = inv.Lines.ToList();
 
-                foreach (var l in inv.Lines)
+                for (int lineIdx = 0; lineIdx < incomingLinesList.Count; lineIdx++)
                 {
-                    existingLineMap.TryGetValue((l.BaseEntry, l.BaseLine), out var existing);
+                    var l = incomingLinesList[lineIdx];
+                    var matchKey = GetLineMatchKey(l.BaseEntry, l.BaseLine, lineIdx);
+                    
+                    existingLineMap.TryGetValue(matchKey, out var existing);
+
+                    // ⚠️ Log caution for orphaned lines (invoice created without delivery reference)
+                    if (l.BaseEntry == 0)
+                    {
+                        _logger.LogWarning(
+                            "[CAUTION] Orphaned invoice line detected | DocEntry={DocEntry} DocNum={DocNum} " +
+                            "LineIdx={LineIdx} ItemCode={ItemCode} BaseEntry=0 BaseLine=0 (no delivery reference)",
+                            inv.DocEntry, inv.DocNum, lineIdx, l.ItemCode);
+                    }
 
                     mergedLines.Add(new CacheInvoiceLine
                     {
@@ -158,5 +176,16 @@ public class InvoiceCacheService
         // Subtract 1 day as safety overlap (handles same-day invoices added
         // after the last sync ran)
         return maxDate?.AddDays(-1);
+    }
+
+    // 🔑 Generate stable match key for invoice lines
+    // For referenced lines (BaseEntry > 0): use (BaseEntry, BaseLine)
+    // For orphaned lines (BaseEntry = 0): use line index to avoid duplicate key crashes
+    private static string GetLineMatchKey(int baseEntry, int baseLine, int lineIndex)
+    {
+        if (baseEntry > 0)
+            return $"ref_{baseEntry}_{baseLine}";
+        else
+            return $"orphaned_{lineIndex}";
     }
 }
