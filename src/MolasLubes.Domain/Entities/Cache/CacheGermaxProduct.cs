@@ -19,7 +19,7 @@ public class CacheGermaxProduct
     public string? Description         { get; set; }
     public string? ImageUrl            { get; set; }
     public string? AllImageUrls        { get; set; }   // JSON array of strings
-    public string? ProductUrl          { get; set; }
+    public string? ProductUrl          { get; set; }   // Can be 300+ chars from Germax
 
     // =============================
     // MATCH METADATA
