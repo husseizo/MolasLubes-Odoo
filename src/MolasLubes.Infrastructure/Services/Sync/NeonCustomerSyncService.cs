@@ -47,6 +47,8 @@ public class NeonCustomerSyncService
             if (lastSync == default)
                 lastSync = DateTime.MinValue;
 
+            lastSync = lastSync.AsUtc();
+
             // -------------------------------------------------
             // 2️⃣ READ DELTA FROM CACHE
             // -------------------------------------------------
@@ -147,12 +149,23 @@ public class NeonCustomerSyncService
                 }
             }
 
-            await _neonDb.SaveChangesAsync();
-            await tx.CommitAsync();
+            try
+            {
+                await _neonDb.SaveChangesAsync();
+                await tx.CommitAsync();
 
-            _logger.LogInformation(
-                "✅ Neon CUSTOMER DELTA sync completed | Count={Count}",
-                customers.Count);
+                _logger.LogInformation(
+                    "✅ Neon CUSTOMER DELTA sync completed | Count={Count}",
+                    customers.Count);
+            }
+            catch (Exception ex)
+            {
+                await tx.RollbackAsync();
+                _logger.LogError(ex,
+                    "❌ Neon CUSTOMER DELTA sync FAILED - transaction rolled back | Count={Count}",
+                    customers.Count);
+                throw;
+            }
         });
     }
 }

@@ -78,7 +78,8 @@ public class SalesOrderCacheService
                         ItemName    = l.ItemName,
                         Quantity    = l.Quantity,
                         Price       = l.Price,
-                        LineTotal   = l.LineTotal
+                        LineTotal   = l.LineTotal,
+                        WarehouseCode = l.WarehouseCode
                     });
                 }
 
@@ -111,7 +112,8 @@ public class SalesOrderCacheService
                         ItemName    = l.ItemName,
                         Quantity    = l.Quantity,
                         Price       = l.Price,
-                        LineTotal   = l.LineTotal
+                        LineTotal   = l.LineTotal,
+                        WarehouseCode = l.WarehouseCode
                     }).ToList();
 
                 updated++;

@@ -116,6 +116,9 @@ ORDER BY DocEntry
                     Price = (decimal)orders.Lines.Price,
                     LineTotal = (decimal)orders.Lines.LineTotal,
 
+                    // 🏢 WAREHOUSE
+                    WarehouseCode = orders.Lines.WarehouseCode?.ToString(),
+
                     OdooSalesOrderLineId =
                         orders.Lines.UserFields.Fields
                             .Item("U_Odoo_SOLine_ID").Value?.ToString()
@@ -213,6 +216,9 @@ ORDER BY DocEntry
                     Quantity  = (decimal)orders.Lines.Quantity,
                     Price     = (decimal)orders.Lines.Price,
                     LineTotal = (decimal)orders.Lines.LineTotal,
+
+                    // 🏢 WAREHOUSE
+                    WarehouseCode = orders.Lines.WarehouseCode?.ToString(),
 
                     OdooSalesOrderLineId =
                         orders.Lines.UserFields.Fields

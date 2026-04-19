@@ -382,6 +382,10 @@ namespace MolasLubes.Infrastructure.Migrations
                     b.Property<int>("SapDocEntry")
                         .HasColumnType("int");
 
+                    b.Property<string>("WarehouseCode")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
                     b.HasKey("Id");
 
                     b.HasIndex("OdooInvoiceLineId");
@@ -1070,6 +1074,10 @@ namespace MolasLubes.Infrastructure.Migrations
 
                     b.Property<int>("SapDocEntry")
                         .HasColumnType("int");
+
+                    b.Property<string>("WarehouseCode")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
 
                     b.HasKey("Id");
 

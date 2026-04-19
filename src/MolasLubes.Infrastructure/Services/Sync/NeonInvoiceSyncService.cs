@@ -45,6 +45,8 @@ public class NeonInvoiceSyncService
             if (lastSync == default)
                 lastSync = DateTime.MinValue;
 
+            lastSync = lastSync.AsUtc();
+
             // -------------------------------------------------
             // 2️⃣ READ FROM CACHE (HEADERS)
             // -------------------------------------------------
@@ -168,16 +170,28 @@ public class NeonInvoiceSyncService
 
             await using var tx = await _neonDb.Database.BeginTransactionAsync();
 
-            _neonDb.InvoiceLines.RemoveRange(existingLines);
-            _neonDb.InvoiceLines.AddRange(cacheLines);
+            try
+            {
+                _neonDb.InvoiceLines.RemoveRange(existingLines);
+                _neonDb.InvoiceLines.AddRange(cacheLines);
 
-            await _neonDb.SaveChangesAsync();
-            await tx.CommitAsync();
+                await _neonDb.SaveChangesAsync();
+                await tx.CommitAsync();
 
-            _logger.LogInformation(
-                "✅ Neon INVOICE DELTA sync completed | Headers={Count} Lines={Lines}",
-                invoices.Count,
-                cacheLines.Count);
+                _logger.LogInformation(
+                    "✅ Neon INVOICE DELTA sync completed | Headers={Count} Lines={Lines}",
+                    invoices.Count,
+                    cacheLines.Count);
+            }
+            catch (Exception ex)
+            {
+                await tx.RollbackAsync();
+                _logger.LogError(ex,
+                    "❌ Neon INVOICE DELTA sync FAILED - transaction rolled back | Headers={Count} Lines={Lines}",
+                    invoices.Count,
+                    cacheLines.Count);
+                throw;
+            }
         });
 
         // -------------------------------------------------

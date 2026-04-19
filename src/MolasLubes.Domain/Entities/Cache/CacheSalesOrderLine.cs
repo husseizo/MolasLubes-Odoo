@@ -22,6 +22,11 @@ public class CacheSalesOrderLine
     public decimal LineTotal { get; set; }
 
     // =========================
+    // 🏢 WAREHOUSE
+    // =========================
+    public string? WarehouseCode { get; set; }
+
+    // =========================
     // 🔗 ODOO LINE UDF
     // =========================
     public string? OdooSalesOrderLineId { get; set; }

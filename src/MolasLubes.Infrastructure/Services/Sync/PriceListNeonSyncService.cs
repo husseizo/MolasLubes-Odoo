@@ -32,79 +32,84 @@ public class PriceListNeonSyncService
         var strategy = _neonDb.Database.CreateExecutionStrategy();
         var nowUtc = DateTime.UtcNow;
 
+        // -------------------------------------------------
+        // 1️⃣ READ SOURCE FROM CACHE (STRONGLY TYPED)
+        // CacheProducts has a composite PK (ItemCode + Warehouse) — multiple rows
+        // per ItemCode exist (one per warehouse). Prices are product-level, not
+        // warehouse-level, so we deduplicate by ItemCode after fetching.
+        // ✅ DO THIS FIRST, OUTSIDE TRANSACTION
+        // -------------------------------------------------
+        var source = (await _cacheDb.CacheProducts
+            .AsNoTracking()
+            .Select(p => new PriceSourceRow
+            {
+                ItemCode = p.ItemCode,
+                PriceList_1 = p.PriceList_1,
+                PriceList_2 = p.PriceList_2,
+                PriceList_3 = p.PriceList_3,
+
+                OdooPricelistId = p.OdooPricelistId,
+                OdooStatus = p.OdooStatus,
+                OdooSyncDir = p.OdooSyncDir,
+                OdooErrorMsg = p.OdooErrorMsg,
+                OdooLastSync = p.OdooLastSync
+            })
+            .ToListAsync())
+            .DistinctBy(p => p.ItemCode)
+            .ToList();
+
+        if (source.Count == 0)
+        {
+            _logger.LogInformation("ℹ No products found for price list sync");
+            return;
+        }
+
+        // -------------------------------------------------
+        // 2️⃣ EXPAND TO PRICE LIST ROWS (IN MEMORY)
+        // ✅ DO THIS IN MEMORY, NO DB CALLS
+        // -------------------------------------------------
+        var prices = source
+            .SelectMany(p => new[]
+            {
+                BuildPrice(p, 1, p.PriceList_1, nowUtc),
+                BuildPrice(p, 2, p.PriceList_2, nowUtc),
+                BuildPrice(p, 3, p.PriceList_3, nowUtc)
+            })
+            .Where(x => x.Price > 0)
+            .ToList();
+
+        if (prices.Count == 0)
+        {
+            _logger.LogInformation("ℹ No price list rows generated");
+            return;
+        }
+
+        // -------------------------------------------------
+        // 3️⃣ LOAD EXISTING (SAFE UPSERT)
+        // ✅ READ FROM NEON, OUTSIDE TRANSACTION
+        // -------------------------------------------------
+        var itemCodes = prices
+            .Select(p => p.ItemCode)
+            .Distinct()
+            .ToList();
+
+        var existing = await _neonDb.PriceLists
+            .AsNoTracking()
+            .Where(x => itemCodes.Contains(x.ItemCode))
+            .ToListAsync();
+
+        var map = existing.ToDictionary(
+            x => (x.ItemCode, x.PriceList),
+            x => x);
+
+        // -------------------------------------------------
+        // 4️⃣ OPEN TRANSACTION & UPSERT
+        // ✅ TRANSACTION OPENS ONLY FOR WRITE
+        // -------------------------------------------------
         await strategy.ExecuteAsync(async () =>
         {
             await using var tx = await _neonDb.Database.BeginTransactionAsync();
 
-            // -------------------------------------------------
-            // 1️⃣ READ SOURCE FROM CACHE (STRONGLY TYPED)
-            // CacheProducts has a composite PK (ItemCode + Warehouse) — multiple rows
-            // per ItemCode exist (one per warehouse). Prices are product-level, not
-            // warehouse-level, so we deduplicate by ItemCode after fetching.
-            // -------------------------------------------------
-            var source = (await _cacheDb.CacheProducts
-                .AsNoTracking()
-                .Select(p => new PriceSourceRow
-                {
-                    ItemCode = p.ItemCode,
-                    PriceList_1 = p.PriceList_1,
-                    PriceList_2 = p.PriceList_2,
-                    PriceList_3 = p.PriceList_3,
-
-                    OdooPricelistId = p.OdooPricelistId,
-                    OdooStatus = p.OdooStatus,
-                    OdooSyncDir = p.OdooSyncDir,
-                    OdooErrorMsg = p.OdooErrorMsg,
-                    OdooLastSync = p.OdooLastSync
-                })
-                .ToListAsync())
-                .DistinctBy(p => p.ItemCode)
-                .ToList();
-
-            if (source.Count == 0)
-            {
-                _logger.LogInformation("ℹ No products found for price list sync");
-                return;
-            }
-
-            // -------------------------------------------------
-            // 2️⃣ EXPAND TO PRICE LIST ROWS (IN MEMORY)
-            // -------------------------------------------------
-            var prices = source
-                .SelectMany(p => new[]
-                {
-                    BuildPrice(p, 1, p.PriceList_1, nowUtc),
-                    BuildPrice(p, 2, p.PriceList_2, nowUtc),
-                    BuildPrice(p, 3, p.PriceList_3, nowUtc)
-                })
-                .Where(x => x.Price > 0)
-                .ToList();
-
-            if (prices.Count == 0)
-            {
-                _logger.LogInformation("ℹ No price list rows generated");
-                return;
-            }
-
-            // -------------------------------------------------
-            // 3️⃣ LOAD EXISTING (SAFE UPSERT)
-            // -------------------------------------------------
-            var itemCodes = prices
-                .Select(p => p.ItemCode)
-                .Distinct()
-                .ToList();
-
-            var existing = await _neonDb.PriceLists
-                .Where(x => itemCodes.Contains(x.ItemCode))
-                .ToListAsync();
-
-            var map = existing.ToDictionary(
-                x => (x.ItemCode, x.PriceList),
-                x => x);
-
-            // -------------------------------------------------
-            // 4️⃣ UPSERT
-            // -------------------------------------------------
             foreach (var incoming in prices)
             {
                 var key = (incoming.ItemCode, incoming.PriceList);

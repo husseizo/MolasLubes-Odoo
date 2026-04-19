@@ -248,6 +248,9 @@ public class MolasCacheDbContext : DbContext
             entity.Property(x => x.ItemName)
                   .HasMaxLength(200);
 
+            entity.Property(x => x.WarehouseCode)
+                  .HasMaxLength(20);
+
             entity.Property(x => x.OdooSalesOrderLineId)
                   .HasMaxLength(20);
 

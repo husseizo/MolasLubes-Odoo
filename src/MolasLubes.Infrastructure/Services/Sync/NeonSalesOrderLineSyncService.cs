@@ -47,6 +47,8 @@ public class NeonSalesOrderLineSyncService
             if (lastSync == default)
                 lastSync = DateTime.MinValue;
 
+            lastSync = lastSync.AsUtc();
+
             // -------------------------------------------------
             // 2️⃣ AFFECTED SALES ORDERS
             // Only include entries that already have a parent row in NeonSalesOrders;
@@ -108,20 +110,32 @@ public class NeonSalesOrderLineSyncService
                 .Where(l => orderEntries.Contains(l.SalesOrderEntry))
                 .ToListAsync();
 
-            _neonDb.SalesOrderLines.RemoveRange(existingLines);
+            try
+            {
+                _neonDb.SalesOrderLines.RemoveRange(existingLines);
 
-            // -------------------------------------------------
-            // 5️⃣ INSERT NEW LINES
-            // -------------------------------------------------
-            _neonDb.SalesOrderLines.AddRange(lines);
+                // -------------------------------------------------
+                // 5️⃣ INSERT NEW LINES
+                // -------------------------------------------------
+                _neonDb.SalesOrderLines.AddRange(lines);
 
-            await _neonDb.SaveChangesAsync();
-            await tx.CommitAsync();
+                await _neonDb.SaveChangesAsync();
+                await tx.CommitAsync();
 
-            _logger.LogInformation(
-                "✅ Neon SALES ORDER LINE DELTA sync completed | Orders={Orders} Lines={Lines}",
-                orderEntries.Count,
-                lines.Count);
+                _logger.LogInformation(
+                    "✅ Neon SALES ORDER LINE DELTA sync completed | Orders={Orders} Lines={Lines}",
+                    orderEntries.Count,
+                    lines.Count);
+            }
+            catch (Exception ex)
+            {
+                await tx.RollbackAsync();
+                _logger.LogError(ex,
+                    "❌ Neon SALES ORDER LINE DELTA sync FAILED - transaction rolled back | Orders={Orders} Lines={Lines}",
+                    orderEntries.Count,
+                    lines.Count);
+                throw;
+            }
         });
     }
 }

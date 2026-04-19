@@ -9,6 +9,9 @@ public class SapSalesOrderLineDto
     public decimal Price { get; set; }
     public decimal LineTotal { get; set; }
 
+    // 🏢 WAREHOUSE
+    public string? WarehouseCode { get; set; }
+
     // 🔗 ODOO LINE
     public string? OdooSalesOrderLineId { get; set; }
 }
