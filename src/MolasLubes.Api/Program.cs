@@ -122,7 +122,9 @@ builder.Services.AddOpenApi();
 // =====================================================
 builder.Services.AddDbContext<MolasCacheDbContext>(options =>
     options.UseSqlServer(
-        builder.Configuration.GetConnectionString("MolasCacheDb")));
+        builder.Configuration.GetConnectionString("MolasCacheDb"))
+        .ConfigureWarnings(w =>
+            w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning)));
 
 builder.Services.AddDbContext<NeonDbContext>(options =>
     options.UseNpgsql(
@@ -199,6 +201,7 @@ builder.Services.AddScoped<SapGoodsReceiptWriter>();
 builder.Services.AddScoped<SapSalesOrderCreator>();
 builder.Services.AddScoped<SapSalesOrderCanceler>();
 builder.Services.AddScoped<SapQuotationConverter>();
+builder.Services.AddScoped<SapOpenSalesOrderWarehouseUpdater>();
 builder.Services.AddScoped<SapInvoiceWriter>();
 builder.Services.AddScoped<SapCreditMemoWriter>();
 builder.Services.AddScoped<SapPaymentWriter>();
@@ -386,7 +389,7 @@ builder.Services.AddTransient<NeonSalesOrderSyncJob>();
 builder.Services.AddTransient<NeonSalesOrderLineSyncJob>();
 builder.Services.AddTransient<NeonPriceListSyncJob>();
 builder.Services.AddTransient<LiquiMolyProductScrapeJob>();
-builder.Services.AddTransient<QuotationToSalesOrderJob>();
+builder.Services.AddTransient<OpenSalesOrderWarehouseUpdateJob>();
 builder.Services.AddTransient<
     MolasLubes.Infrastructure.Scheduling.Jobs.AutoHubSapSeedSyncJob>();
 builder.Services.AddTransient<
@@ -425,7 +428,7 @@ builder.Services.AddQuartz(q =>
     RegisterJob<CustomerDeltaSyncJob>("CustomerDeltaSyncJob", "0 */5 * ? * *");
     RegisterJob<SalesOrderSyncJob>("SalesOrderSyncJob", "10 */5 * ? * *");
     RegisterJob<MolasLubes.Infrastructure.Scheduling.Jobs.SapOpenOrdersSyncJob>("SapOpenOrdersSyncJob", "20 */5 * ? * *"); // every 5 min — open orders
-    RegisterJob<QuotationToSalesOrderJob>("QuotationToSalesOrderJob", "0 */2 * ? * *"); // every 2 min — convert open OQUT → ORDR
+    // RegisterJob<OpenSalesOrderWarehouseUpdateJob>("OpenSalesOrderWarehouseUpdateJob", "0 */5 * ? * *"); // DISABLED — warehouse auto-update turned off
     RegisterJob<DeliveryDeltaSyncJob>("DeliveryDeltaSyncJob", "0/10 * * ? * *"); // every 10s — SAP→Cache (delivery layer 1)
 
 
@@ -449,14 +452,16 @@ builder.Services.AddQuartz(q =>
 
     RegisterJob<NeonDeliverySyncJob>("NeonDeliverySyncJob", "1/10 * * ? * *"); // every 10s — Cache→Neon (delivery layer 2)
 
+    // Odoo pushes: staggered to 15s intervals to reduce queue pressure
+    // These are dependent on Neon syncs completing first, so longer intervals are acceptable
     if (syncSettings.EnableOdooDeliveryPush)
-        RegisterJob<OdooDeliveryPushJob>("OdooDeliveryPushJob", "2/10 * * ? * *"); // every 10s — Neon→Odoo (delivery layer 3)
+        RegisterJob<OdooDeliveryPushJob>("OdooDeliveryPushJob", "2/15 * * ? * *"); // every 15s — Neon→Odoo (delivery layer 3), reduced from 10s
 
     if (syncSettings.EnableOdooInvoicePush)
-        RegisterJob<OdooInvoicePushJob>("OdooInvoicePushJob", "5/10 * * ? * *"); // every 10s — Neon→Odoo (invoice layer 3)
+        RegisterJob<OdooInvoicePushJob>("OdooInvoicePushJob", "5/15 * * ? * *"); // every 15s — Neon→Odoo (invoice layer 3), reduced from 10s
 
     if (syncSettings.EnableOdooPaymentPush)
-        RegisterJob<OdooPaymentPushJob>("OdooPaymentPushJob", "8/10 * * ? * *"); // every 10s — Neon→Odoo (payment layer 3)
+        RegisterJob<OdooPaymentPushJob>("OdooPaymentPushJob", "8/15 * * ? * *"); // every 15s — Neon→Odoo (payment layer 3), reduced from 10s
 
     RegisterJob<NeonProductDeltaSyncJob>("NeonProductDeltaSyncJob", "55 */10 * ? * *");
     RegisterJob<NeonSalesOrderSyncJob>(
