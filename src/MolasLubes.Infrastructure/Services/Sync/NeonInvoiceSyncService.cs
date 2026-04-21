@@ -140,56 +140,79 @@ public class NeonInvoiceSyncService
             }
 
             // -------------------------------------------------
-            // 4️⃣ SYNC LINES (INV1)
+            // 4️⃣ SYNC LINES (INV1) - BATCHED TO PREVENT LARGE ARRAY QUERIES
             // -------------------------------------------------
-            var cacheLines = await _cacheDb.CacheInvoiceLines
-                .AsNoTracking()
-                .Where(l => keys.Contains(l.SapDocEntry))
-                .Select(l => new NeonInvoiceLine
-                {
-                    InvoiceEntry = l.SapDocEntry,
-                    ItemCode = l.ItemCode,
-                    Description = l.Description,
-                    Quantity = l.Quantity,
-                    LineTotal = l.LineTotal,
-                    GrossBuyPr = l.GrossBuyPr,
-                    BaseEntry = l.BaseEntry,
-                    BaseLine = l.BaseLine,
-                    OdooInvoiceLineId = l.OdooInvoiceLineId,
-                    OdooStatus = l.OdooStatus,
-                    OdooSyncDir = l.OdooSyncDir,
-                    OdooErrorMsg = l.OdooErrorMsg,
-                    OdooLastSync = l.OdooLastSync.AsUtc()
-                })
-                .ToListAsync();
+            const int batchSize = 500; // Process 500 invoices at a time
+            var batches = keys.Chunk(batchSize).ToList();
 
-            // DELETE existing lines for affected invoices then INSERT fresh
-            var existingLines = await _neonDb.InvoiceLines
-                .Where(l => keys.Contains(l.InvoiceEntry))
-                .ToListAsync();
+            _logger.LogInformation(
+                "📦 Processing invoice lines in {Batches} batches of max {BatchSize}",
+                batches.Count,
+                batchSize);
 
             await using var tx = await _neonDb.Database.BeginTransactionAsync();
 
             try
             {
-                _neonDb.InvoiceLines.RemoveRange(existingLines);
-                _neonDb.InvoiceLines.AddRange(cacheLines);
+                var totalLinesProcessed = 0;
+
+                foreach (var batch in batches)
+                {
+                    var batchKeys = batch.ToList();
+
+                    // Load cache lines for this batch
+                    var cacheLines = await _cacheDb.CacheInvoiceLines
+                        .AsNoTracking()
+                        .Where(l => batchKeys.Contains(l.SapDocEntry))
+                        .Select(l => new NeonInvoiceLine
+                        {
+                            InvoiceEntry = l.SapDocEntry,
+                            ItemCode = l.ItemCode,
+                            Description = l.Description,
+                            Quantity = l.Quantity,
+                            LineTotal = l.LineTotal,
+                            GrossBuyPr = l.GrossBuyPr,
+                            BaseEntry = l.BaseEntry,
+                            BaseLine = l.BaseLine,
+                            OdooInvoiceLineId = l.OdooInvoiceLineId,
+                            OdooStatus = l.OdooStatus,
+                            OdooSyncDir = l.OdooSyncDir,
+                            OdooErrorMsg = l.OdooErrorMsg,
+                            OdooLastSync = l.OdooLastSync.AsUtc()
+                        })
+                        .ToListAsync();
+
+                    // Delete existing lines for this batch
+                    var existingLines = await _neonDb.InvoiceLines
+                        .Where(l => batchKeys.Contains(l.InvoiceEntry))
+                        .ToListAsync();
+
+                    _neonDb.InvoiceLines.RemoveRange(existingLines);
+                    _neonDb.InvoiceLines.AddRange(cacheLines);
+
+                    totalLinesProcessed += cacheLines.Count;
+
+                    _logger.LogDebug(
+                        "✅ Batch processed | Invoices={Count} Lines={Lines}",
+                        batchKeys.Count,
+                        cacheLines.Count);
+                }
 
                 await _neonDb.SaveChangesAsync();
                 await tx.CommitAsync();
 
                 _logger.LogInformation(
-                    "✅ Neon INVOICE DELTA sync completed | Headers={Count} Lines={Lines}",
+                    "✅ Neon INVOICE DELTA sync completed | Headers={Headers} Lines={Lines} Batches={Batches}",
                     invoices.Count,
-                    cacheLines.Count);
+                    totalLinesProcessed,
+                    batches.Count);
             }
             catch (Exception ex)
             {
                 await tx.RollbackAsync();
                 _logger.LogError(ex,
-                    "❌ Neon INVOICE DELTA sync FAILED - transaction rolled back | Headers={Count} Lines={Lines}",
-                    invoices.Count,
-                    cacheLines.Count);
+                    "❌ Neon INVOICE DELTA sync FAILED - transaction rolled back | Headers={Count}",
+                    invoices.Count);
                 throw;
             }
         });
@@ -301,45 +324,81 @@ public class NeonInvoiceSyncService
             }
 
             // -------------------------------------------------
-            // 3️⃣ SYNC LINES (INV1)
+            // 3️⃣ SYNC LINES (INV1) - BATCHED TO PREVENT LARGE ARRAY QUERIES
             // -------------------------------------------------
-            var cacheLines = await _cacheDb.CacheInvoiceLines
-                .AsNoTracking()
-                .Where(l => keys.Contains(l.SapDocEntry))
-                .Select(l => new NeonInvoiceLine
-                {
-                    InvoiceEntry = l.SapDocEntry,
-                    ItemCode = l.ItemCode,
-                    Description = l.Description,
-                    Quantity = l.Quantity,
-                    LineTotal = l.LineTotal,
-                    GrossBuyPr = l.GrossBuyPr,
-                    BaseEntry = l.BaseEntry,
-                    BaseLine = l.BaseLine,
-                    OdooInvoiceLineId = l.OdooInvoiceLineId,
-                    OdooStatus = l.OdooStatus,
-                    OdooSyncDir = l.OdooSyncDir,
-                    OdooErrorMsg = l.OdooErrorMsg,
-                    OdooLastSync = l.OdooLastSync.AsUtc()
-                })
-                .ToListAsync();
+            const int batchSize = 500; // Process 500 invoices at a time
+            var batches = keys.Chunk(batchSize).ToList();
 
-            var existingLines = await _neonDb.InvoiceLines
-                .Where(l => keys.Contains(l.InvoiceEntry))
-                .ToListAsync();
+            _logger.LogInformation(
+                "📦 Processing invoice lines in {Batches} batches of max {BatchSize}",
+                batches.Count,
+                batchSize);
 
             await using var tx = await _neonDb.Database.BeginTransactionAsync();
 
-            _neonDb.InvoiceLines.RemoveRange(existingLines);
-            _neonDb.InvoiceLines.AddRange(cacheLines);
+            try
+            {
+                var totalLinesProcessed = 0;
 
-            await _neonDb.SaveChangesAsync();
-            await tx.CommitAsync();
+                foreach (var batch in batches)
+                {
+                    var batchKeys = batch.ToList();
 
-            _logger.LogInformation(
-                "✅ Neon INVOICE FULL sync completed | Headers={Count} Lines={Lines}",
-                invoices.Count,
-                cacheLines.Count);
+                    // Load cache lines for this batch
+                    var cacheLines = await _cacheDb.CacheInvoiceLines
+                        .AsNoTracking()
+                        .Where(l => batchKeys.Contains(l.SapDocEntry))
+                        .Select(l => new NeonInvoiceLine
+                        {
+                            InvoiceEntry = l.SapDocEntry,
+                            ItemCode = l.ItemCode,
+                            Description = l.Description,
+                            Quantity = l.Quantity,
+                            LineTotal = l.LineTotal,
+                            GrossBuyPr = l.GrossBuyPr,
+                            BaseEntry = l.BaseEntry,
+                            BaseLine = l.BaseLine,
+                            OdooInvoiceLineId = l.OdooInvoiceLineId,
+                            OdooStatus = l.OdooStatus,
+                            OdooSyncDir = l.OdooSyncDir,
+                            OdooErrorMsg = l.OdooErrorMsg,
+                            OdooLastSync = l.OdooLastSync.AsUtc()
+                        })
+                        .ToListAsync();
+
+                    // Delete existing lines for this batch
+                    var existingLines = await _neonDb.InvoiceLines
+                        .Where(l => batchKeys.Contains(l.InvoiceEntry))
+                        .ToListAsync();
+
+                    _neonDb.InvoiceLines.RemoveRange(existingLines);
+                    _neonDb.InvoiceLines.AddRange(cacheLines);
+
+                    totalLinesProcessed += cacheLines.Count;
+
+                    _logger.LogDebug(
+                        "✅ Batch processed | Invoices={Count} Lines={Lines}",
+                        batchKeys.Count,
+                        cacheLines.Count);
+                }
+
+                await _neonDb.SaveChangesAsync();
+                await tx.CommitAsync();
+
+                _logger.LogInformation(
+                    "✅ Neon INVOICE FULL sync completed | Headers={Headers} Lines={Lines} Batches={Batches}",
+                    invoices.Count,
+                    totalLinesProcessed,
+                    batches.Count);
+            }
+            catch (Exception ex)
+            {
+                await tx.RollbackAsync();
+                _logger.LogError(ex,
+                    "❌ Neon INVOICE FULL sync FAILED - transaction rolled back | Headers={Count}",
+                    invoices.Count);
+                throw;
+            }
         });
     }
 
