@@ -67,15 +67,29 @@ public class NeonPaymentSyncService
                 }
 
                 // -------------------------------------------------
-                // 3️⃣ LOAD EXISTING INVOICE KEYS FROM NEON (POSTGRES)
-                // ⚠️ CRITICAL: Re-fetch inside transaction to avoid race condition
+                // 3️⃣ LOAD ONLY REFERENCED INVOICE KEYS FROM NEON (OPTIMIZED)
+                // ⚠️ CRITICAL: Only load invoice keys that are actually referenced
+                // by the cache payments instead of ALL invoices (huge performance gain)
                 // -------------------------------------------------
-                var invoiceKeys = await _neonDb.Invoices
-                    .AsNoTracking()
-                    .Select(x => x.SapDocEntry)
-                    .ToListAsync();
+                var referencedInvoiceKeys = cachePayments
+                    .Where(p => p.InvoiceDocEntry > 0)
+                    .Select(p => p.InvoiceDocEntry)
+                    .Distinct()
+                    .ToList();
 
-                var invoiceKeySet = invoiceKeys.ToHashSet();
+                if (referencedInvoiceKeys.Count == 0)
+                {
+                    _logger.LogInformation("ℹ No payments reference valid invoices");
+                    await tx.CommitAsync();
+                    return;
+                }
+
+                var invoiceKeySet = (await _neonDb.Invoices
+                    .AsNoTracking()
+                    .Where(i => referencedInvoiceKeys.Contains(i.SapDocEntry))
+                    .Select(x => x.SapDocEntry)
+                    .ToListAsync())
+                    .ToHashSet();
 
                 // -------------------------------------------------
                 // 4️⃣ FILTER PAYMENTS (FK SAFE)
@@ -131,75 +145,109 @@ public class NeonPaymentSyncService
                     return;
                 }
 
+                _logger.LogInformation(
+                    "💳 Processing {Count} payments in batches to prevent timeout",
+                    payments.Count);
+
                 // -------------------------------------------------
-                // 5️⃣ UPSERT PAYMENTS
+                // 5️⃣ UPSERT PAYMENTS (BATCHED)
                 // -------------------------------------------------
-                var keys = payments.Select(p => p.SapDocEntry).ToList();
+                const int batchSize = 1000; // Process 1000 payments at a time
+                var paymentBatches = payments.Chunk(batchSize).ToList();
 
-                var existing = await _neonDb.Payments
-                    .Where(p => keys.Contains(p.SapDocEntry))
-                    .ToDictionaryAsync(p => p.SapDocEntry);
+                var totalInserted = 0;
+                var totalUpdated = 0;
 
-                var inserted = 0;
-                var updated = 0;
-
-                foreach (var incoming in payments)
+                foreach (var batch in paymentBatches)
                 {
-                    if (!existing.TryGetValue(incoming.SapDocEntry, out var entity))
-                    {
-                        _neonDb.Payments.Add(incoming);
-                        inserted++;
-                    }
-                    else
-                    {
-                        entity.DocNum        = incoming.DocNum;
-                        entity.CustomerCode  = incoming.CustomerCode;
-                        entity.InvoiceEntry  = incoming.InvoiceEntry;
-                        entity.PaymentDate   = incoming.PaymentDate;
-                        entity.Amount        = incoming.Amount;
+                    var batchList = batch.ToList();
+                    var keys = batchList.Select(p => p.SapDocEntry).ToList();
 
-                        entity.OdooPaymentId = incoming.OdooPaymentId;
-                        entity.OdooStatus    = incoming.OdooStatus;
-                        entity.OdooSyncDir   = incoming.OdooSyncDir;
-                        entity.OdooErrorMsg  = incoming.OdooErrorMsg;
-                        entity.OdooLastSync  = incoming.OdooLastSync;
+                    var existing = await _neonDb.Payments
+                        .Where(p => keys.Contains(p.SapDocEntry))
+                        .ToDictionaryAsync(p => p.SapDocEntry);
 
-                        entity.SyncedAt = now;
-                        updated++;
+                    var inserted = 0;
+                    var updated = 0;
+
+                    foreach (var incoming in batchList)
+                    {
+                        if (!existing.TryGetValue(incoming.SapDocEntry, out var entity))
+                        {
+                            _neonDb.Payments.Add(incoming);
+                            inserted++;
+                        }
+                        else
+                        {
+                            entity.DocNum        = incoming.DocNum;
+                            entity.CustomerCode  = incoming.CustomerCode;
+                            entity.InvoiceEntry  = incoming.InvoiceEntry;
+                            entity.PaymentDate   = incoming.PaymentDate;
+                            entity.Amount        = incoming.Amount;
+
+                            entity.OdooPaymentId = incoming.OdooPaymentId;
+                            entity.OdooStatus    = incoming.OdooStatus;
+                            entity.OdooSyncDir   = incoming.OdooSyncDir;
+                            entity.OdooErrorMsg  = incoming.OdooErrorMsg;
+                            entity.OdooLastSync  = incoming.OdooLastSync;
+
+                            entity.SyncedAt = now;
+                            updated++;
+                        }
                     }
+
+                    totalInserted += inserted;
+                    totalUpdated += updated;
+
+                    _logger.LogDebug(
+                        "✅ Payment batch processed | Inserted={Inserted} Updated={Updated}",
+                        inserted,
+                        updated);
                 }
 
                 await _neonDb.SaveChangesAsync();
 
                 // -------------------------------------------------
-                // 6️⃣ REFRESH PaidAmount / IsPaid ON NEON INVOICES
+                // 6️⃣ REFRESH PaidAmount / IsPaid ON NEON INVOICES (BATCHED)
                 // -------------------------------------------------
                 var affectedInvoices = payments.Select(p => p.InvoiceEntry).Distinct().ToList();
 
-                var invoicesToUpdate = await _neonDb.Invoices
-                    .Where(i => affectedInvoices.Contains(i.SapDocEntry))
-                    .ToListAsync();
+                _logger.LogDebug(
+                    "🔄 Refreshing payment state for {Count} affected invoices",
+                    affectedInvoices.Count);
 
-                var paidTotals = await _neonDb.Payments
-                    .Where(p => affectedInvoices.Contains(p.InvoiceEntry))
-                    .GroupBy(p => p.InvoiceEntry)
-                    .Select(g => new { InvoiceEntry = g.Key, Total = g.Sum(p => p.Amount) })
-                    .ToDictionaryAsync(x => x.InvoiceEntry, x => x.Total);
+                // Process invoice updates in batches too
+                var invoiceBatches = affectedInvoices.Chunk(500).ToList();
 
-                foreach (var inv in invoicesToUpdate)
+                foreach (var invoiceBatch in invoiceBatches)
                 {
-                    inv.PaidAmount = paidTotals.GetValueOrDefault(inv.SapDocEntry, 0m);
-                    inv.IsPaid = inv.PaidAmount >= inv.DocTotal && inv.DocTotal > 0;
+                    var batchKeys = invoiceBatch.ToList();
+
+                    var invoicesToUpdate = await _neonDb.Invoices
+                        .Where(i => batchKeys.Contains(i.SapDocEntry))
+                        .ToListAsync();
+
+                    var paidTotals = await _neonDb.Payments
+                        .Where(p => batchKeys.Contains(p.InvoiceEntry))
+                        .GroupBy(p => p.InvoiceEntry)
+                        .Select(g => new { InvoiceEntry = g.Key, Total = g.Sum(p => p.Amount) })
+                        .ToDictionaryAsync(x => x.InvoiceEntry, x => x.Total);
+
+                    foreach (var inv in invoicesToUpdate)
+                    {
+                        inv.PaidAmount = paidTotals.GetValueOrDefault(inv.SapDocEntry, 0m);
+                        inv.IsPaid = inv.PaidAmount >= inv.DocTotal && inv.DocTotal > 0;
+                    }
                 }
 
                 await _neonDb.SaveChangesAsync();
                 await tx.CommitAsync();
 
                 _logger.LogInformation(
-                    "✅ Neon PAYMENT DELTA completed | Total={Total} | Inserted={Inserted} | Updated={Updated} | Orphaned={Orphaned}",
+                    "✅ Neon PAYMENT DELTA completed | Total={Total} | Inserted={Inserted} | Updated={Updated} | Orphaned={Orphaned} | Batches={Batches}",
                     payments.Count,
-                    inserted,
-                    updated,
+                    totalInserted,
+                    totalUpdated,
                     orphanedCount);
             }
             catch (Exception ex)
