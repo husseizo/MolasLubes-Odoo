@@ -31,6 +31,7 @@ public class NeonInvoiceSyncService
 
         var strategy = _neonDb.Database.CreateExecutionStrategy();
         var now = DateTime.UtcNow;
+        var hasSyncedHeaders = false;
 
         await strategy.ExecuteAsync(async () =>
         {
@@ -201,6 +202,8 @@ public class NeonInvoiceSyncService
                 await _neonDb.SaveChangesAsync();
                 await tx.CommitAsync();
 
+                hasSyncedHeaders = true; // Flag that we synced headers
+
                 _logger.LogInformation(
                     "✅ Neon INVOICE DELTA sync completed | Headers={Headers} Lines={Lines} Batches={Batches}",
                     invoices.Count,
@@ -218,11 +221,14 @@ public class NeonInvoiceSyncService
         });
 
         // -------------------------------------------------
-        // 5️⃣ ORPHAN LINE BACKFILL
-        // Invoices that were synced to Neon before the
-        // line-migration was added have headers but no lines.
+        // 5️⃣ ORPHAN LINE BACKFILL (CONDITIONAL)
+        // Only run orphan backfill if we actually synced headers
+        // to avoid expensive scanning every time
         // -------------------------------------------------
-        await SyncOrphanedLinesAsync();
+        if (hasSyncedHeaders)
+        {
+            await SyncOrphanedLinesAsync();
+        }
     }
 
     // =====================================================
