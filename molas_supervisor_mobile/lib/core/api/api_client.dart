@@ -106,6 +106,11 @@ class ApiClient {
     final body = err.response?.data;
     final serverMessage = _extractMessage(body);
 
+    // Handle null status (no response from server)
+    if (status == null) {
+      return UnknownApiException(serverMessage ?? 'No response from server.');
+    }
+
     return switch (status) {
       401 => const UnauthorizedException(),
       403 => const ForbiddenException(),

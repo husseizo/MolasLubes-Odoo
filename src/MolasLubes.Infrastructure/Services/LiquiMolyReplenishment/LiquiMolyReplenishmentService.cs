@@ -202,9 +202,23 @@ public class LiquiMolyReplenishmentService
     public async Task<CacheLiquiMolyReplenishmentRequest?> GetAsync(
         string requestRef, CancellationToken ct = default)
     {
-        return await _db.CacheLiquiMolyReplenishmentRequests
-            .Include(r => r.Lines)
-            .FirstOrDefaultAsync(r => r.RequestRef == requestRef, ct);
+        // Set explicit command timeout for potentially long-running query
+        var previousTimeout = _db.Database.GetCommandTimeout();
+        _db.Database.SetCommandTimeout(120); // 2 minutes
+
+        try
+        {
+            return await _db.CacheLiquiMolyReplenishmentRequests
+                .AsNoTracking()
+                .AsSplitQuery()
+                .Include(r => r.Lines)
+                .FirstOrDefaultAsync(r => r.RequestRef == requestRef, ct);
+        }
+        finally
+        {
+            // Restore previous timeout
+            _db.Database.SetCommandTimeout(previousTimeout);
+        }
     }
 
     public async Task<(IReadOnlyList<CacheLiquiMolyReplenishmentRequest> Items, bool HasMore)>
@@ -212,21 +226,35 @@ public class LiquiMolyReplenishmentService
     {
         take = Math.Clamp(take, 1, 200);
 
-        var query = _db.CacheLiquiMolyReplenishmentRequests.AsQueryable();
-        if (!string.IsNullOrWhiteSpace(status))
-            query = query.Where(r => r.Status == status);
+        // Set explicit command timeout for potentially long-running query
+        var previousTimeout = _db.Database.GetCommandTimeout();
+        _db.Database.SetCommandTimeout(120); // 2 minutes
 
-        var items = await query
-            .OrderByDescending(r => r.CreatedAt)
-            .Skip(skip)
-            .Take(take + 1)
-            .Include(r => r.Lines)
-            .ToListAsync(ct);
+        try
+        {
+            var query = _db.CacheLiquiMolyReplenishmentRequests.AsQueryable();
+            if (!string.IsNullOrWhiteSpace(status))
+                query = query.Where(r => r.Status == status);
 
-        var hasMore = items.Count > take;
-        if (hasMore) items.RemoveAt(items.Count - 1);
+            var items = await query
+                .AsNoTracking()
+                .AsSplitQuery()
+                .OrderByDescending(r => r.CreatedAt)
+                .Skip(skip)
+                .Take(take + 1)
+                .Include(r => r.Lines)
+                .ToListAsync(ct);
 
-        return (items, hasMore);
+            var hasMore = items.Count > take;
+            if (hasMore) items.RemoveAt(items.Count - 1);
+
+            return (items, hasMore);
+        }
+        finally
+        {
+            // Restore previous timeout
+            _db.Database.SetCommandTimeout(previousTimeout);
+        }
     }
 
     /// <summary>
@@ -239,18 +267,32 @@ public class LiquiMolyReplenishmentService
     {
         take = Math.Clamp(take, 1, 200);
 
-        var items = await _db.CacheLiquiMolyReplenishmentRequests
-            .Where(r => statuses.Contains(r.Status))
-            .OrderByDescending(r => r.ApprovedAt ?? r.RejectedAt ?? r.CreatedAt)
-            .Skip(skip)
-            .Take(take + 1)
-            .Include(r => r.Lines)
-            .ToListAsync(ct);
+        // Set explicit command timeout for potentially long-running query
+        var previousTimeout = _db.Database.GetCommandTimeout();
+        _db.Database.SetCommandTimeout(120); // 2 minutes
 
-        var hasMore = items.Count > take;
-        if (hasMore) items.RemoveAt(items.Count - 1);
+        try
+        {
+            var items = await _db.CacheLiquiMolyReplenishmentRequests
+                .AsNoTracking()
+                .AsSplitQuery()
+                .Where(r => statuses.Contains(r.Status))
+                .OrderByDescending(r => r.ApprovedAt ?? r.RejectedAt ?? r.CreatedAt)
+                .Skip(skip)
+                .Take(take + 1)
+                .Include(r => r.Lines)
+                .ToListAsync(ct);
 
-        return (items, hasMore);
+            var hasMore = items.Count > take;
+            if (hasMore) items.RemoveAt(items.Count - 1);
+
+            return (items, hasMore);
+        }
+        finally
+        {
+            // Restore previous timeout
+            _db.Database.SetCommandTimeout(previousTimeout);
+        }
     }
 
     // ── Private ──────────────────────────────────────────────────────

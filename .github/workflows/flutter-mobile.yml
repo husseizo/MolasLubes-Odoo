@@ -1,0 +1,236 @@
+name: Flutter Mobile - Build & Test
+
+on:
+  push:
+    branches: [ master, develop ]
+    paths:
+      - 'molas_supervisor_mobile/**'
+      - '.github/workflows/flutter-mobile.yml'
+  pull_request:
+    branches: [ master, develop ]
+    paths:
+      - 'molas_supervisor_mobile/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Build environment (Test/Live)'
+        required: true
+        default: 'Test'
+        type: choice
+        options:
+          - Test
+          - Live
+
+jobs:
+  # ============================================================================
+  # ANALYZE & TEST
+  # ============================================================================
+  analyze:
+    name: Analyze & Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: molas_supervisor_mobile
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: ☕ Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 🎯 Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.x'
+          channel: 'stable'
+          cache: true
+
+      - name: 📦 Install dependencies
+        run: flutter pub get
+
+      - name: 🏗️ Run code generation
+        run: flutter pub run build_runner build --delete-conflicting-outputs
+
+      - name: 🔍 Run analyzer
+        run: flutter analyze
+
+      - name: ✅ Run tests
+        run: flutter test
+
+  # ============================================================================
+  # BUILD ANDROID APK (Debug)
+  # ============================================================================
+  build-android-debug:
+    name: Build Android APK (Debug)
+    runs-on: ubuntu-latest
+    needs: analyze
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    defaults:
+      run:
+        working-directory: molas_supervisor_mobile
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: ☕ Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 🎯 Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.x'
+          channel: 'stable'
+          cache: true
+
+      - name: 📦 Install dependencies
+        run: flutter pub get
+
+      - name: 🏗️ Run code generation
+        run: flutter pub run build_runner build --delete-conflicting-outputs
+
+      - name: 🔨 Build APK (Debug)
+        run: |
+          flutter build apk --debug \
+            --dart-define=ENVIRONMENT=Test \
+            --dart-define=API_BASE_URL=https://api.molaslubes.co.za \
+            --dart-define=API_KEY=${{ secrets.API_KEY_TEST }}
+
+      - name: 📤 Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-debug-apk
+          path: molas_supervisor_mobile/build/app/outputs/flutter-apk/app-debug.apk
+          retention-days: 7
+
+  # ============================================================================
+  # BUILD ANDROID APK (Release)
+  # ============================================================================
+  build-android-release:
+    name: Build Android APK (Release)
+    runs-on: ubuntu-latest
+    needs: analyze
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
+    defaults:
+      run:
+        working-directory: molas_supervisor_mobile
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: ☕ Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 🎯 Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.x'
+          channel: 'stable'
+          cache: true
+
+      - name: 📦 Install dependencies
+        run: flutter pub get
+
+      - name: 🏗️ Run code generation
+        run: flutter pub run build_runner build --delete-conflicting-outputs
+
+      - name: 🔑 Decode Android keystore
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > android/app/keystore.jks
+
+      - name: 🔨 Build APK (Release)
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          flutter build apk --release \
+            --dart-define=ENVIRONMENT=${{ github.event.inputs.environment || 'Live' }} \
+            --dart-define=API_BASE_URL=https://api.molaslubes.co.za \
+            --dart-define=API_KEY=${{ secrets.API_KEY_LIVE }}
+
+      - name: 📤 Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-release-apk
+          path: molas_supervisor_mobile/build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 90
+
+      - name: 🚀 Create GitHub Release
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'Live'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: mobile-v${{ github.run_number }}
+          name: Mobile App v${{ github.run_number }}
+          files: molas_supervisor_mobile/build/app/outputs/flutter-apk/app-release.apk
+          draft: true
+          generate_release_notes: true
+
+  # ============================================================================
+  # BUILD iOS (macOS only)
+  # ============================================================================
+  build-ios:
+    name: Build iOS IPA
+    runs-on: macos-latest
+    needs: analyze
+    if: github.event_name == 'workflow_dispatch' && contains(fromJSON('["Live", "Test"]'), github.event.inputs.environment)
+    defaults:
+      run:
+        working-directory: molas_supervisor_mobile
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🎯 Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.x'
+          channel: 'stable'
+          cache: true
+
+      - name: 📦 Install dependencies
+        run: flutter pub get
+
+      - name: 🏗️ Run code generation
+        run: flutter pub run build_runner build --delete-conflicting-outputs
+
+      - name: 🍎 Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: 'latest-stable'
+
+      - name: 📦 Install CocoaPods dependencies
+        run: |
+          cd ios
+          pod install --repo-update
+
+      - name: 🔨 Build iOS (No Code Sign)
+        run: |
+          flutter build ios --release --no-codesign \
+            --dart-define=ENVIRONMENT=${{ github.event.inputs.environment }} \
+            --dart-define=API_BASE_URL=https://api.molaslubes.co.za \
+            --dart-define=API_KEY=${{ secrets.API_KEY_LIVE }}
+
+      - name: 📝 Note
+        run: |
+          echo "⚠️ iOS build completed without code signing"
+          echo "For distribution, sign the .app manually using Xcode or fastlane"
+
+      - name: 📤 Upload iOS App
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-unsigned-app
+          path: molas_supervisor_mobile/build/ios/iphoneos/Runner.app
+          retention-days: 7

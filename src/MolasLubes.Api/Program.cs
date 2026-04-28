@@ -24,6 +24,9 @@ using MolasLubes.Infrastructure.Integrations.Germax;
 using MolasLubes.Infrastructure.Integrations.SapB1.Profiles;
 using Microsoft.OpenApi;
 using Quartz;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -89,9 +92,62 @@ builder.Services.Configure<ApiKeyOptions>(
 builder.Services.AddScoped<ApiKeyAttribute>();
 
 // =====================================================
+// 🔐 JWT AUTHENTICATION
+// =====================================================
+builder.Services.AddSingleton<JwtService>();
+builder.Services.AddSingleton<RefreshTokenStore>();
+builder.Services.AddScoped<SapUserAuthService>();
+
+var jwtSecret = builder.Configuration["Jwt:Secret"];
+if (!string.IsNullOrWhiteSpace(jwtSecret) && jwtSecret.Length >= 32)
+{
+    builder.Services.AddAuthentication(options =>
+    {
+        options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+        options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+    })
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret)),
+            ValidateIssuer = true,
+            ValidIssuer = builder.Configuration["Jwt:Issuer"] ?? "MolasLubes.Api",
+            ValidateAudience = true,
+            ValidAudience = builder.Configuration["Jwt:Audience"] ?? "MolasLubes.Clients",
+            ValidateLifetime = true,
+            ClockSkew = TimeSpan.FromMinutes(1)
+        };
+
+        options.Events = new JwtBearerEvents
+        {
+            OnAuthenticationFailed = context =>
+            {
+                if (context.Exception.GetType() == typeof(SecurityTokenExpiredException))
+                {
+                    context.Response.Headers.Append("Token-Expired", "true");
+                }
+                return Task.CompletedTask;
+            }
+        };
+    });
+
+    builder.Services.AddAuthorization();
+}
+
+// =====================================================
 // CORE
 // =====================================================
-builder.Services.AddControllers();
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+    {
+        // Configure JSON serialization for camelCase (required by Flutter frontend)
+        options.JsonSerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase;
+        options.JsonSerializerOptions.DictionaryKeyPolicy = System.Text.Json.JsonNamingPolicy.CamelCase;
+        options.JsonSerializerOptions.WriteIndented = false;
+    });
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {
@@ -608,6 +664,10 @@ else
 {
     app.UseHttpsRedirection();
 }
+
+// Authentication & Authorization middleware
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapControllers();
 

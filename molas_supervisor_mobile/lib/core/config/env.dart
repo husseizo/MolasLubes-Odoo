@@ -10,7 +10,7 @@ class Env {
 
   static const String apiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'https://api.molaslubes.co.za',
+    defaultValue: 'https://cari-unconcrete-unritually.ngrok-free.dev',
   );
 
   static const String apiKey = String.fromEnvironment(
