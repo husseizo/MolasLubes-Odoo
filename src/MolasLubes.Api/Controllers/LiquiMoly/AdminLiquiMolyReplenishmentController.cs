@@ -141,6 +141,29 @@ public class AdminLiquiMolyReplenishmentController : ControllerBase
     }
 
     /// <summary>
+    /// Executes an APPROVED replenishment request via inter-company SO → PO → GR flow.
+    /// Phase 1: Creates Sales Order in MolasLubes (customer SHP00118).
+    /// Phase 2: Creates Purchase Order in AutoHub (vendor SUP00001).
+    /// Phase 3: Creates Goods Receipt PO in AutoHub against the PO.
+    /// </summary>
+    [HttpPost("{requestRef}/execute-intercompany")]
+    public async Task<IActionResult> ExecuteInterCompany(
+        string requestRef,
+        [FromBody] ExecuteReplenishmentRequest request,
+        CancellationToken ct)
+    {
+        try
+        {
+            var result = await _execService.ExecuteWithSalesAndPurchaseAsync(requestRef, request, ct);
+            return Ok(result);
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (KeyNotFoundException ex)        { return NotFound(ex.Message); }
+        catch (InvalidOperationException ex)   { return BadRequest(ex.Message); }
+        catch (Exception ex)                   { return StatusCode(500, ex.Message); }
+    }
+
+    /// <summary>
     /// Retry GR posting for a PARTIAL or FAILED request (delegates to transfer retry-receipt).
     /// </summary>
     [HttpPost("{requestRef}/retry")]
@@ -220,6 +243,11 @@ public class AdminLiquiMolyReplenishmentController : ControllerBase
         header.GoodsIssueDocNum,
         header.GoodsReceiptDocEntry,
         header.GoodsReceiptDocNum,
+        header.ExecutionMode,
+        header.SalesOrderDocEntry,
+        header.SalesOrderDocNum,
+        header.PurchaseOrderDocEntry,
+        header.PurchaseOrderDocNum,
         header.ErrorMessage,
         Lines = header.Lines
             .OrderBy(l => l.Id)
@@ -250,6 +278,9 @@ public class AdminLiquiMolyReplenishmentController : ControllerBase
         header.TransferRef,
         header.GoodsIssueDocNum,
         header.GoodsReceiptDocNum,
+        header.ExecutionMode,
+        header.SalesOrderDocNum,
+        header.PurchaseOrderDocNum,
         header.ErrorMessage,
         lineCount = header.Lines.Count
     };

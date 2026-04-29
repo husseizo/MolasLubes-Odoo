@@ -46,5 +46,12 @@ public class CacheLiquiMolyReplenishmentRequest
     public string? GoodsReceiptDocNum   { get; set; }
     public string? ErrorMessage         { get; set; }
 
+    // Inter-company execution (Sales Order → Purchase Order → Goods Receipt)
+    public int?    SalesOrderDocEntry    { get; set; }  // ORDR in MolasLubes
+    public int?    SalesOrderDocNum      { get; set; }
+    public int?    PurchaseOrderDocEntry { get; set; }  // OPOR in AutoHub
+    public int?    PurchaseOrderDocNum   { get; set; }
+    public string? ExecutionMode         { get; set; } = "TRANSFER";  // TRANSFER or SALES_PURCHASE
+
     public List<CacheLiquiMolyReplenishmentRequestLine> Lines { get; set; } = new();
 }

@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using MolasLubes.Application.LiquiMolyReplenishment;
 using MolasLubes.Application.LiquiMolyTransfers;
 using MolasLubes.Domain.Entities.Cache;
+using MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 using MolasLubes.Infrastructure.Persistence;
 using MolasLubes.Infrastructure.Security;
 using MolasLubes.Infrastructure.Services.LiquiMolyTransfers;
@@ -20,20 +21,29 @@ namespace MolasLubes.Infrastructure.Services.LiquiMolyReplenishment;
 /// </summary>
 public class LiquiMolyReplenishmentExecutionService
 {
-    private readonly LiquiMolyTransferService  _transferService;
-    private readonly LiquiMolyRoleService      _roleService;
-    private readonly MolasCacheDbContext       _db;
+    private readonly LiquiMolyTransferService              _transferService;
+    private readonly LiquiMolyRoleService                  _roleService;
+    private readonly MolasCacheDbContext                   _db;
+    private readonly SapInterCompanySalesOrderWriter       _soWriter;
+    private readonly SapPurchaseOrderWriter                _poWriter;
+    private readonly SapGoodsReceiptWriter                 _grWriter;
     private readonly ILogger<LiquiMolyReplenishmentExecutionService> _logger;
 
     public LiquiMolyReplenishmentExecutionService(
-        LiquiMolyTransferService  transferService,
-        LiquiMolyRoleService      roleService,
-        MolasCacheDbContext       db,
+        LiquiMolyTransferService              transferService,
+        LiquiMolyRoleService                  roleService,
+        MolasCacheDbContext                   db,
+        SapInterCompanySalesOrderWriter       soWriter,
+        SapPurchaseOrderWriter                poWriter,
+        SapGoodsReceiptWriter                 grWriter,
         ILogger<LiquiMolyReplenishmentExecutionService> logger)
     {
         _transferService = transferService;
         _roleService     = roleService;
         _db              = db;
+        _soWriter        = soWriter;
+        _poWriter        = poWriter;
+        _grWriter        = grWriter;
         _logger          = logger;
     }
 
@@ -100,9 +110,159 @@ public class LiquiMolyReplenishmentExecutionService
         return result;
     }
 
-    // ── Retry ─────────────────────────────────────────────────────────
+    // ── Execute via SO → PO → GR (inter-company) ─────────────────────
 
-    public async Task<LiquiMolyTransferApplyResult> RetryExecutionAsync(
+    /// <summary>
+    /// Executes an APPROVED replenishment request via the inter-company Sales Order → Purchase Order → Goods Receipt flow:
+    /// <list type="number">
+    ///   <item>Phase 1 — Creates a Sales Order (ORDR) in MolasLubes for customer SHP00118</item>
+    ///   <item>Phase 2 — Creates a Purchase Order (OPOR) in AutoHub for vendor SUP00001</item>
+    ///   <item>Phase 3 — Creates a Goods Receipt PO (OPDN) in AutoHub against the PO</item>
+    /// </list>
+    /// Each phase saves its DocEntry/DocNum immediately so a retry can resume from where it failed.
+    /// </summary>
+    public async Task<LiquiMolyTransferApplyResult> ExecuteWithSalesAndPurchaseAsync(
+        string requestRef,
+        ExecuteReplenishmentRequest request,
+        CancellationToken ct = default)
+    {
+        _roleService.Authorize(request.Actor.SapUserCode, LiquiMolyRole.Executor);
+
+        var header = await LoadApprovedOrThrow(requestRef, ct);
+
+        header.Status            = "EXECUTING";
+        header.ExecutionMode     = "SALES_PURCHASE";
+        header.ExecutedBySapUser = request.Actor.SapUserCode;
+        await _db.SaveChangesAsync(ct);
+
+        var soLines = header.Lines
+            .Select(l => new InterCompanySalesOrderLine(
+                SourceItemCode: l.SourceItemCode,
+                Quantity:       l.ApprovedQty ?? l.SuggestedQty))
+            .Where(l => l.Quantity > 0)
+            .ToList();
+
+        // ── Phase 1: Sales Order in MolasLubes ───────────────────────
+        SapDocumentRef soRef;
+        try
+        {
+            soRef = _soWriter.CreateSalesOrder(
+                profileKey:  header.SourceProfile,
+                transferRef: header.RequestRef,
+                comments:    $"Replenishment {header.RequestRef}",
+                lines:       soLines);
+
+            header.SalesOrderDocEntry = soRef.DocEntry;
+            header.SalesOrderDocNum   = int.TryParse(soRef.DocNum, out var soNum) ? soNum : null;
+            await _db.SaveChangesAsync(ct);
+
+            _logger.LogInformation(
+                "Replenishment SO created | Ref={Ref} | SODocEntry={Entry} | SODocNum={Num}",
+                requestRef, soRef.DocEntry, soRef.DocNum);
+        }
+        catch (Exception ex)
+        {
+            header.Status       = "FAILED";
+            header.ErrorMessage = $"SO creation failed: {ex.Message}";
+            header.ExecutedAt   = DateTime.UtcNow;
+            await _db.SaveChangesAsync(ct);
+            _logger.LogError(ex, "Replenishment SO failed | Ref={Ref}", requestRef);
+            throw;
+        }
+
+        // ── Phase 2: Purchase Order in AutoHub ───────────────────────
+        SapDocumentRef poRef;
+        try
+        {
+            var poLines = header.Lines
+                .Select(l => new PurchaseOrderLine(
+                    TargetItemCode: l.TargetItemCode,
+                    Quantity:       l.ApprovedQty ?? l.SuggestedQty,
+                    UnitPrice:      0m,          // SAP will pull price from vendor price list; SO price drives the SO side
+                    WarehouseCode:  header.TargetWarehouse))
+                .Where(l => l.Quantity > 0)
+                .ToList();
+
+            poRef = _poWriter.CreatePurchaseOrder(
+                profileKey:  header.TargetProfile,
+                transferRef: header.RequestRef,
+                comments:    $"Replenishment {header.RequestRef} — SO {soRef.DocNum}",
+                lines:       poLines);
+
+            header.PurchaseOrderDocEntry = poRef.DocEntry;
+            header.PurchaseOrderDocNum   = int.TryParse(poRef.DocNum, out var poNum) ? poNum : null;
+            await _db.SaveChangesAsync(ct);
+
+            _logger.LogInformation(
+                "Replenishment PO created | Ref={Ref} | PODocEntry={Entry} | PODocNum={Num}",
+                requestRef, poRef.DocEntry, poRef.DocNum);
+        }
+        catch (Exception ex)
+        {
+            header.Status       = "PARTIAL";  // SO exists, PO failed
+            header.ErrorMessage = $"PO creation failed (SO {soRef.DocNum} exists): {ex.Message}";
+            header.ExecutedAt   = DateTime.UtcNow;
+            await _db.SaveChangesAsync(ct);
+            _logger.LogError(ex, "Replenishment PO failed | Ref={Ref} | SODocEntry={Entry}", requestRef, soRef.DocEntry);
+            throw;
+        }
+
+        // ── Phase 3: Goods Receipt PO in AutoHub ─────────────────────
+        try
+        {
+            var grRef = _grWriter.CreateGoodsReceiptFromPurchaseOrder(
+                profileKey:  header.TargetProfile,
+                poDocEntry:  poRef.DocEntry,
+                transferRef: header.RequestRef,
+                comments:    $"Replenishment {header.RequestRef} — PO {poRef.DocNum}");
+
+            header.GoodsReceiptDocEntry = grRef.DocEntry;
+            header.GoodsReceiptDocNum   = grRef.DocNum;
+            header.Status               = "EXECUTED";
+            header.ExecutedAt           = DateTime.UtcNow;
+
+            foreach (var line in header.Lines)
+                line.ExecutionStatus = "EXECUTED";
+
+            await _db.SaveChangesAsync(ct);
+
+            _logger.LogInformation(
+                "Replenishment GR PO created | Ref={Ref} | GRDocEntry={Entry} | GRDocNum={Num} | Status=EXECUTED",
+                requestRef, grRef.DocEntry, grRef.DocNum);
+        }
+        catch (Exception ex)
+        {
+            header.Status       = "PARTIAL";  // SO + PO exist, GR failed
+            header.ErrorMessage = $"GR creation failed (SO {soRef.DocNum}, PO {poRef.DocNum} exist): {ex.Message}";
+            header.ExecutedAt   = DateTime.UtcNow;
+            await _db.SaveChangesAsync(ct);
+            _logger.LogError(ex, "Replenishment GR PO failed | Ref={Ref} | PODocEntry={Entry}", requestRef, poRef.DocEntry);
+            throw;
+        }
+
+        return new LiquiMolyTransferApplyResult
+        {
+            TransferRef           = header.RequestRef,
+            Status                = "COMPLETED",
+            ExecutionMode         = "SALES_PURCHASE",
+            SalesOrderDocEntry    = header.SalesOrderDocEntry,
+            SalesOrderDocNum      = header.SalesOrderDocNum,
+            PurchaseOrderDocEntry = header.PurchaseOrderDocEntry,
+            PurchaseOrderDocNum   = header.PurchaseOrderDocNum,
+            GoodsReceiptDocEntry  = header.GoodsReceiptDocEntry,
+            GoodsReceiptDocNum    = header.GoodsReceiptDocNum,
+            Lines                 = soLines
+                .Select(l => new TransferLinePreflightRow
+                {
+                    SourceItemCode = l.SourceItemCode,
+                    RequestedQty   = l.Quantity,
+                    Outcome        = TransferLineOutcome.OK
+                })
+                .ToList()
+        };
+    }
+
+    // ── Retry ─────────────────────────────────────────────────────────
         string requestRef,
         ExecuteReplenishmentRequest request,
         CancellationToken ct = default)

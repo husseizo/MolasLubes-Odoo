@@ -10,6 +10,8 @@ namespace MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 
 /// <summary>
 /// Creates Goods Receipt (oInventoryGenEntry / OIGN) documents in a named SAP profile.
+/// Supports both standalone receipts (for GI→GR transfer flow) and
+/// PO-based receipts (for inter-company SO→PO→GR flow).
 /// Each call opens a fresh STA-thread connection and releases it after the document is created.
 /// </summary>
 public class SapGoodsReceiptWriter
@@ -109,6 +111,174 @@ public class SapGoodsReceiptWriter
 
         if (threadException != null) throw threadException;
         return result!;
+    }
+
+    /// <summary>
+    /// Creates a Goods Receipt PO (oPurchaseDeliveryNotes / OPDN) in AutoHub,
+    /// based on an existing Purchase Order (OPOR).
+    /// SAP will copy all lines automatically via base document linking
+    /// (BaseType = 22 = Purchase Order, BaseEntry = PO DocEntry).
+    /// Used for the inter-company SO→PO→GR flow.
+    /// </summary>
+    /// <param name="profileKey">Profile key for AutoHub company (e.g., "AutoHub")</param>
+    /// <param name="poDocEntry">DocEntry of the Purchase Order to receive against</param>
+    /// <param name="transferRef">Replenishment reference for tracking</param>
+    /// <param name="comments">Additional comments to store in the document</param>
+    /// <returns>SAP DocEntry and DocNum of the created Goods Receipt PO</returns>
+    public SapDocumentRef CreateGoodsReceiptFromPurchaseOrder(
+        string profileKey,
+        int poDocEntry,
+        string transferRef,
+        string comments)
+    {
+        if (!_profiles.Profiles.TryGetValue(profileKey, out var profile))
+            throw new InvalidOperationException($"Profile '{profileKey}' not configured.");
+
+        _logger.LogInformation(
+            "SapGoodsReceiptWriter: Creating GR from PO | Profile={Profile} | PODocEntry={PoDocEntry} | Ref={Ref}",
+            profileKey, poDocEntry, transferRef);
+
+        SapDocumentRef? result = null;
+        Exception? threadException = null;
+
+        var thread = new Thread(() =>
+        {
+            Company? company = null;
+            Documents? grpo  = null;
+
+            try
+            {
+                company = CreateAndConnect(profile.Sap);
+
+                // oPurchaseDeliveryNotes = Goods Receipt PO (OPDN)
+                // This is the correct SAP document type for receiving goods against a PO
+                grpo = (Documents)company.GetBusinessObject(BoObjectTypes.oPurchaseDeliveryNotes);
+
+                // Header
+                grpo.CardCode = "SUP00001";  // Molas Lubes Ltd vendor
+                grpo.DocDate  = DateTime.Today;
+                grpo.TaxDate  = DateTime.Today;
+                grpo.Comments = $"LM Replenishment {transferRef} — GR from PO {poDocEntry} | {comments}".Trim();
+                grpo.UserFields.Fields.Item("U_TransferRef").Value = transferRef;
+                grpo.UserFields.Fields.Item("U_FromDb").Value      = "MolasLubes";
+                grpo.UserFields.Fields.Item("U_ToDb").Value        = profileKey;
+
+                // Copy all lines from the Purchase Order via base document linking
+                // SAP BaseType 22 = Purchase Order (OPOR)
+                grpo.Lines.BaseType  = 22;
+                grpo.Lines.BaseEntry = poDocEntry;
+                grpo.Lines.BaseLine  = 0;  // line index 0 = first PO line
+                grpo.Lines.Add();
+
+                // Note: For multi-line POs, SAP copies all open lines when BaseEntry is set
+                // on the document header before any Lines.Add() calls.
+                // If only specific lines are needed, set BaseType/BaseEntry/BaseLine per line.
+
+                int rc = grpo.Add();
+                if (rc != 0)
+                {
+                    company.GetLastError(out var code, out var msg);
+                    throw new Exception(
+                        $"Goods Receipt PO Add() failed [{code}]: {msg} | PODocEntry={poDocEntry} | Ref={transferRef}");
+                }
+
+                var docEntry = int.Parse(company.GetNewObjectKey());
+
+                var rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
+                try
+                {
+                    rs.DoQuery($"SELECT DocNum FROM OPDN WHERE DocEntry = {docEntry}");
+                    var docNum = rs.EoF ? docEntry.ToString()
+                        : rs.Fields.Item("DocNum").Value?.ToString() ?? docEntry.ToString();
+                    result = new SapDocumentRef(docEntry, docNum);
+                }
+                finally
+                {
+                    Marshal.ReleaseComObject(rs);
+                }
+
+                _logger.LogInformation(
+                    "SapGoodsReceiptWriter: GR from PO created | Profile={Profile} | DocEntry={Entry} | DocNum={Num} | PODocEntry={PoEntry} | Ref={Ref}",
+                    profileKey, docEntry, result.DocNum, poDocEntry, transferRef);
+            }
+            catch (Exception ex)
+            {
+                threadException = ex;
+                _logger.LogError(ex,
+                    "SapGoodsReceiptWriter: GR from PO failed | Profile={Profile} | PODocEntry={PoDocEntry} | Ref={Ref}",
+                    profileKey, poDocEntry, transferRef);
+            }
+            finally
+            {
+                if (grpo != null) Marshal.ReleaseComObject(grpo);
+                DisconnectAndRelease(company);
+            }
+        });
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+
+        if (threadException != null) throw threadException;
+        return result!;
+    }
+
+    /// <summary>
+    /// Checks AutoHub company for an OPDN (Goods Receipt PO) whose U_TransferRef matches the given ref.
+    /// Returns the existing document ref if found, or null if no match.
+    /// Used to prevent duplicate GR creation when retrying after a partial failure.
+    /// </summary>
+    public SapDocumentRef? FindGoodsReceiptPoByTransferRef(string profileKey, string transferRef)
+    {
+        if (!_profiles.Profiles.TryGetValue(profileKey, out var profile))
+            throw new InvalidOperationException($"Profile '{profileKey}' not configured.");
+
+        SapDocumentRef? found = null;
+        Exception? threadException = null;
+
+        var thread = new Thread(() =>
+        {
+            Company? company = null;
+            Recordset? rs    = null;
+
+            try
+            {
+                company = CreateAndConnect(profile.Sap);
+                rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
+
+                var safeRef = transferRef.Replace("'", "''");
+                rs.DoQuery($"SELECT DocEntry, DocNum FROM OPDN WHERE U_TransferRef = '{safeRef}'");
+
+                if (!rs.EoF)
+                {
+                    var docEntry = Convert.ToInt32(rs.Fields.Item("DocEntry").Value);
+                    var docNum   = rs.Fields.Item("DocNum").Value?.ToString() ?? docEntry.ToString();
+                    found = new SapDocumentRef(docEntry, docNum);
+                }
+            }
+            catch (Exception ex)
+            {
+                threadException = ex;
+            }
+            finally
+            {
+                if (rs != null) Marshal.ReleaseComObject(rs);
+                DisconnectAndRelease(company);
+            }
+        });
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+
+        if (threadException != null) throw threadException;
+
+        if (found != null)
+            _logger.LogInformation(
+                "SapGoodsReceiptWriter: found existing GR PO | Profile={Profile} | DocEntry={Entry} | DocNum={Num} | Ref={Ref}",
+                profileKey, found.DocEntry, found.DocNum, transferRef);
+
+        return found;
     }
 
     /// <summary>

@@ -30,11 +30,19 @@ public class LiquiMolyTransferApplyResult
 {
     public string  TransferRef           { get; init; } = string.Empty;
     public string  Status                { get; init; } = string.Empty;
+    public string  ExecutionMode         { get; init; } = "TRANSFER";
 
+    // TRANSFER flow (GI → GR)
     public int?    GoodsIssueDocEntry    { get; init; }
     public string? GoodsIssueDocNum      { get; init; }
     public int?    GoodsReceiptDocEntry  { get; init; }
     public string? GoodsReceiptDocNum    { get; init; }
+
+    // SALES_PURCHASE flow (SO → PO → GR PO)
+    public int?    SalesOrderDocEntry    { get; init; }
+    public int?    SalesOrderDocNum      { get; init; }
+    public int?    PurchaseOrderDocEntry { get; init; }
+    public int?    PurchaseOrderDocNum   { get; init; }
 
     public string? ErrorMessage          { get; init; }
     public List<TransferLinePreflightRow> Lines { get; init; } = new();

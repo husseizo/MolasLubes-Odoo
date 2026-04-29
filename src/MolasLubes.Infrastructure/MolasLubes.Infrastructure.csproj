@@ -40,7 +40,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Folder Include="Migrations\" />
     <Folder Include="Persistence\Migrations\Cache\" />
     <Folder Include="Persistence\Migrations\Neon\" />
     <Folder Include="Persistence\Migrations\Live2021Cache\" />

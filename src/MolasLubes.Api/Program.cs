@@ -312,6 +312,14 @@ builder.Services.AddSingleton<ReplenishmentRefGenerator>();
 builder.Services.AddScoped<LiquiMolyReplenishmentService>();
 builder.Services.AddScoped<LiquiMolyReplenishmentExecutionService>();
 
+// Inter-company SO → PO → GR writers (Step 3, 4, 5)
+builder.Services.AddScoped<
+    MolasLubes.Infrastructure.Services.LiquiMolyReplenishment.PL05PricingCalculator>();
+builder.Services.AddScoped<
+    MolasLubes.Infrastructure.Integrations.SapB1.DiApi.SapInterCompanySalesOrderWriter>();
+builder.Services.AddScoped<
+    MolasLubes.Infrastructure.Integrations.SapB1.DiApi.SapPurchaseOrderWriter>();
+
 // =====================================================
 // AUTOHUB SERVICES — PROFILE B
 // =====================================================
