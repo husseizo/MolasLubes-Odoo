@@ -263,6 +263,8 @@ public class LiquiMolyReplenishmentExecutionService
     }
 
     // ── Retry ─────────────────────────────────────────────────────────
+
+    public async Task<LiquiMolyTransferApplyResult> RetryExecutionAsync(
         string requestRef,
         ExecuteReplenishmentRequest request,
         CancellationToken ct = default)
