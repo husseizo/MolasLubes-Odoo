@@ -57,12 +57,13 @@ public class SapGoodsIssueWriter
                 gi.UserFields.Fields.Item("U_FromDb").Value      = profileKey;
                 gi.UserFields.Fields.Item("U_ToDb").Value        = targetProfile;
 
-                foreach (var line in lines)
+                for (int i = 0; i < lines.Count; i++)
                 {
+                    if (i > 0) gi.Lines.Add();
+                    var line = lines[i];
                     gi.Lines.ItemCode      = line.ItemCode;
                     gi.Lines.Quantity      = (double)line.Quantity;
                     gi.Lines.WarehouseCode = warehouseCode;
-                    gi.Lines.Add();
                 }
 
                 int rc = gi.Add();

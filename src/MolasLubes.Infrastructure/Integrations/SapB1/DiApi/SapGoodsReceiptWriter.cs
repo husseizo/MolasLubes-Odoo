@@ -49,24 +49,35 @@ public class SapGoodsReceiptWriter
 
             try
             {
+                _logger.LogDebug("SapGoodsReceiptWriter: connecting to {Profile} | Ref={Ref}", profileKey, transferRef);
                 company = CreateAndConnect(profile.Sap);
+
+                _logger.LogDebug("SapGoodsReceiptWriter: connected, getting OIGN object | Ref={Ref}", transferRef);
                 gr = (Documents)company.GetBusinessObject(BoObjectTypes.oInventoryGenEntry);
 
                 gr.DocDate  = DateTime.Today;
                 gr.TaxDate  = DateTime.Today;
                 gr.Comments = $"LM Transfer {transferRef} ← {sourceProfile} | {comments}".Trim();
-                gr.UserFields.Fields.Item("U_TransferRef").Value = transferRef;
-                gr.UserFields.Fields.Item("U_FromDb").Value      = sourceProfile;
-                gr.UserFields.Fields.Item("U_ToDb").Value        = profileKey;
 
-                foreach (var line in lines)
+                _logger.LogDebug("SapGoodsReceiptWriter: setting UDFs | Ref={Ref}", transferRef);
+                TrySetUserField(gr, "U_TransferRef", transferRef,   profileKey, transferRef);
+                TrySetUserField(gr, "U_FromDb",      sourceProfile, profileKey, transferRef);
+                TrySetUserField(gr, "U_ToDb",        profileKey,    profileKey, transferRef);
+
+                _logger.LogDebug("SapGoodsReceiptWriter: adding {Count} line(s) | Ref={Ref}", lines.Count, transferRef);
+                for (int i = 0; i < lines.Count; i++)
                 {
+                    if (i > 0) gr.Lines.Add();
+                    var line = lines[i];
                     gr.Lines.ItemCode      = line.TargetItemCode ?? line.ItemCode;
                     gr.Lines.Quantity      = (double)line.Quantity;
                     gr.Lines.WarehouseCode = warehouseCode;
-                    gr.Lines.Add();
+                    _logger.LogDebug(
+                        "SapGoodsReceiptWriter: line {I} | ItemCode={ItemCode} | Qty={Qty} | WH={WH}",
+                        i, gr.Lines.ItemCode, gr.Lines.Quantity, warehouseCode);
                 }
 
+                _logger.LogDebug("SapGoodsReceiptWriter: calling gr.Add() | Ref={Ref}", transferRef);
                 int rc = gr.Add();
                 if (rc != 0)
                 {
@@ -337,6 +348,20 @@ public class SapGoodsReceiptWriter
                 profileKey, found.DocEntry, found.DocNum, transferRef);
 
         return found;
+    }
+
+    private void TrySetUserField(Documents doc, string fieldName, string value, string profileKey, string transferRef)
+    {
+        try
+        {
+            doc.UserFields.Fields.Item(fieldName).Value = value;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                "SapGoodsReceiptWriter: UDF '{Field}' not found on OIGN in profile {Profile} | Ref={Ref} | {Msg}",
+                fieldName, profileKey, transferRef, ex.Message);
+        }
     }
 
     private static Company CreateAndConnect(SapSettings sap)
