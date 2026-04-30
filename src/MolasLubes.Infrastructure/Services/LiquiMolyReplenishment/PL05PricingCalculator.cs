@@ -127,19 +127,8 @@ WHERE OITM.ItemCode = '{EscapeSql(itemCode)}'
             var pl05PriceObj = rs.Fields.Item("PL05Price").Value;
             var avgPriceObj = rs.Fields.Item("AvgPrice").Value;
 
-            // Convert PL05 price
-            decimal? pl05Price = null;
-            if (pl05PriceObj != null && pl05PriceObj != DBNull.Value)
-            {
-                pl05Price = Convert.ToDecimal(pl05PriceObj);
-            }
-
-            // Convert average price
-            decimal? avgPrice = null;
-            if (avgPriceObj != null && avgPriceObj != DBNull.Value)
-            {
-                avgPrice = Convert.ToDecimal(avgPriceObj);
-            }
+            var pl05Price = ToDecimalOrNull(pl05PriceObj);
+            var avgPrice  = ToDecimalOrNull(avgPriceObj);
 
             // Apply pricing formula
             decimal finalPrice;
@@ -183,6 +172,9 @@ WHERE OITM.ItemCode = '{EscapeSql(itemCode)}'
             if (rs != null) Marshal.ReleaseComObject(rs);
         }
     }
+
+    private static decimal? ToDecimalOrNull(object? v) =>
+        v == null || v is DBNull ? null : Convert.ToDecimal(v);
 
     private static string EscapeSql(string value)
     {
