@@ -88,7 +88,7 @@ public class LiquiMolyReplenishmentExecutionService
         header.GoodsIssueDocNum     = result.GoodsIssueDocNum;
         header.GoodsReceiptDocEntry = result.GoodsReceiptDocEntry;
         header.GoodsReceiptDocNum   = result.GoodsReceiptDocNum;
-        header.ErrorMessage         = result.ErrorMessage;
+        header.ErrorMessage         = result.ErrorMessage;  // captures preflight errors too
         header.ExecutedAt           = DateTime.UtcNow;
 
         header.Status = result.Status switch
@@ -104,8 +104,8 @@ public class LiquiMolyReplenishmentExecutionService
         await _db.SaveChangesAsync(ct);
 
         _logger.LogInformation(
-            "Replenishment: execution done | Ref={Ref} | TransferRef={TRef} | Status={Status}",
-            requestRef, result.TransferRef, header.Status);
+            "Replenishment: execution done | Ref={Ref} | TransferRef={TRef} | Status={Status} | Error={Error}",
+            requestRef, result.TransferRef, header.Status, result.ErrorMessage ?? "-");
 
         return result;
     }

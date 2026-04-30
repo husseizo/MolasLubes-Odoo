@@ -98,6 +98,113 @@ public class LiquiMolyReplenishmentService
         return (requestRef, rows);
     }
 
+    // ── Draft line edits (atomic) ─────────────────────────────────────
+
+    /// <summary>
+    /// Atomically applies SET_QTY and DELETE_LINE operations to a DRAFT request.
+    /// Validates optimistic concurrency via ExpectedVersion before writing.
+    /// </summary>
+    public async Task<DraftLineApplyResponse> ApplyDraftLinesAsync(
+        string requestRef,
+        DraftLineApplyRequest request,
+        CancellationToken ct = default)
+    {
+        _roleService.Authorize(request.Actor.SapUserCode, LiquiMolyRole.Planner);
+
+        var header = await _db.CacheLiquiMolyReplenishmentRequests
+            .Include(r => r.Lines)
+            .FirstOrDefaultAsync(r => r.RequestRef == requestRef, ct)
+            ?? throw new KeyNotFoundException($"Replenishment request '{requestRef}' not found.");
+
+        // Status guard
+        if (header.Status != request.ExpectedStatus)
+            throw new InvalidOperationException(
+                $"DRAFT_STATUS_CONFLICT|Current status is '{header.Status}', expected '{request.ExpectedStatus}'.");
+
+        // Optimistic concurrency guard
+        if (header.Version != request.ExpectedVersion)
+            throw new InvalidOperationException(
+                $"DRAFT_VERSION_CONFLICT|Version mismatch: current={header.Version}, expected={request.ExpectedVersion}.");
+
+        if (request.Operations == null || request.Operations.Count == 0)
+            throw new ArgumentException("At least one operation is required.");
+
+        // Validate all operations before applying any (transactional semantics)
+        var lineIndex = header.Lines.ToDictionary(l => l.Id);
+
+        foreach (var op in request.Operations)
+        {
+            if (op.Op != "SET_QTY" && op.Op != "DELETE_LINE")
+                throw new ArgumentException($"Unknown operation type '{op.Op}'.");
+
+            if (!lineIndex.ContainsKey(op.LineId))
+                throw new KeyNotFoundException($"Line {op.LineId} not found in request '{requestRef}'.");
+
+            if (op.Op == "SET_QTY")
+            {
+                if (!op.ApprovedQty.HasValue)
+                    throw new ArgumentException($"operations[{op.LineId}].approvedQty is required for SET_QTY.");
+
+                if (op.ApprovedQty.Value < 0)
+                    throw new ArgumentException($"operations[{op.LineId}].approvedQty must be >= 0.");
+            }
+        }
+
+        // Apply operations
+        var lineIdsToDelete = new HashSet<int>();
+
+        foreach (var op in request.Operations)
+        {
+            var line = lineIndex[op.LineId];
+
+            if (op.Op == "SET_QTY")
+            {
+                line.ApprovedQty = op.ApprovedQty!.Value;
+            }
+            else if (op.Op == "DELETE_LINE")
+            {
+                lineIdsToDelete.Add(op.LineId);
+                _db.Remove(line);
+            }
+        }
+
+        header.Version++;
+
+        await _db.SaveChangesAsync(ct);
+
+        _logger.LogInformation(
+            "Replenishment: draft lines applied | Ref={Ref} | Ops={OpCount} | Deleted={Del} | Version={V} | Actor={Actor}",
+            requestRef, request.Operations.Count, lineIdsToDelete.Count, header.Version, request.Actor.SapUserCode);
+
+        var remainingLines = header.Lines
+            .Where(l => !lineIdsToDelete.Contains(l.Id))
+            .OrderBy(l => l.Priority)
+            .ToList();
+
+        return new DraftLineApplyResponse
+        {
+            RequestRef = header.RequestRef,
+            Status     = header.Status,
+            Version    = header.Version,
+            LineCount  = remainingLines.Count,
+            Totals = new DraftLineTotals
+            {
+                SuggestedQty = remainingLines.Sum(l => l.SuggestedQty),
+                ApprovedQty  = remainingLines.Sum(l => l.ApprovedQty ?? l.SuggestedQty)
+            },
+            Lines = remainingLines.Select(l => new DraftLineRow
+            {
+                Id            = l.Id,
+                ArticleNumber = l.ArticleNumber,
+                ItemName      = l.ItemName,
+                SuggestedQty  = l.SuggestedQty,
+                ApprovedQty   = l.ApprovedQty,
+                TrendCategory = l.TrendCategory,
+                Priority      = l.Priority
+            }).ToList()
+        };
+    }
+
     // ── Submit for Approval ───────────────────────────────────────────
 
     public async Task<CacheLiquiMolyReplenishmentRequest> SubmitForApprovalAsync(

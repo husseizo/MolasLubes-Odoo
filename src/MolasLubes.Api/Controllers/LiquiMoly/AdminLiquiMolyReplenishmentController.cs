@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using MolasLubes.Api.Security;
 using MolasLubes.Application.LiquiMolyReplenishment;
 using MolasLubes.Domain.Entities.Cache;
+using MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 using MolasLubes.Infrastructure.Security;
 using MolasLubes.Infrastructure.Services.LiquiMolyReplenishment;
 
@@ -16,17 +17,20 @@ public class AdminLiquiMolyReplenishmentController : ControllerBase
     private readonly LiquiMolyReplenishmentExecutionService _execService;
     private readonly LiquiMolyReplenishmentAnalyzer         _analyzer;
     private readonly LiquiMolyRoleService                   _roleService;
+    private readonly SapWarehouseReader                     _warehouseReader;
 
     public AdminLiquiMolyReplenishmentController(
         LiquiMolyReplenishmentService          service,
         LiquiMolyReplenishmentExecutionService execService,
         LiquiMolyReplenishmentAnalyzer         analyzer,
-        LiquiMolyRoleService                   roleService)
+        LiquiMolyRoleService                   roleService,
+        SapWarehouseReader                     warehouseReader)
     {
-        _service     = service;
-        _execService = execService;
-        _analyzer    = analyzer;
-        _roleService = roleService;
+        _service         = service;
+        _execService     = execService;
+        _analyzer        = analyzer;
+        _roleService     = roleService;
+        _warehouseReader = warehouseReader;
     }
 
     // ── Generate Draft ────────────────────────────────────────────────
@@ -183,6 +187,64 @@ public class AdminLiquiMolyReplenishmentController : ControllerBase
         catch (Exception ex)                   { return StatusCode(500, ex.Message); }
     }
 
+    // ── Draft line edits ──────────────────────────────────────────────
+
+    /// <summary>
+    /// Atomically applies SET_QTY and DELETE_LINE operations to a DRAFT request.
+    /// Uses optimistic concurrency via expectedVersion.
+    /// </summary>
+    [HttpPost("{requestRef}/draft-lines/apply")]
+    public async Task<IActionResult> ApplyDraftLines(
+        string requestRef,
+        [FromBody] DraftLineApplyRequest request,
+        CancellationToken ct)
+    {
+        try
+        {
+            var result = await _service.ApplyDraftLinesAsync(requestRef, request, ct);
+            return Ok(result);
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (KeyNotFoundException ex)        { return NotFound(ex.Message); }
+        catch (ArgumentException ex)           { return UnprocessableEntity(new { message = "Validation failed.", errors = new { operations = ex.Message } }); }
+        catch (InvalidOperationException ex) when (ex.Message.StartsWith("DRAFT_VERSION_CONFLICT"))
+        {
+            var parts = ex.Message.Split('|');
+            var detail = parts.Length > 1 ? parts[1] : ex.Message;
+            // Re-read current version for the 409 response
+            var current = await _service.GetAsync(requestRef, ct);
+            return Conflict(new { message = "Draft version mismatch.", code = "DRAFT_VERSION_CONFLICT", currentVersion = current?.Version });
+        }
+        catch (InvalidOperationException ex) when (ex.Message.StartsWith("DRAFT_STATUS_CONFLICT"))
+        {
+            return Conflict(new { message = "Request status mismatch.", code = "DRAFT_STATUS_CONFLICT" });
+        }
+        catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+        catch (Exception ex)                 { return StatusCode(500, ex.Message); }
+    }
+
+    // ── Warehouse options ─────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns active warehouses from SAP for source and target profiles.
+    /// Frontend uses this to populate warehouse selectors in the create flow.
+    /// </summary>
+    [HttpGet("warehouse-options")]
+    public IActionResult GetWarehouseOptions(
+        [FromQuery] string actorSapUserCode,
+        [FromQuery] string sourceProfile = "MolasLubes",
+        [FromQuery] string targetProfile = "AutoHub")
+    {
+        try
+        {
+            _roleService.Authorize(actorSapUserCode, LiquiMolyRole.Planner);
+            var result = _warehouseReader.GetWarehouseOptions(sourceProfile, targetProfile);
+            return Ok(result);
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (Exception ex)                   { return StatusCode(500, ex.Message); }
+    }
+
     // ── Read ──────────────────────────────────────────────────────────
 
     [HttpGet("{requestRef}")]
@@ -222,6 +284,7 @@ public class AdminLiquiMolyReplenishmentController : ControllerBase
     {
         header.Id,
         header.RequestRef,
+        header.Version,
         header.SourceProfile,
         header.TargetProfile,
         header.SourceWarehouse,
@@ -259,6 +322,7 @@ public class AdminLiquiMolyReplenishmentController : ControllerBase
     {
         header.Id,
         header.RequestRef,
+        header.Version,
         header.SourceProfile,
         header.TargetProfile,
         header.SourceWarehouse,

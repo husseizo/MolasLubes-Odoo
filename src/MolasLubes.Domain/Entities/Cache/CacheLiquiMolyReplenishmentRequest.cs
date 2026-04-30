@@ -18,6 +18,9 @@ public class CacheLiquiMolyReplenishmentRequest
     public string SourceWarehouse { get; set; } = null!;
     public string TargetWarehouse { get; set; } = null!;
 
+    // Optimistic concurrency — incremented on every write
+    public int Version { get; set; } = 1;
+
     // Workflow status
     public string Status { get; set; } = "DRAFT";
 

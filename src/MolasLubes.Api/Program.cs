@@ -319,6 +319,8 @@ builder.Services.AddScoped<
     MolasLubes.Infrastructure.Integrations.SapB1.DiApi.SapInterCompanySalesOrderWriter>();
 builder.Services.AddScoped<
     MolasLubes.Infrastructure.Integrations.SapB1.DiApi.SapPurchaseOrderWriter>();
+builder.Services.AddScoped<
+    MolasLubes.Infrastructure.Integrations.SapB1.DiApi.SapWarehouseReader>();
 
 // =====================================================
 // AUTOHUB SERVICES — PROFILE B
