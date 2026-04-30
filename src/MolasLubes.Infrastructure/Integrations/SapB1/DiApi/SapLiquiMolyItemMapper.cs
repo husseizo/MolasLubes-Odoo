@@ -13,12 +13,16 @@ namespace MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 /// Maps a single Liqui Moly source item to its counterpart in the target SAP company.
 ///
 /// Identity model:
-///   Source: LUB1000xx (internal ItemCode)  →  article number extracted from U_Item_Name / ItemName
-///   Target: OITM.ItemCode == articleNumber  (target DB uses the numeric article number as ItemCode)
+///   Source (Molas_Lubes_LTD): ItemCode IS the numeric article number (e.g. "2315").
+///     U_Article_No may be blank; ItemCode is used directly as the article number.
+///     All items are Liqui Moly — no brand discriminator needed on the source.
+///
+///   Target (MOLAS_Live_2021 / AutoHub): ItemCode uses LUB prefix (e.g. "LUB100011").
+///     Article number is the leading digits in ItemName ("2315 TOP TEC 4600 5W30 1L").
+///     Lookup: OITM WHERE ItemName LIKE '{article} %' AND U_MdlTEST = 'LIQUI MOLY'.
 ///
 /// Example:
-///   LUB100001 → U_Item_Name "3682 TOP TEC ATF 1200 5L" → article 3682 → target ItemCode "3682"
-///   LUB100016 → U_Item_Name "2512 ATFFLUSH"             → article 2512 → target ItemCode "2512"
+///   Source "2315" → article "2315" → target LUB100011 ("2315 TOP TEC 4600 5W30 1L")
 /// </summary>
 public class SapLiquiMolyItemMapper
 {
@@ -64,7 +68,7 @@ public class SapLiquiMolyItemMapper
 
                 var safeCode = sourceItemCode.Replace("'", "''");
                 rs.DoQuery($@"
-SELECT ItemCode, ItemName, U_Item_Name, U_MdlTEST, frozenFor
+SELECT ItemCode, ItemName, frozenFor
 FROM OITM
 WHERE ItemCode = '{safeCode}'
 ");
@@ -76,23 +80,14 @@ WHERE ItemCode = '{safeCode}'
                     return;
                 }
 
-                var brand        = rs.Fields.Item("U_MdlTEST").Value?.ToString() ?? string.Empty;
-                var frozen       = rs.Fields.Item("frozenFor").Value?.ToString() ?? "N";
-                var srcName      = rs.Fields.Item("ItemName").Value?.ToString() ?? string.Empty;
-                var sourceLmName = rs.Fields.Item("U_Item_Name").Value?.ToString()?.Trim() ?? string.Empty;
+                var frozen  = rs.Fields.Item("frozenFor").Value?.ToString() ?? "N";
+                var srcName = rs.Fields.Item("ItemName").Value?.ToString() ?? string.Empty;
 
-                // Extract the Liqui Moly article number (3–6 digit token) from U_Item_Name,
-                // falling back to ItemName. First token wins if it is purely numeric.
-                var articleNumber = ExtractArticleNumber(sourceLmName, srcName);
+                // In Molas_Lubes_LTD the ItemCode IS the numeric Liqui Moly article number.
+                // All items in this company are Liqui Moly — no brand check needed.
+                var articleNumber = sourceItemCode;
 
                 Marshal.ReleaseComObject(rs); rs = null;
-
-                if (!brand.Equals("LIQUI MOLY", StringComparison.OrdinalIgnoreCase))
-                {
-                    result = LiquiMolyMappedLine.Fail(sourceItemCode, "NOT_LIQUI_MOLY",
-                        $"Item '{sourceItemCode}' has brand '{brand}', expected LIQUI MOLY.");
-                    return;
-                }
 
                 if (frozen.Equals("Y", StringComparison.OrdinalIgnoreCase))
                 {
@@ -104,11 +99,13 @@ WHERE ItemCode = '{safeCode}'
                 if (string.IsNullOrWhiteSpace(articleNumber))
                 {
                     result = LiquiMolyMappedLine.Fail(sourceItemCode, "NO_ARTICLE_NUM",
-                        $"Item '{sourceItemCode}' has no extractable Liqui Moly article number in U_Item_Name or ItemName.");
+                        $"Item '{sourceItemCode}' has no extractable Liqui Moly article number.");
                     return;
                 }
 
-                // ── Target lookup — match by OITM.ItemCode == articleNumber ───────────
+                // ── Target lookup — match by article number prefix in ItemName ──────────
+                // AutoHub uses LUB-prefix ItemCodes; article number is the leading digits
+                // in ItemName, e.g. "2315 TOP TEC 4600 5W30 1L".
                 tgtCompany = ConnectCompany(tgtProfile.Sap);
                 rs = (Recordset)tgtCompany.GetBusinessObject(BoObjectTypes.BoRecordset);
 
@@ -116,9 +113,9 @@ WHERE ItemCode = '{safeCode}'
                 rs.DoQuery($@"
 SELECT TOP 1 ItemCode, ItemName
 FROM OITM
-WHERE ItemCode   = '{safeArt}'
-  AND U_MdlTEST  = 'LIQUI MOLY'
-  AND frozenFor  = 'N'
+WHERE (ItemName LIKE '{safeArt} %' OR ItemName LIKE '{safeArt}-%')
+  AND U_MdlTEST = 'LIQUI MOLY'
+  AND frozenFor = 'N'
 ORDER BY ItemCode
 ");
 
