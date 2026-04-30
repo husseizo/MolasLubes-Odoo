@@ -127,8 +127,8 @@ WHERE OITM.ItemCode = '{EscapeSql(itemCode)}'
             var pl05PriceObj = rs.Fields.Item("PL05Price").Value;
             var avgPriceObj = rs.Fields.Item("AvgPrice").Value;
 
-            var pl05Price = ToDecimalOrNull(pl05PriceObj);
-            var avgPrice  = ToDecimalOrNull(avgPriceObj);
+            decimal? pl05Price = ToDecimalOrNull((object?)pl05PriceObj);
+            decimal? avgPrice  = ToDecimalOrNull((object?)avgPriceObj);
 
             // Apply pricing formula
             decimal finalPrice;
