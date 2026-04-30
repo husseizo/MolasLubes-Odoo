@@ -15,6 +15,26 @@ namespace MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 /// Each call opens a fresh STA-thread connection and releases it after the document is created.
 /// </summary>
 public class SapGoodsReceiptWriter
+    /// <summary>
+    /// Looks up the branch ID (BPLId) for a given warehouse code using OWHS table.
+    /// </summary>
+    private int GetBranchIdForWarehouse(string warehouseCode, Company company)
+    {
+        var rs = (SAPbobsCOM.Recordset)company.GetBusinessObject(SAPbobsCOM.BoObjectTypes.BoRecordset);
+        try
+        {
+            rs.DoQuery($"SELECT BPLid FROM OWHS WHERE WhsCode = '{warehouseCode.Replace("'", "''")}'");
+            if (!rs.EoF && rs.Fields.Item("BPLid").Value != null)
+            {
+                return Convert.ToInt32(rs.Fields.Item("BPLid").Value);
+            }
+            throw new Exception($"No BPLid found for warehouse '{warehouseCode}'");
+        }
+        finally
+        {
+            Marshal.ReleaseComObject(rs);
+        }
+    }
 {
     private readonly IntegrationProfilesOptions _profiles;
     private readonly ILogger<SapGoodsReceiptWriter> _logger;
@@ -58,6 +78,11 @@ public class SapGoodsReceiptWriter
                 gr.DocDate  = DateTime.Today;
                 gr.TaxDate  = DateTime.Today;
                 gr.Comments = $"LM Transfer {transferRef} ← {sourceProfile} | {comments}".Trim();
+
+                // Set BPLId (branch) for multi-branch SAP B1
+                int branchId = GetBranchIdForWarehouse(warehouseCode, company);
+                gr.BPL_IDAssignedToInvoice = branchId;
+                _logger.LogDebug("SapGoodsReceiptWriter: set BPLId={BPLId} for warehouse={Warehouse}", branchId, warehouseCode);
 
                 _logger.LogDebug("SapGoodsReceiptWriter: setting UDFs | Ref={Ref}", transferRef);
                 TrySetUserField(gr, "U_TransferRef", transferRef,   profileKey, transferRef);
