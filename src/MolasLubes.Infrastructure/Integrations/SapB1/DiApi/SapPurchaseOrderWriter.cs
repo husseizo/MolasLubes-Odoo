@@ -72,8 +72,11 @@ public class SapPurchaseOrderWriter
                 po.DocDate     = DateTime.Today;
                 po.TaxDate     = DateTime.Today;
                 po.DocDueDate  = DateTime.Today;
-                po.DocCurrency = "ILS";  // Israeli Shekel — matches SO currency
+                po.DocCurrency = "TZS";  // Local currency
                 po.Comments    = $"LM Replenishment {transferRef} | {comments}".Trim();
+
+                if (profile.Sap.BranchId.HasValue)
+                    po.BPL_IDAssignedToInvoice = profile.Sap.BranchId.Value;
 
                 // User-defined fields for tracking (mirrors SO UDFs)
                 po.UserFields.Fields.Item("U_TransferRef").Value = transferRef;
@@ -106,9 +109,14 @@ public class SapPurchaseOrderWriter
                         continue;
                     }
 
+                    // Add() advances to next line — must NOT be called after the last written line
+                    var writtenCount = lineIndex - skippedLines;
+                    if (writtenCount > 0)
+                        po.Lines.Add();
+
                     po.Lines.ItemCode  = line.TargetItemCode;
                     po.Lines.Quantity  = (double)line.Quantity;
-                    po.Lines.Currency  = "ILS";
+                    po.Lines.Currency  = "TZS";
 
                     if (line.UnitPrice > 0)
                         po.Lines.Price = (double)line.UnitPrice;
@@ -120,7 +128,6 @@ public class SapPurchaseOrderWriter
                         "SapPurchaseOrderWriter: Line {Index} | Item={Item} | Qty={Qty} | Price={Price:F2}",
                         lineIndex, line.TargetItemCode, line.Quantity, line.UnitPrice);
 
-                    po.Lines.Add();
                     lineIndex++;
                 }
 
@@ -282,3 +289,4 @@ public record PurchaseOrderLine(
     decimal Quantity,
     decimal UnitPrice,
     string? WarehouseCode = null);
+

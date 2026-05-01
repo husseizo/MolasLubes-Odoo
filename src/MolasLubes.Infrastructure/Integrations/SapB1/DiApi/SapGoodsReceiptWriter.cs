@@ -15,6 +15,7 @@ namespace MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 /// Each call opens a fresh STA-thread connection and releases it after the document is created.
 /// </summary>
 public class SapGoodsReceiptWriter
+{
     /// <summary>
     /// Looks up the branch ID (BPLId) for a given warehouse code using OWHS table.
     /// </summary>
@@ -35,7 +36,6 @@ public class SapGoodsReceiptWriter
             Marshal.ReleaseComObject(rs);
         }
     }
-{
     private readonly IntegrationProfilesOptions _profiles;
     private readonly ILogger<SapGoodsReceiptWriter> _logger;
 
@@ -78,6 +78,9 @@ public class SapGoodsReceiptWriter
                 gr.DocDate  = DateTime.Today;
                 gr.TaxDate  = DateTime.Today;
                 gr.Comments = $"LM Transfer {transferRef} ← {sourceProfile} | {comments}".Trim();
+
+                if (profile.Sap.BranchId.HasValue)
+                    gr.BPL_IDAssignedToInvoice = profile.Sap.BranchId.Value;
 
                 // Set BPLId (branch) for multi-branch SAP B1
                 int branchId = GetBranchIdForWarehouse(warehouseCode, company);
@@ -195,6 +198,10 @@ public class SapGoodsReceiptWriter
                 grpo.DocDate  = DateTime.Today;
                 grpo.TaxDate  = DateTime.Today;
                 grpo.Comments = $"LM Replenishment {transferRef} — GR from PO {poDocEntry} | {comments}".Trim();
+
+                if (profile.Sap.BranchId.HasValue)
+                    grpo.BPL_IDAssignedToInvoice = profile.Sap.BranchId.Value;
+
                 grpo.UserFields.Fields.Item("U_TransferRef").Value = transferRef;
                 grpo.UserFields.Fields.Item("U_FromDb").Value      = "MolasLubes";
                 grpo.UserFields.Fields.Item("U_ToDb").Value        = profileKey;

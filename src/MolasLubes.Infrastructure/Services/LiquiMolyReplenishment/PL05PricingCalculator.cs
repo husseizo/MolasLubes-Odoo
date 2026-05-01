@@ -1,35 +1,41 @@
-using System.Runtime.InteropServices;
+using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
-using SAPbobsCOM;
-using MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
+using Microsoft.Extensions.Options;
+using MolasLubes.Infrastructure.Integrations.SapB1.Profiles;
 
 namespace MolasLubes.Infrastructure.Services.LiquiMolyReplenishment;
 
 /// <summary>
-/// Calculates inter-company sales prices using Price List 5 (PL05) from MolasLubes company.
-/// Formula: IF(ITM1.Price > 0, ITM1.Price, OITM.AvgPrice * 1.5)
-/// Used for creating Sales Orders in MolasLubes when executing Liqui Moly replenishment via SO→PO→GR flow.
+/// Calculates inter-company sales prices from MolasLubes company using direct SQL.
+/// Formula: IF(PL05 > 0, PL05, PL03 + ((PL01-PL03)/2))
+/// Uses direct SqlConnection against the SAP SQL Server — no DI API, avoiding
+/// COM global-state corruption when multiple companies are used in the same process.
 /// </summary>
 public class PL05PricingCalculator
 {
-    private readonly SapDiApiConnection _molasLubesConnection;
+    private readonly string _connectionString;
     private readonly ILogger<PL05PricingCalculator> _logger;
 
-    private const int PRICE_LIST_5 = 5;
     private const decimal MARKUP_MULTIPLIER = 1.5m;
 
     public PL05PricingCalculator(
-        SapDiApiConnection molasLubesConnection,
+        IOptions<IntegrationProfilesOptions> profileOptions,
         ILogger<PL05PricingCalculator> logger)
     {
-        _molasLubesConnection = molasLubesConnection;
         _logger = logger;
+
+        var profiles = profileOptions.Value;
+        if (!profiles.Profiles.TryGetValue(profiles.Default, out var molasLubesProfile))
+            throw new InvalidOperationException(
+                $"Default SAP profile '{profiles.Default}' not found in IntegrationProfiles.");
+
+        var sap = molasLubesProfile.Sap;
+        _connectionString =
+            $"Server={sap.Server};Database={sap.CompanyDB};User Id={sap.UserName};Password={sap.Password};TrustServerCertificate=True;Connection Timeout=30;";
     }
 
     /// <summary>
-    /// Calculates prices for multiple items using PL05 pricing logic.
-    /// Returns a dictionary of ItemCode → Price.
-    /// Items not found or with errors will be excluded from the result.
+    /// Calculates prices for multiple items. Returns ItemCode → Price for successfully priced items.
     /// </summary>
     public Dictionary<string, decimal> CalculatePrices(IEnumerable<string> itemCodes)
     {
@@ -41,8 +47,8 @@ public class PL05PricingCalculator
         }
 
         _logger.LogInformation(
-            "PL05PricingCalculator: Calculating prices for {Count} item(s) using Price List {PriceList}",
-            items.Count, PRICE_LIST_5);
+            "PL05PricingCalculator: Calculating prices for {Count} item(s)",
+            items.Count);
 
         var result = new Dictionary<string, decimal>();
 
@@ -54,35 +60,29 @@ public class PL05PricingCalculator
                 if (price.HasValue)
                 {
                     result[itemCode] = price.Value;
-                    _logger.LogDebug(
-                        "PL05PricingCalculator: {ItemCode} → {Price:F2}",
-                        itemCode, price.Value);
+                    _logger.LogDebug("PL05PricingCalculator: {ItemCode} → {Price:F2}", itemCode, price.Value);
                 }
                 else
                 {
-                    _logger.LogWarning(
-                        "PL05PricingCalculator: Could not determine price for {ItemCode}",
-                        itemCode);
+                    _logger.LogWarning("PL05PricingCalculator: Could not determine price for {ItemCode}", itemCode);
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex,
-                    "PL05PricingCalculator: Error calculating price for {ItemCode}",
-                    itemCode);
+                _logger.LogError(ex, "PL05PricingCalculator: Error calculating price for {ItemCode}", itemCode);
             }
         }
 
         _logger.LogInformation(
-            "PL05PricingCalculator: Calculated {SuccessCount}/{TotalCount} prices",
+            "PL05PricingCalculator: Calculated {Success}/{Total} prices",
             result.Count, items.Count);
 
         return result;
     }
 
     /// <summary>
-    /// Calculates price for a single item using PL05 pricing logic.
-    /// Returns null if item not found or price cannot be determined.
+    /// Calculates price for a single item via direct SQL against Molas_Lubes_LTD.
+    /// Returns null if item not found or no valid price exists.
     /// </summary>
     public decimal? CalculatePrice(string itemCode)
     {
@@ -92,92 +92,55 @@ public class PL05PricingCalculator
             return null;
         }
 
-        var company = _molasLubesConnection.GetConnectedCompany();
-        Recordset? rs = null;
+        using var conn = new SqlConnection(_connectionString);
+        conn.Open();
 
-        try
-        {
-            rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
-
-            // Query ITM1 (price list prices) and OITM (item master for AvgPrice fallback)
-            // Formula: IF(ITM1.Price > 0, ITM1.Price, OITM.AvgPrice * 1.5)
-            var sql = $@"
-SELECT 
-    OITM.ItemCode,
-    OITM.ItemName,
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+SELECT
     OITM.AvgPrice,
-    ITM1.Price AS PL05Price
+    PL01.Price AS PL01Price,
+    PL03.Price AS PL03Price,
+    PL05.Price AS PL05Price
 FROM OITM
-LEFT JOIN ITM1 
-    ON OITM.ItemCode = ITM1.ItemCode 
-    AND ITM1.PriceList = {PRICE_LIST_5}
-WHERE OITM.ItemCode = '{EscapeSql(itemCode)}'
-";
+LEFT JOIN ITM1 PL01 ON OITM.ItemCode = PL01.ItemCode AND PL01.PriceList = 1
+LEFT JOIN ITM1 PL03 ON OITM.ItemCode = PL03.ItemCode AND PL03.PriceList = 3
+LEFT JOIN ITM1 PL05 ON OITM.ItemCode = PL05.ItemCode AND PL05.PriceList = 5
+WHERE OITM.ItemCode = @ItemCode";
+        cmd.Parameters.AddWithValue("@ItemCode", itemCode);
 
-            rs.DoQuery(sql);
+        using var reader = cmd.ExecuteReader();
 
-            if (rs.EoF)
-            {
-                _logger.LogWarning(
-                    "PL05PricingCalculator: Item {ItemCode} not found in OITM",
-                    itemCode);
-                return null;
-            }
-
-            var pl05PriceObj = rs.Fields.Item("PL05Price").Value;
-            var avgPriceObj = rs.Fields.Item("AvgPrice").Value;
-
-            decimal? pl05Price = ToDecimalOrNull((object?)pl05PriceObj);
-            decimal? avgPrice  = ToDecimalOrNull((object?)avgPriceObj);
-
-            // Apply pricing formula
-            decimal finalPrice;
-
-            if (pl05Price.HasValue && pl05Price.Value > 0)
-            {
-                // Use PL05 price if available and positive
-                finalPrice = pl05Price.Value;
-                _logger.LogDebug(
-                    "PL05PricingCalculator: {ItemCode} using PL05 price: {Price:F2}",
-                    itemCode, finalPrice);
-            }
-            else if (avgPrice.HasValue && avgPrice.Value > 0)
-            {
-                // Fallback to AvgPrice * 1.5
-                finalPrice = avgPrice.Value * MARKUP_MULTIPLIER;
-                _logger.LogDebug(
-                    "PL05PricingCalculator: {ItemCode} using fallback (AvgPrice * {Multiplier}): {AvgPrice:F2} → {Price:F2}",
-                    itemCode, MARKUP_MULTIPLIER, avgPrice.Value, finalPrice);
-            }
-            else
-            {
-                // No valid price found
-                _logger.LogWarning(
-                    "PL05PricingCalculator: {ItemCode} has no valid price (PL05={PL05}, AvgPrice={Avg})",
-                    itemCode, pl05Price, avgPrice);
-                return null;
-            }
-
-            return finalPrice;
-        }
-        catch (COMException comEx)
+        if (!reader.Read())
         {
-            _logger.LogError(comEx,
-                "PL05PricingCalculator: COM error calculating price for {ItemCode} | HRESULT: {HResult}",
-                itemCode, comEx.HResult);
-            throw;
+            _logger.LogWarning("PL05PricingCalculator: Item {ItemCode} not found in OITM", itemCode);
+            return null;
         }
-        finally
+
+        decimal? pl01 = reader.IsDBNull(reader.GetOrdinal("PL01Price")) ? null : reader.GetDecimal(reader.GetOrdinal("PL01Price"));
+        decimal? pl03 = reader.IsDBNull(reader.GetOrdinal("PL03Price")) ? null : reader.GetDecimal(reader.GetOrdinal("PL03Price"));
+        decimal? pl05 = reader.IsDBNull(reader.GetOrdinal("PL05Price")) ? null : reader.GetDecimal(reader.GetOrdinal("PL05Price"));
+
+        if (pl05.HasValue && pl05.Value > 0)
         {
-            if (rs != null) Marshal.ReleaseComObject(rs);
+            _logger.LogDebug("PL05PricingCalculator: {ItemCode} using PL05={Price:F2}", itemCode, pl05.Value);
+            return pl05.Value;
         }
+
+        if (pl03.HasValue && pl03.Value > 0 && pl01.HasValue && pl01.Value > 0)
+        {
+            var price = pl03.Value + ((pl01.Value - pl03.Value) / 2);
+            _logger.LogDebug(
+                "PL05PricingCalculator: {ItemCode} using PL03+((PL01-PL03)/2) = {Price:F2}",
+                itemCode, price);
+            return price;
+        }
+
+        _logger.LogWarning(
+            "PL05PricingCalculator: {ItemCode} has no valid price (PL05={PL05}, PL03={PL03}, PL01={PL01})",
+            itemCode, pl05, pl03, pl01);
+        return null;
     }
 
-    private static decimal? ToDecimalOrNull(object? v) =>
-        v == null || v is DBNull ? null : Convert.ToDecimal(v);
-
-    private static string EscapeSql(string value)
-    {
-        return value.Replace("'", "''");
-    }
+    private static string EscapeSql(string value) => value.Replace("'", "''");
 }

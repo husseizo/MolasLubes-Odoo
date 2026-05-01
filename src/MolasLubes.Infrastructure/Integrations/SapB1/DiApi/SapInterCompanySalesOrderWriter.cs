@@ -86,7 +86,7 @@ public class SapInterCompanySalesOrderWriter
                 so.DocDate = DateTime.Today;
                 so.TaxDate = DateTime.Today;
                 so.DocDueDate = DateTime.Today;
-                so.DocCurrency = "ILS";  // Israeli Shekel
+                so.DocCurrency = "TZS";  // Always use local currency
                 so.Comments = $"LM Replenishment {transferRef} | {comments}".Trim();
 
                 // User-defined fields for tracking
@@ -97,6 +97,10 @@ public class SapInterCompanySalesOrderWriter
                 // Lines
                 int lineIndex = 0;
                 int skippedLines = 0;
+
+                var validLines = lines
+                    .Where(l => prices.ContainsKey(l.SourceItemCode) && l.Quantity > 0)
+                    .ToList();
 
                 foreach (var line in lines)
                 {
@@ -120,16 +124,20 @@ public class SapInterCompanySalesOrderWriter
                         continue;
                     }
 
+                    // Add() advances to next line — must NOT be called after the last written line
+                    var writtenCount = lineIndex - skippedLines;
+                    if (writtenCount > 0)
+                        so.Lines.Add();
+
                     so.Lines.ItemCode = line.SourceItemCode;
                     so.Lines.Quantity = (double)line.Quantity;
                     so.Lines.Price = (double)price;
-                    so.Lines.Currency = "ILS";
+                    so.Lines.Currency = "TZS";
 
                     _logger.LogDebug(
                         "SapInterCompanySalesOrderWriter: Line {Index} | Item={Item} | Qty={Qty} | Price={Price:F2}",
                         lineIndex, line.SourceItemCode, line.Quantity, price);
 
-                    so.Lines.Add();
                     lineIndex++;
                 }
 
