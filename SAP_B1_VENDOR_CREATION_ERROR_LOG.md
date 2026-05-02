@@ -55,7 +55,7 @@
    - `CardCode` (vendor/customer code)
    - `CardName` (vendor/customer name)
    - `CardType` ('S' = Supplier, 'C' = Customer)
-   - `Currency` (e.g., "ILS")
+   - `Currency` (e.g., "TZS")
    - `ValidFor` ('Y' or 'N')
    - `FrozenFor` ('Y' or 'N')
 
@@ -158,7 +158,7 @@ Once vendor is confirmed:
 
 📋 Vendor Details:
 Doc Entry  Vendor Code  Vendor Name       Type  Currency  Active  U_Phone
-1345       SUP00001     Molas Lubes Ltd   S     ILS       Y       N/A
+1345       SUP00001     Molas Lubes Ltd   S     TZS       Y       N/A
 
 ═══════════════════════════════════════════════════════════════
   ✅ VENDOR CREATION COMPLETE

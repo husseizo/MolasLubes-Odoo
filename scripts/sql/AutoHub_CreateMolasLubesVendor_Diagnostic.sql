@@ -38,7 +38,7 @@ PRINT 'CardName: Molas Lubes Ltd (15 chars)';
 PRINT 'CardType: S (1 char)';
 PRINT 'CardFName: Molas Lubes Ltd (15 chars)';
 PRINT 'GroupCode: 100 (numeric)';
-PRINT 'Currency: ILS (3 chars)';
+PRINT 'Currency: TZS (3 chars)';
 PRINT 'ValidFor: Y (1 char)';
 PRINT 'FrozenFor: N (1 char)';
 PRINT 'U_Customer_Type: Other Shops (11 chars)';

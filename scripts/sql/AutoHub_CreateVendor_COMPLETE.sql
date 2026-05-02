@@ -152,7 +152,7 @@ BEGIN TRY
             'SUP00001',                 -- CardCode
             'Molas Lubes Ltd',          -- CardName
             'S',                        -- CardType (Supplier)
-            'ILS',                      -- Currency
+            'TZS',                      -- Currency
             'Y',                        -- ValidFor (Active)
             'N',                        -- FrozenFor (Not frozen)
             @CustomerTypeValue          -- U_Customer_Type
@@ -177,7 +177,7 @@ BEGIN TRY
             'SUP00001',                 -- CardCode
             'Molas Lubes Ltd',          -- CardName
             'S',                        -- CardType (Supplier)
-            'ILS',                      -- Currency
+            'TZS',                      -- Currency
             'Y',                        -- ValidFor (Active)
             'N'                         -- FrozenFor (Not frozen)
         );

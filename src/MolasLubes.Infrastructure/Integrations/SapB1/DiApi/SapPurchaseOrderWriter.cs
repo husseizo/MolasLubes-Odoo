@@ -20,6 +20,7 @@ public class SapPurchaseOrderWriter
 
     // Vendor code for Molas Lubes Ltd in AutoHub company (created as SUP00001)
     private const string MOLASLUBES_VENDOR_CODE = "SUP00001";
+    private const string EXPECTED_VENDOR_CURRENCY = "TZS";
 
     public SapPurchaseOrderWriter(
         IOptions<IntegrationProfilesOptions> profileOptions,
@@ -65,6 +66,7 @@ public class SapPurchaseOrderWriter
             try
             {
                 company = CreateAndConnect(profile.Sap);
+                EnsureVendorCurrency(company);
                 po = (Documents)company.GetBusinessObject(BoObjectTypes.oPurchaseOrders);
 
                 // Header
@@ -72,7 +74,7 @@ public class SapPurchaseOrderWriter
                 po.DocDate     = DateTime.Today;
                 po.TaxDate     = DateTime.Today;
                 po.DocDueDate  = DateTime.Today;
-                po.DocCurrency = "TZS";  // Local currency
+                po.DocCurrency = EXPECTED_VENDOR_CURRENCY;  // Local currency
                 po.Comments    = $"LM Replenishment {transferRef} | {comments}".Trim();
 
                 if (profile.Sap.BranchId.HasValue)
@@ -116,7 +118,7 @@ public class SapPurchaseOrderWriter
 
                     po.Lines.ItemCode  = line.TargetItemCode;
                     po.Lines.Quantity  = (double)line.Quantity;
-                    po.Lines.Currency  = "TZS";
+                    po.Lines.Currency  = EXPECTED_VENDOR_CURRENCY;
 
                     if (line.UnitPrice > 0)
                         po.Lines.Price = (double)line.UnitPrice;
@@ -244,6 +246,29 @@ public class SapPurchaseOrderWriter
                 profileKey, found.DocEntry, found.DocNum, transferRef);
 
         return found;
+    }
+
+    private static void EnsureVendorCurrency(Company company)
+    {
+        var rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
+        try
+        {
+            rs.DoQuery($"SELECT Currency FROM OCRD WHERE CardCode = '{MOLASLUBES_VENDOR_CODE}'");
+            if (rs.EoF)
+                throw new InvalidOperationException(
+                    $"Vendor {MOLASLUBES_VENDOR_CODE} was not found in OCRD. Create the vendor before creating purchase orders.");
+
+            var vendorCurrency = rs.Fields.Item("Currency").Value?.ToString()?.Trim() ?? string.Empty;
+            if (!string.Equals(vendorCurrency, EXPECTED_VENDOR_CURRENCY, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Vendor {MOLASLUBES_VENDOR_CODE} currency is '{vendorCurrency}', but purchase orders require '{EXPECTED_VENDOR_CURRENCY}'. Update OCRD.Currency before retrying.");
+            }
+        }
+        finally
+        {
+            Marshal.ReleaseComObject(rs);
+        }
     }
 
     private static Company CreateAndConnect(SapSettings sap)

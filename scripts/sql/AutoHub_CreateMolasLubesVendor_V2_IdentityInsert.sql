@@ -42,7 +42,7 @@ BEGIN
             CardCode,           -- Vendor code
             CardName,           -- Vendor name
             CardType,           -- S = Supplier
-            Currency,           -- ILS
+            Currency,           -- TZS
             ValidFor,           -- Y = Active
             FrozenFor           -- N = Not frozen
         )
@@ -51,7 +51,7 @@ BEGIN
             'SUP00001',         -- CardCode
             'Molas Lubes Ltd',  -- CardName
             'S',                -- CardType (Supplier)
-            'ILS',              -- Currency
+            'TZS',              -- Currency
             'Y',                -- ValidFor
             'N'                 -- FrozenFor
         );

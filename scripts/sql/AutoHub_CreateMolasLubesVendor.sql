@@ -33,7 +33,7 @@ BEGIN
         CardCode,
         CardName,
         CardType,           -- 'S' = Supplier (Vendor)
-        Currency,           -- ILS (Israeli Shekel)
+        Currency,           -- TZS (Tanzanian Shilling)
         ValidFor,           -- 'Y' = Active
         FrozenFor,          -- 'N' = Not frozen
         U_Customer_Type     -- UDF (shortened value to avoid truncation)
@@ -43,7 +43,7 @@ BEGIN
         'SUP00001',                     -- CardCode
         'Molas Lubes Ltd',              -- CardName
         'S',                            -- CardType (Supplier)
-        'ILS',                          -- Currency
+        'TZS',                          -- Currency
         'Y',                            -- ValidFor (Active)
         'N',                            -- FrozenFor (Not frozen)
         'reseller'                      -- U_Customer_Type (shortened to avoid truncation)
