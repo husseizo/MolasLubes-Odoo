@@ -280,6 +280,67 @@ public class LiquiMolyReplenishmentExecutionService
             throw new InvalidOperationException(
                 $"Only PARTIAL or FAILED requests can be retried. Status: '{header.Status}'.");
 
+        if (string.Equals(header.ExecutionMode, "SALES_PURCHASE", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!header.PurchaseOrderDocEntry.HasValue)
+                throw new InvalidOperationException(
+                    "No PurchaseOrderDocEntry on record — cannot retry inter-company GR. Re-execute from scratch.");
+
+            SapDocumentRef grRef;
+            try
+            {
+                grRef = _grWriter.FindGoodsReceiptPoByTransferRef(header.TargetProfile, header.RequestRef)
+                    ?? _grWriter.CreateGoodsReceiptFromPurchaseOrder(
+                        profileKey:  header.TargetProfile,
+                        poDocEntry:  header.PurchaseOrderDocEntry.Value,
+                        transferRef: header.RequestRef,
+                        comments:    $"Retry GR for replenishment {header.RequestRef} — PO {header.PurchaseOrderDocNum}");
+            }
+            catch (Exception ex)
+            {
+                header.Status       = "PARTIAL";
+                header.ErrorMessage = $"GR retry failed (PO {header.PurchaseOrderDocNum} exists): {ex.Message}";
+                await _db.SaveChangesAsync(ct);
+                _logger.LogError(ex,
+                    "Replenishment GR retry failed | Ref={Ref} | PODocEntry={Entry}",
+                    requestRef, header.PurchaseOrderDocEntry.Value);
+                throw;
+            }
+
+            header.GoodsReceiptDocEntry = grRef.DocEntry;
+            header.GoodsReceiptDocNum   = grRef.DocNum;
+            header.ErrorMessage         = null;
+            header.Status               = "EXECUTED";
+            header.ExecutedAt           = DateTime.UtcNow;
+
+            foreach (var line in header.Lines)
+                line.ExecutionStatus = "EXECUTED";
+
+            await _db.SaveChangesAsync(ct);
+
+            return new LiquiMolyTransferApplyResult
+            {
+                TransferRef           = header.RequestRef,
+                Status                = "COMPLETED",
+                ExecutionMode         = "SALES_PURCHASE",
+                SalesOrderDocEntry    = header.SalesOrderDocEntry,
+                SalesOrderDocNum      = header.SalesOrderDocNum,
+                PurchaseOrderDocEntry = header.PurchaseOrderDocEntry,
+                PurchaseOrderDocNum   = header.PurchaseOrderDocNum,
+                GoodsReceiptDocEntry  = header.GoodsReceiptDocEntry,
+                GoodsReceiptDocNum    = header.GoodsReceiptDocNum,
+                ErrorMessage          = null,
+                Lines = header.Lines
+                    .Select(l => new TransferLinePreflightRow
+                    {
+                        SourceItemCode = l.SourceItemCode,
+                        RequestedQty   = l.ApprovedQty ?? l.SuggestedQty,
+                        Outcome        = TransferLineOutcome.OK
+                    })
+                    .ToList()
+            };
+        }
+
         if (string.IsNullOrWhiteSpace(header.TransferRef))
             throw new InvalidOperationException(
                 "No TransferRef on record — cannot retry. Re-execute from scratch.");
