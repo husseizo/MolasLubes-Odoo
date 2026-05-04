@@ -15,12 +15,32 @@ namespace MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 /// </summary>
 public class SapPurchaseOrderWriter
 {
+    /// <summary>
+    /// Looks up the branch ID (BPLId) for a given warehouse code using OWHS table.
+    /// </summary>
+    private int GetBranchIdForWarehouse(string warehouseCode, Company company)
+    {
+        var rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
+        try
+        {
+            rs.DoQuery($"SELECT BPLid FROM OWHS WHERE WhsCode = '{warehouseCode.Replace("'", "''")}'");
+            if (!rs.EoF && rs.Fields.Item("BPLid").Value != null)
+                return Convert.ToInt32(rs.Fields.Item("BPLid").Value);
+
+            throw new Exception($"No BPLid found for warehouse '{warehouseCode}'");
+        }
+        finally
+        {
+            Marshal.ReleaseComObject(rs);
+        }
+    }
+
     private readonly IntegrationProfilesOptions _profiles;
     private readonly ILogger<SapPurchaseOrderWriter> _logger;
 
     // Vendor code for Molas Lubes Ltd in AutoHub company (created as SUP00001)
     private const string MOLASLUBES_VENDOR_CODE = "SUP00001";
-    private const string EXPECTED_VENDOR_CURRENCY = "TZS";
+    private const string PURCHASE_ORDER_CURRENCY = "TZS";
 
     public SapPurchaseOrderWriter(
         IOptions<IntegrationProfilesOptions> profileOptions,
@@ -60,126 +80,145 @@ public class SapPurchaseOrderWriter
 
         var thread = new Thread(() =>
         {
-            Company? company = null;
-            Documents? po = null;
-
-            try
+            SapDiApiCriticalSection.Run(() =>
             {
-                company = CreateAndConnect(profile.Sap);
-                EnsureVendorCurrency(company);
-                po = (Documents)company.GetBusinessObject(BoObjectTypes.oPurchaseOrders);
+                Company? company = null;
+                Documents? po = null;
 
-                // Header
-                po.CardCode    = MOLASLUBES_VENDOR_CODE;
-                po.DocDate     = DateTime.Today;
-                po.TaxDate     = DateTime.Today;
-                po.DocDueDate  = DateTime.Today;
-                po.DocCurrency = EXPECTED_VENDOR_CURRENCY;  // Local currency
-                po.Comments    = $"LM Replenishment {transferRef} | {comments}".Trim();
-
-                if (profile.Sap.BranchId.HasValue)
-                    po.BPL_IDAssignedToInvoice = profile.Sap.BranchId.Value;
-
-                // User-defined fields for tracking (mirrors SO UDFs)
-                po.UserFields.Fields.Item("U_TransferRef").Value = transferRef;
-                po.UserFields.Fields.Item("U_FromDb").Value      = "MolasLubes";
-                po.UserFields.Fields.Item("U_ToDb").Value        = profileKey;
-
-                // Lines
-                int lineIndex    = 0;
-                int skippedLines = 0;
-
-                foreach (var line in lines)
-                {
-                    if (string.IsNullOrWhiteSpace(line.TargetItemCode))
-                    {
-                        _logger.LogWarning(
-                            "SapPurchaseOrderWriter: Skipping line {Index} | Reason=Empty TargetItemCode",
-                            lineIndex);
-                        skippedLines++;
-                        lineIndex++;
-                        continue;
-                    }
-
-                    if (line.Quantity <= 0)
-                    {
-                        _logger.LogWarning(
-                            "SapPurchaseOrderWriter: Skipping line {Index} | Item={Item} | Reason=Invalid quantity {Qty}",
-                            lineIndex, line.TargetItemCode, line.Quantity);
-                        skippedLines++;
-                        lineIndex++;
-                        continue;
-                    }
-
-                    // Add() advances to next line — must NOT be called after the last written line
-                    var writtenCount = lineIndex - skippedLines;
-                    if (writtenCount > 0)
-                        po.Lines.Add();
-
-                    po.Lines.ItemCode  = line.TargetItemCode;
-                    po.Lines.Quantity  = (double)line.Quantity;
-                    po.Lines.Currency  = EXPECTED_VENDOR_CURRENCY;
-
-                    if (line.UnitPrice > 0)
-                        po.Lines.Price = (double)line.UnitPrice;
-
-                    if (!string.IsNullOrWhiteSpace(line.WarehouseCode))
-                        po.Lines.WarehouseCode = line.WarehouseCode;
-
-                    _logger.LogDebug(
-                        "SapPurchaseOrderWriter: Line {Index} | Item={Item} | Qty={Qty} | Price={Price:F2}",
-                        lineIndex, line.TargetItemCode, line.Quantity, line.UnitPrice);
-
-                    lineIndex++;
-                }
-
-                if (lineIndex == skippedLines)
-                {
-                    throw new InvalidOperationException(
-                        $"All {lines.Count} lines were skipped due to invalid data | Ref={transferRef}");
-                }
-
-                // Commit
-                int rc = po.Add();
-                if (rc != 0)
-                {
-                    company.GetLastError(out var code, out var msg);
-                    throw new Exception(
-                        $"Purchase Order Add() failed [{code}]: {msg} | Ref={transferRef} | Vendor={MOLASLUBES_VENDOR_CODE}");
-                }
-
-                var docEntry = int.Parse(company.GetNewObjectKey());
-
-                // Retrieve DocNum via Recordset
-                var rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
                 try
                 {
-                    rs.DoQuery($"SELECT DocNum FROM OPOR WHERE DocEntry = {docEntry}");
-                    var docNum = rs.EoF ? docEntry.ToString()
-                        : rs.Fields.Item("DocNum").Value?.ToString() ?? docEntry.ToString();
-                    result = new SapDocumentRef(docEntry, docNum);
+                    company = CreateAndConnect(profile.Sap);
+                    po = (Documents)company.GetBusinessObject(BoObjectTypes.oPurchaseOrders);
+
+                    // Header
+                    po.CardCode    = MOLASLUBES_VENDOR_CODE;
+                    po.DocDate     = DateTime.Today;
+                    po.TaxDate     = DateTime.Today;
+                    po.DocDueDate  = DateTime.Today;
+                    po.DocCurrency = PURCHASE_ORDER_CURRENCY;  // Local currency
+                    po.Comments    = $"LM Replenishment {transferRef} | {comments}".Trim();
+
+                    var purchaseWarehouse = lines
+                        .Select(l => l.WarehouseCode?.Trim())
+                        .FirstOrDefault(w => !string.IsNullOrWhiteSpace(w));
+
+                    if (!string.IsNullOrWhiteSpace(purchaseWarehouse))
+                    {
+                        var branchId = GetBranchIdForWarehouse(purchaseWarehouse!, company);
+                        po.BPL_IDAssignedToInvoice = branchId;
+                        _logger.LogDebug(
+                            "SapPurchaseOrderWriter: set BPLId={BPLId} from warehouse={Warehouse} | Ref={Ref}",
+                            branchId, purchaseWarehouse, transferRef);
+                    }
+                    else if (profile.Sap.BranchId.HasValue)
+                    {
+                        po.BPL_IDAssignedToInvoice = profile.Sap.BranchId.Value;
+                        _logger.LogDebug(
+                            "SapPurchaseOrderWriter: set fallback BPLId={BPLId} from profile | Ref={Ref}",
+                            profile.Sap.BranchId.Value, transferRef);
+                    }
+
+                    // User-defined fields for tracking (mirrors SO UDFs)
+                    po.UserFields.Fields.Item("U_TransferRef").Value = transferRef;
+                    po.UserFields.Fields.Item("U_FromDb").Value      = "MolasLubes";
+                    po.UserFields.Fields.Item("U_ToDb").Value        = profileKey;
+
+                    // Lines
+                    int lineIndex    = 0;
+                    int skippedLines = 0;
+
+                    foreach (var line in lines)
+                    {
+                        if (string.IsNullOrWhiteSpace(line.TargetItemCode))
+                        {
+                            _logger.LogWarning(
+                                "SapPurchaseOrderWriter: Skipping line {Index} | Reason=Empty TargetItemCode",
+                                lineIndex);
+                            skippedLines++;
+                            lineIndex++;
+                            continue;
+                        }
+
+                        if (line.Quantity <= 0)
+                        {
+                            _logger.LogWarning(
+                                "SapPurchaseOrderWriter: Skipping line {Index} | Item={Item} | Reason=Invalid quantity {Qty}",
+                                lineIndex, line.TargetItemCode, line.Quantity);
+                            skippedLines++;
+                            lineIndex++;
+                            continue;
+                        }
+
+                        // Add() advances to next line — must NOT be called after the last written line
+                        var writtenCount = lineIndex - skippedLines;
+                        if (writtenCount > 0)
+                            po.Lines.Add();
+
+                        po.Lines.ItemCode  = line.TargetItemCode;
+                        po.Lines.Quantity  = (double)line.Quantity;
+                        po.Lines.Currency  = PURCHASE_ORDER_CURRENCY;
+
+                        if (line.UnitPrice > 0)
+                            po.Lines.Price = (double)line.UnitPrice;
+
+                        if (!string.IsNullOrWhiteSpace(line.WarehouseCode))
+                            po.Lines.WarehouseCode = line.WarehouseCode;
+
+                        _logger.LogDebug(
+                            "SapPurchaseOrderWriter: Line {Index} | Item={Item} | Qty={Qty} | Price={Price:F2}",
+                            lineIndex, line.TargetItemCode, line.Quantity, line.UnitPrice);
+
+                        lineIndex++;
+                    }
+
+                    if (lineIndex == skippedLines)
+                    {
+                        throw new InvalidOperationException(
+                            $"All {lines.Count} lines were skipped due to invalid data | Ref={transferRef}");
+                    }
+
+                    // Commit
+                    int rc = po.Add();
+                    if (rc != 0)
+                    {
+                        company.GetLastError(out var code, out var msg);
+                        throw new Exception(
+                            $"Purchase Order Add() failed [{code}]: {msg} | Ref={transferRef} | Vendor={MOLASLUBES_VENDOR_CODE}");
+                    }
+
+                    var docEntry = int.Parse(company.GetNewObjectKey());
+
+                    // Retrieve DocNum via Recordset
+                    var rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
+                    try
+                    {
+                        rs.DoQuery($"SELECT DocNum FROM OPOR WHERE DocEntry = {docEntry}");
+                        var docNum = rs.EoF ? docEntry.ToString()
+                            : rs.Fields.Item("DocNum").Value?.ToString() ?? docEntry.ToString();
+                        result = new SapDocumentRef(docEntry, docNum);
+                    }
+                    finally
+                    {
+                        Marshal.ReleaseComObject(rs);
+                    }
+
+                    _logger.LogInformation(
+                        "SapPurchaseOrderWriter: created | Profile={Profile} | DocEntry={Entry} | DocNum={Num} | Ref={Ref} | ProcessedLines={Processed}/{Total}",
+                        profileKey, docEntry, result.DocNum, transferRef, (lineIndex - skippedLines), lines.Count);
+                }
+                catch (Exception ex)
+                {
+                    threadException = ex;
+                    _logger.LogError(ex,
+                        "SapPurchaseOrderWriter: failed | Profile={Profile} | Ref={Ref}",
+                        profileKey, transferRef);
                 }
                 finally
                 {
-                    Marshal.ReleaseComObject(rs);
+                    if (po != null) Marshal.ReleaseComObject(po);
+                    DisconnectAndRelease(company);
                 }
-
-                _logger.LogInformation(
-                    "SapPurchaseOrderWriter: created | Profile={Profile} | DocEntry={Entry} | DocNum={Num} | Ref={Ref} | ProcessedLines={Processed}/{Total}",
-                    profileKey, docEntry, result.DocNum, transferRef, (lineIndex - skippedLines), lines.Count);
-            }
-            catch (Exception ex)
-            {
-                threadException = ex;
-                _logger.LogError(ex,
-                    "SapPurchaseOrderWriter: failed | Profile={Profile} | Ref={Ref}",
-                    profileKey, transferRef);
-            }
-            finally
-            {
-                if (po != null) Marshal.ReleaseComObject(po);
-                DisconnectAndRelease(company);
-            }
+            });
         });
 
         thread.SetApartmentState(ApartmentState.STA);
@@ -246,29 +285,6 @@ public class SapPurchaseOrderWriter
                 profileKey, found.DocEntry, found.DocNum, transferRef);
 
         return found;
-    }
-
-    private static void EnsureVendorCurrency(Company company)
-    {
-        var rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
-        try
-        {
-            rs.DoQuery($"SELECT Currency FROM OCRD WHERE CardCode = '{MOLASLUBES_VENDOR_CODE}'");
-            if (rs.EoF)
-                throw new InvalidOperationException(
-                    $"Vendor {MOLASLUBES_VENDOR_CODE} was not found in OCRD. Create the vendor before creating purchase orders.");
-
-            var vendorCurrency = rs.Fields.Item("Currency").Value?.ToString()?.Trim() ?? string.Empty;
-            if (!string.Equals(vendorCurrency, EXPECTED_VENDOR_CURRENCY, StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidOperationException(
-                    $"Vendor {MOLASLUBES_VENDOR_CODE} currency is '{vendorCurrency}', but purchase orders require '{EXPECTED_VENDOR_CURRENCY}'. Update OCRD.Currency before retrying.");
-            }
-        }
-        finally
-        {
-            Marshal.ReleaseComObject(rs);
-        }
     }
 
     private static Company CreateAndConnect(SapSettings sap)

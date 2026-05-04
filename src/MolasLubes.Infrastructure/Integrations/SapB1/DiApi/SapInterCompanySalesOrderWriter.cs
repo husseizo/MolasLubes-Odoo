@@ -73,121 +73,120 @@ public class SapInterCompanySalesOrderWriter
 
         var thread = new Thread(() =>
         {
-            Company? company = null;
-            Documents? so = null;
-
-            try
+            SapDiApiCriticalSection.Run(() =>
             {
-                company = CreateAndConnect(profile.Sap);
-                so = (Documents)company.GetBusinessObject(BoObjectTypes.oOrders);
+                Company? company = null;
+                Documents? so = null;
 
-                // Header
-                so.CardCode = AUTOHUB_CUSTOMER_CODE;
-                so.DocDate = DateTime.Today;
-                so.TaxDate = DateTime.Today;
-                so.DocDueDate = DateTime.Today;
-                so.DocCurrency = "TZS";  // Always use local currency
-                so.Comments = $"LM Replenishment {transferRef} | {comments}".Trim();
-
-                // User-defined fields for tracking
-                so.UserFields.Fields.Item("U_TransferRef").Value = transferRef;
-                so.UserFields.Fields.Item("U_FromDb").Value = profileKey;
-                so.UserFields.Fields.Item("U_ToDb").Value = "AutoHub";
-
-                // Lines
-                int lineIndex = 0;
-                int skippedLines = 0;
-
-                var validLines = lines
-                    .Where(l => prices.ContainsKey(l.SourceItemCode) && l.Quantity > 0)
-                    .ToList();
-
-                foreach (var line in lines)
-                {
-                    if (!prices.TryGetValue(line.SourceItemCode, out var price))
-                    {
-                        _logger.LogWarning(
-                            "SapInterCompanySalesOrderWriter: Skipping line {Index} | Item={Item} | Reason=No price available",
-                            lineIndex, line.SourceItemCode);
-                        skippedLines++;
-                        lineIndex++;
-                        continue;
-                    }
-
-                    if (line.Quantity <= 0)
-                    {
-                        _logger.LogWarning(
-                            "SapInterCompanySalesOrderWriter: Skipping line {Index} | Item={Item} | Reason=Invalid quantity {Qty}",
-                            lineIndex, line.SourceItemCode, line.Quantity);
-                        skippedLines++;
-                        lineIndex++;
-                        continue;
-                    }
-
-                    // Add() advances to next line — must NOT be called after the last written line
-                    var writtenCount = lineIndex - skippedLines;
-                    if (writtenCount > 0)
-                        so.Lines.Add();
-
-                    so.Lines.ItemCode = line.SourceItemCode;
-                    so.Lines.Quantity = (double)line.Quantity;
-                    so.Lines.Price = (double)price;
-                    so.Lines.Currency = "TZS";
-
-                    _logger.LogDebug(
-                        "SapInterCompanySalesOrderWriter: Line {Index} | Item={Item} | Qty={Qty} | Price={Price:F2}",
-                        lineIndex, line.SourceItemCode, line.Quantity, price);
-
-                    lineIndex++;
-                }
-
-                if (lineIndex == skippedLines)
-                {
-                    throw new InvalidOperationException(
-                        $"All {lines.Count} lines were skipped due to missing prices or invalid quantities");
-                }
-
-                // Commit
-                int rc = so.Add();
-                if (rc != 0)
-                {
-                    company.GetLastError(out var code, out var msg);
-                    throw new Exception(
-                        $"Sales Order Add() failed [{code}]: {msg} | Ref={transferRef} | Customer={AUTOHUB_CUSTOMER_CODE}");
-                }
-
-                var docEntry = int.Parse(company.GetNewObjectKey());
-
-                // Retrieve DocNum via Recordset
-                var rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
                 try
                 {
-                    rs.DoQuery($"SELECT DocNum FROM ORDR WHERE DocEntry = {docEntry}");
-                    var docNum = rs.EoF ? docEntry.ToString()
-                        : rs.Fields.Item("DocNum").Value?.ToString() ?? docEntry.ToString();
-                    result = new SapDocumentRef(docEntry, docNum);
+                    company = CreateAndConnect(profile.Sap);
+                    so = (Documents)company.GetBusinessObject(BoObjectTypes.oOrders);
+
+                    // Header
+                    so.CardCode = AUTOHUB_CUSTOMER_CODE;
+                    so.DocDate = DateTime.Today;
+                    so.TaxDate = DateTime.Today;
+                    so.DocDueDate = DateTime.Today;
+                    so.DocCurrency = "TZS";  // Always use local currency
+                    so.Comments = $"LM Replenishment {transferRef} | {comments}".Trim();
+
+                    // User-defined fields for tracking
+                    so.UserFields.Fields.Item("U_TransferRef").Value = transferRef;
+                    so.UserFields.Fields.Item("U_FromDb").Value = profileKey;
+                    so.UserFields.Fields.Item("U_ToDb").Value = "AutoHub";
+
+                    // Lines
+                    int lineIndex = 0;
+                    int skippedLines = 0;
+
+                    foreach (var line in lines)
+                    {
+                        if (!prices.TryGetValue(line.SourceItemCode, out var price))
+                        {
+                            _logger.LogWarning(
+                                "SapInterCompanySalesOrderWriter: Skipping line {Index} | Item={Item} | Reason=No price available",
+                                lineIndex, line.SourceItemCode);
+                            skippedLines++;
+                            lineIndex++;
+                            continue;
+                        }
+
+                        if (line.Quantity <= 0)
+                        {
+                            _logger.LogWarning(
+                                "SapInterCompanySalesOrderWriter: Skipping line {Index} | Item={Item} | Reason=Invalid quantity {Qty}",
+                                lineIndex, line.SourceItemCode, line.Quantity);
+                            skippedLines++;
+                            lineIndex++;
+                            continue;
+                        }
+
+                        // Add() advances to next line — must NOT be called after the last written line
+                        var writtenCount = lineIndex - skippedLines;
+                        if (writtenCount > 0)
+                            so.Lines.Add();
+
+                        so.Lines.ItemCode = line.SourceItemCode;
+                        so.Lines.Quantity = (double)line.Quantity;
+                        so.Lines.Price = (double)price;
+                        so.Lines.Currency = "TZS";
+
+                        _logger.LogDebug(
+                            "SapInterCompanySalesOrderWriter: Line {Index} | Item={Item} | Qty={Qty} | Price={Price:F2}",
+                            lineIndex, line.SourceItemCode, line.Quantity, price);
+
+                        lineIndex++;
+                    }
+
+                    if (lineIndex == skippedLines)
+                    {
+                        throw new InvalidOperationException(
+                            $"All {lines.Count} lines were skipped due to missing prices or invalid quantities");
+                    }
+
+                    // Commit
+                    int rc = so.Add();
+                    if (rc != 0)
+                    {
+                        company.GetLastError(out var code, out var msg);
+                        throw new Exception(
+                            $"Sales Order Add() failed [{code}]: {msg} | Ref={transferRef} | Customer={AUTOHUB_CUSTOMER_CODE}");
+                    }
+
+                    var docEntry = int.Parse(company.GetNewObjectKey());
+
+                    // Retrieve DocNum via Recordset
+                    var rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
+                    try
+                    {
+                        rs.DoQuery($"SELECT DocNum FROM ORDR WHERE DocEntry = {docEntry}");
+                        var docNum = rs.EoF ? docEntry.ToString()
+                            : rs.Fields.Item("DocNum").Value?.ToString() ?? docEntry.ToString();
+                        result = new SapDocumentRef(docEntry, docNum);
+                    }
+                    finally
+                    {
+                        Marshal.ReleaseComObject(rs);
+                    }
+
+                    _logger.LogInformation(
+                        "SapInterCompanySalesOrderWriter: created | Profile={Profile} | DocEntry={Entry} | DocNum={Num} | Ref={Ref} | ProcessedLines={Processed}/{Total}",
+                        profileKey, docEntry, result.DocNum, transferRef, (lineIndex - skippedLines), lines.Count);
+                }
+                catch (Exception ex)
+                {
+                    threadException = ex;
+                    _logger.LogError(ex,
+                        "SapInterCompanySalesOrderWriter: failed | Profile={Profile} | Ref={Ref}",
+                        profileKey, transferRef);
                 }
                 finally
                 {
-                    Marshal.ReleaseComObject(rs);
+                    if (so != null) Marshal.ReleaseComObject(so);
+                    DisconnectAndRelease(company);
                 }
-
-                _logger.LogInformation(
-                    "SapInterCompanySalesOrderWriter: created | Profile={Profile} | DocEntry={Entry} | DocNum={Num} | Ref={Ref} | ProcessedLines={Processed}/{Total}",
-                    profileKey, docEntry, result.DocNum, transferRef, (lineIndex - skippedLines), lines.Count);
-            }
-            catch (Exception ex)
-            {
-                threadException = ex;
-                _logger.LogError(ex,
-                    "SapInterCompanySalesOrderWriter: failed | Profile={Profile} | Ref={Ref}",
-                    profileKey, transferRef);
-            }
-            finally
-            {
-                if (so != null) Marshal.ReleaseComObject(so);
-                DisconnectAndRelease(company);
-            }
+            });
         });
 
         thread.SetApartmentState(ApartmentState.STA);

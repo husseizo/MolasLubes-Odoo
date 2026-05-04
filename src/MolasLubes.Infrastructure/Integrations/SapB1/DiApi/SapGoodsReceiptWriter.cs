@@ -182,80 +182,79 @@ public class SapGoodsReceiptWriter
 
         var thread = new Thread(() =>
         {
-            Company? company = null;
-            Documents? grpo  = null;
-
-            try
+            SapDiApiCriticalSection.Run(() =>
             {
-                company = CreateAndConnect(profile.Sap);
+                Company? company = null;
+                Documents? grpo  = null;
 
-                // oPurchaseDeliveryNotes = Goods Receipt PO (OPDN)
-                // This is the correct SAP document type for receiving goods against a PO
-                grpo = (Documents)company.GetBusinessObject(BoObjectTypes.oPurchaseDeliveryNotes);
-
-                // Header
-                grpo.CardCode = "SUP00001";  // Molas Lubes Ltd vendor
-                grpo.DocDate  = DateTime.Today;
-                grpo.TaxDate  = DateTime.Today;
-                grpo.Comments = $"LM Replenishment {transferRef} — GR from PO {poDocEntry} | {comments}".Trim();
-
-                if (profile.Sap.BranchId.HasValue)
-                    grpo.BPL_IDAssignedToInvoice = profile.Sap.BranchId.Value;
-
-                grpo.UserFields.Fields.Item("U_TransferRef").Value = transferRef;
-                grpo.UserFields.Fields.Item("U_FromDb").Value      = "MolasLubes";
-                grpo.UserFields.Fields.Item("U_ToDb").Value        = profileKey;
-
-                // Copy all lines from the Purchase Order via base document linking
-                // SAP BaseType 22 = Purchase Order (OPOR)
-                grpo.Lines.BaseType  = 22;
-                grpo.Lines.BaseEntry = poDocEntry;
-                grpo.Lines.BaseLine  = 0;  // line index 0 = first PO line
-                grpo.Lines.Add();
-
-                // Note: For multi-line POs, SAP copies all open lines when BaseEntry is set
-                // on the document header before any Lines.Add() calls.
-                // If only specific lines are needed, set BaseType/BaseEntry/BaseLine per line.
-
-                int rc = grpo.Add();
-                if (rc != 0)
-                {
-                    company.GetLastError(out var code, out var msg);
-                    throw new Exception(
-                        $"Goods Receipt PO Add() failed [{code}]: {msg} | PODocEntry={poDocEntry} | Ref={transferRef}");
-                }
-
-                var docEntry = int.Parse(company.GetNewObjectKey());
-
-                var rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
                 try
                 {
-                    rs.DoQuery($"SELECT DocNum FROM OPDN WHERE DocEntry = {docEntry}");
-                    var docNum = rs.EoF ? docEntry.ToString()
-                        : rs.Fields.Item("DocNum").Value?.ToString() ?? docEntry.ToString();
-                    result = new SapDocumentRef(docEntry, docNum);
+                    company = CreateAndConnect(profile.Sap);
+
+                    // oPurchaseDeliveryNotes = Goods Receipt PO (OPDN)
+                    // This is the correct SAP document type for receiving goods against a PO
+                    grpo = (Documents)company.GetBusinessObject(BoObjectTypes.oPurchaseDeliveryNotes);
+
+                    // Header
+                    grpo.CardCode = "SUP00001";  // Molas Lubes Ltd vendor
+                    grpo.DocDate  = DateTime.Today;
+                    grpo.TaxDate  = DateTime.Today;
+                    grpo.Comments = $"LM Replenishment {transferRef} — GR from PO {poDocEntry} | {comments}".Trim();
+
+                    if (profile.Sap.BranchId.HasValue)
+                        grpo.BPL_IDAssignedToInvoice = profile.Sap.BranchId.Value;
+
+                    grpo.UserFields.Fields.Item("U_TransferRef").Value = transferRef;
+                    grpo.UserFields.Fields.Item("U_FromDb").Value      = "MolasLubes";
+                    grpo.UserFields.Fields.Item("U_ToDb").Value        = profileKey;
+
+                    // Copy all lines from the Purchase Order via base document linking
+                    // SAP BaseType 22 = Purchase Order (OPOR)
+                    grpo.Lines.BaseType  = 22;
+                    grpo.Lines.BaseEntry = poDocEntry;
+                    grpo.Lines.BaseLine  = 0;  // line index 0 = first PO line
+                    grpo.Lines.Add();
+
+                    int rc = grpo.Add();
+                    if (rc != 0)
+                    {
+                        company.GetLastError(out var code, out var msg);
+                        throw new Exception(
+                            $"Goods Receipt PO Add() failed [{code}]: {msg} | PODocEntry={poDocEntry} | Ref={transferRef}");
+                    }
+
+                    var docEntry = int.Parse(company.GetNewObjectKey());
+
+                    var rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
+                    try
+                    {
+                        rs.DoQuery($"SELECT DocNum FROM OPDN WHERE DocEntry = {docEntry}");
+                        var docNum = rs.EoF ? docEntry.ToString()
+                            : rs.Fields.Item("DocNum").Value?.ToString() ?? docEntry.ToString();
+                        result = new SapDocumentRef(docEntry, docNum);
+                    }
+                    finally
+                    {
+                        Marshal.ReleaseComObject(rs);
+                    }
+
+                    _logger.LogInformation(
+                        "SapGoodsReceiptWriter: GR from PO created | Profile={Profile} | DocEntry={Entry} | DocNum={Num} | PODocEntry={PoEntry} | Ref={Ref}",
+                        profileKey, docEntry, result.DocNum, poDocEntry, transferRef);
+                }
+                catch (Exception ex)
+                {
+                    threadException = ex;
+                    _logger.LogError(ex,
+                        "SapGoodsReceiptWriter: GR from PO failed | Profile={Profile} | PODocEntry={PoDocEntry} | Ref={Ref}",
+                        profileKey, poDocEntry, transferRef);
                 }
                 finally
                 {
-                    Marshal.ReleaseComObject(rs);
+                    if (grpo != null) Marshal.ReleaseComObject(grpo);
+                    DisconnectAndRelease(company);
                 }
-
-                _logger.LogInformation(
-                    "SapGoodsReceiptWriter: GR from PO created | Profile={Profile} | DocEntry={Entry} | DocNum={Num} | PODocEntry={PoEntry} | Ref={Ref}",
-                    profileKey, docEntry, result.DocNum, poDocEntry, transferRef);
-            }
-            catch (Exception ex)
-            {
-                threadException = ex;
-                _logger.LogError(ex,
-                    "SapGoodsReceiptWriter: GR from PO failed | Profile={Profile} | PODocEntry={PoDocEntry} | Ref={Ref}",
-                    profileKey, poDocEntry, transferRef);
-            }
-            finally
-            {
-                if (grpo != null) Marshal.ReleaseComObject(grpo);
-                DisconnectAndRelease(company);
-            }
+            });
         });
 
         thread.SetApartmentState(ApartmentState.STA);
