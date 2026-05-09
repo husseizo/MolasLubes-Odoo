@@ -91,6 +91,76 @@ public class BulkInventoryCountingUomBackfillService
         };
     }
 
+    /// <summary>
+    /// Read-only issue scan: selects candidate items, runs the normal dry-run preflight,
+    /// then keeps only rows that represent actual UoM problems.
+    /// </summary>
+    public UomBackfillReport RunIssues(BulkUomBackfillRequest request)
+    {
+        var report = Run(request, dryRun: true);
+        if (report.Error != null)
+            return report;
+
+        var issueRows = report.Rows
+            .Where(r => IsIssueOutcome(r.Outcome))
+            .ToList();
+
+        var counts = issueRows
+            .GroupBy(r => r.Outcome)
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        return new UomBackfillReport
+        {
+            DryRun = true,
+            TargetUomCode = report.TargetUomCode,
+            TargetUomEntry = report.TargetUomEntry,
+            Rows = issueRows,
+            Totals = counts,
+            Summary = issueRows.Count == 0
+                ? "NO_UOM_ISSUES"
+                : string.Join(" | ", counts.Select(kv => $"{kv.Key}={kv.Value}")),
+            Selection = report.Selection,
+            ExceptionItemCodes = issueRows
+                .Where(r => r.Outcome == ItemUomOutcome.FAIL_SAP_ERROR.ToString())
+                .Select(r => r.ItemCode)
+                .Distinct()
+                .ToList()
+        };
+    }
+
+    /// <summary>
+    /// Read-only readiness scan: selects candidate items, runs the normal dry-run preflight,
+    /// then keeps only rows that are safe to update right now.
+    /// </summary>
+    public UomBackfillReport RunReadyToUpdate(BulkUomBackfillRequest request)
+    {
+        var report = Run(request, dryRun: true);
+        if (report.Error != null)
+            return report;
+
+        var readyRows = report.Rows
+            .Where(r => r.Outcome == ItemUomOutcome.OK_TO_UPDATE.ToString())
+            .ToList();
+
+        var counts = readyRows
+            .GroupBy(r => r.Outcome)
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        return new UomBackfillReport
+        {
+            DryRun = true,
+            TargetUomCode = report.TargetUomCode,
+            TargetUomEntry = report.TargetUomEntry,
+            Rows = readyRows,
+            Totals = counts,
+            Summary = readyRows.Count == 0
+                ? "NO_ITEMS_READY_TO_UPDATE"
+                : string.Join(" | ", counts.Select(kv => $"{kv.Key}={kv.Value}")),
+            Selection = report.Selection,
+            ExceptionItemCodes = new List<string>()
+        };
+    }
+
     private static UomSelectionMetadata BuildSelectionMeta(
         BulkUomBackfillRequest request,
         int take,
@@ -105,6 +175,11 @@ public class BulkInventoryCountingUomBackfillService
         ItemGroupNames = request.ItemGroupNames,
         HasMore        = hasMore
     };
+
+    private static bool IsIssueOutcome(string outcome) =>
+        outcome == ItemUomOutcome.FAIL_INVALID_UOM_GROUP.ToString() ||
+        outcome == ItemUomOutcome.FAIL_TARGET_UOM_MISSING.ToString() ||
+        outcome == ItemUomOutcome.FAIL_SAP_ERROR.ToString();
 }
 
 // ── Request model ────────────────────────────────────────

@@ -81,6 +81,68 @@ public class AdminItemsController : ControllerBase
     }
 
     // -------------------------------------------------
+    // GET UOM ISSUES — select by filter, return only problem items
+    // -------------------------------------------------
+    /// <remarks>
+    /// Example:
+    /// GET /api/admin/items/uom/issues?targetUomCode=EA&itemGroupNames=Liqui%20Moly&take=100&skip=0
+    /// </remarks>
+    [HttpGet("uom/issues")]
+    public IActionResult GetUomIssues([FromQuery] BulkUomBackfillRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.TargetUomCode))
+            return BadRequest(new { Error = "targetUomCode is required" });
+
+        var report = _bulkBackfill.RunIssues(request);
+
+        if (report.Error != null)
+            return UnprocessableEntity(new { report.Error });
+
+        return Ok(new
+        {
+            report.TargetUomCode,
+            report.TargetUomEntry,
+            scannedItems = report.Selection?.MatchedItems ?? 0,
+            issueCount = report.Rows.Count,
+            report.Totals,
+            report.Summary,
+            report.Selection,
+            rows = report.Rows
+        });
+    }
+
+    // -------------------------------------------------
+    // GET UOM READY — select by filter, return only OK_TO_UPDATE items
+    // -------------------------------------------------
+    /// <remarks>
+    /// Example:
+    /// GET /api/admin/items/uom/ready?targetUomCode=EA&itemGroupNames=Liqui%20Moly&take=100&skip=0
+    /// </remarks>
+    [HttpGet("uom/ready")]
+    public IActionResult GetUomReadyToUpdate([FromQuery] BulkUomBackfillRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.TargetUomCode))
+            return BadRequest(new { Error = "targetUomCode is required" });
+
+        var report = _bulkBackfill.RunReadyToUpdate(request);
+
+        if (report.Error != null)
+            return UnprocessableEntity(new { report.Error });
+
+        return Ok(new
+        {
+            report.TargetUomCode,
+            report.TargetUomEntry,
+            scannedItems = report.Selection?.MatchedItems ?? 0,
+            readyCount = report.Rows.Count,
+            report.Totals,
+            report.Summary,
+            report.Selection,
+            rows = report.Rows
+        });
+    }
+
+    // -------------------------------------------------
     // BULK APPLY — select by filter, update OK_TO_UPDATE
     // -------------------------------------------------
     [HttpPost("uom/bulk/apply")]
