@@ -156,20 +156,20 @@ public class SapLiquiMolyDocumentReader
     {
         "SO" => new[]
         {
-            new DocumentCandidate("SO", "MolasLubes", "ORDR", "RDR1", supportsMarketingStatus: true)
+            new DocumentCandidate("SO", "MolasLubes", "ORDR", "RDR1", true)
         },
         "PO" => new[]
         {
-            new DocumentCandidate("PO", "AutoHub", "OPOR", "POR1", supportsMarketingStatus: true)
+            new DocumentCandidate("PO", "AutoHub", "OPOR", "POR1", true)
         },
         "GI" => new[]
         {
-            new DocumentCandidate("GI", "MolasLubes", "OIGE", "IGE1", supportsMarketingStatus: false)
+            new DocumentCandidate("GI", "MolasLubes", "OIGE", "IGE1", false)
         },
         "GR" => new[]
         {
-            new DocumentCandidate("GR", "AutoHub", "OPDN", "PDN1", supportsMarketingStatus: true),
-            new DocumentCandidate("GR", "AutoHub", "OIGN", "IGN1", supportsMarketingStatus: false)
+            new DocumentCandidate("GR", "AutoHub", "OPDN", "PDN1", true),
+            new DocumentCandidate("GR", "AutoHub", "OIGN", "IGN1", false)
         },
         _ => Array.Empty<DocumentCandidate>()
     };
@@ -297,7 +297,8 @@ ORDER BY l.LineNum";
         if (value is DateTime dateTime)
             return dateTime;
 
-        return DateTime.TryParse(value.ToString(), out var parsed)
+        DateTime parsed;
+        return DateTime.TryParse(value.ToString(), out parsed)
             ? parsed
             : null;
     }
