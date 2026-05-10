@@ -321,6 +321,8 @@ builder.Services.AddScoped<
     MolasLubes.Infrastructure.Integrations.SapB1.DiApi.SapPurchaseOrderWriter>();
 builder.Services.AddScoped<
     MolasLubes.Infrastructure.Integrations.SapB1.DiApi.SapWarehouseReader>();
+builder.Services.AddScoped<
+    MolasLubes.Infrastructure.Integrations.SapB1.DiApi.SapLiquiMolyDocumentReader>();
 
 // =====================================================
 // AUTOHUB SERVICES — PROFILE B
