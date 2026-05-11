@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using MolasLubes.Api.Security;
 using MolasLubes.Application.LiquiMolyReplenishment;
@@ -271,13 +272,75 @@ public class AdminLiquiMolyReplenishmentController : ControllerBase
         try { _roleService.Authorize(actorSapUserCode, LiquiMolyRole.Viewer); }
         catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
 
-        var (items, hasMore) = await _service.ListAsync(status, skip, take, ct);
-        return Ok(new
+        try
         {
-            items = items.Select(ToRequestSummaryResponse),
-            hasMore,
-            count = items.Count
-        });
+            var (items, lineCounts, hasMore) = await _service.ListSummariesAsync(status, skip, take, ct);
+            return Ok(new
+            {
+                items = items.Select(item => ToRequestSummaryResponse(item, lineCounts.GetValueOrDefault(item.Id, 0))),
+                hasMore,
+                count = items.Count
+            });
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested || HttpContext.RequestAborted.IsCancellationRequested)
+        {
+            return StatusCode(499, "Request was canceled.");
+        }
+        catch (TaskCanceledException)
+        {
+            return StatusCode(StatusCodes.Status504GatewayTimeout, "Timed out while loading replenishment requests.");
+        }
+    }
+
+    /// <summary>
+    /// Mobile compatibility fallback for executed replenishment history.
+    /// Returns 200 with rows: [] when no executed requests are found.
+    /// </summary>
+    [HttpGet("executed")]
+    public async Task<IActionResult> Executed(
+        [FromQuery] string actorSapUserCode,
+        [FromQuery] int skip = 0,
+        [FromQuery] int take = 50,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(actorSapUserCode))
+            return BadRequest(new { message = "actorSapUserCode is required." });
+
+        try { _roleService.Authorize(actorSapUserCode, LiquiMolyRole.Viewer); }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+
+        try
+        {
+            var (items, _, hasMore) = await _service.ListSummariesAsync("EXECUTED", skip, take, ct);
+            var rows = items.Select(r => new
+            {
+                r.RequestRef,
+                r.Status,
+                r.TransferRef,
+                r.GoodsIssueDocNum,
+                r.GoodsIssueDocEntry,
+                SalesOrderDocNum = r.SalesOrderDocNum?.ToString(),
+                r.SalesOrderDocEntry,
+                PurchaseOrderDocNum = r.PurchaseOrderDocNum?.ToString(),
+                r.PurchaseOrderDocEntry,
+                r.GoodsReceiptDocNum,
+                r.GoodsReceiptDocEntry,
+                r.ExecutedBySapUser,
+                r.ExecutedAt,
+                r.SourceWarehouse,
+                r.TargetWarehouse
+            });
+
+            return Ok(new { rows, hasMore });
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested || HttpContext.RequestAborted.IsCancellationRequested)
+        {
+            return StatusCode(499, "Request was canceled.");
+        }
+        catch (TaskCanceledException)
+        {
+            return StatusCode(StatusCodes.Status504GatewayTimeout, "Timed out while loading executed replenishment requests.");
+        }
     }
 
     private static object ToRequestResponse(CacheLiquiMolyReplenishmentRequest header) => new
@@ -318,7 +381,7 @@ public class AdminLiquiMolyReplenishmentController : ControllerBase
             .ToList()
     };
 
-    private static object ToRequestSummaryResponse(CacheLiquiMolyReplenishmentRequest header) => new
+    private static object ToRequestSummaryResponse(CacheLiquiMolyReplenishmentRequest header, int lineCount) => new
     {
         header.Id,
         header.RequestRef,
@@ -346,7 +409,7 @@ public class AdminLiquiMolyReplenishmentController : ControllerBase
         header.SalesOrderDocNum,
         header.PurchaseOrderDocNum,
         header.ErrorMessage,
-        lineCount = header.Lines.Count
+        lineCount
     };
 
     private static object ToLineResponse(CacheLiquiMolyReplenishmentRequestLine line) => new
@@ -452,20 +515,31 @@ public class AdminLiquiMolyReportsController : ControllerBase
         try { _roleService.Authorize(actorSapUserCode, LiquiMolyRole.Viewer); }
         catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
 
-        var (items, hasMore) = await _service.ListAsync("EXECUTED", skip, take, ct);
-        var rows = items.Select(r => new
+        try
         {
-            r.RequestRef,
-            r.Status,
-            r.TransferRef,
-            r.GoodsIssueDocNum,
-            r.GoodsReceiptDocNum,
-            r.ExecutedBySapUser,
-            r.ExecutedAt,
-            r.SourceWarehouse,
-            r.TargetWarehouse
-        });
-        return Ok(new { rows, hasMore });
+            var (items, _, hasMore) = await _service.ListSummariesAsync("EXECUTED", skip, take, ct);
+            var rows = items.Select(r => new
+            {
+                r.RequestRef,
+                r.Status,
+                r.TransferRef,
+                r.GoodsIssueDocNum,
+                r.GoodsReceiptDocNum,
+                r.ExecutedBySapUser,
+                r.ExecutedAt,
+                r.SourceWarehouse,
+                r.TargetWarehouse
+            });
+            return Ok(new { rows, hasMore });
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested || HttpContext.RequestAborted.IsCancellationRequested)
+        {
+            return StatusCode(499, "Request was canceled.");
+        }
+        catch (TaskCanceledException)
+        {
+            return StatusCode(StatusCodes.Status504GatewayTimeout, "Timed out while loading execution history.");
+        }
     }
 
     /// <summary>
@@ -484,23 +558,34 @@ public class AdminLiquiMolyReportsController : ControllerBase
 
         // Include all statuses that carry an approval decision so execution
         // transitions (EXECUTING → EXECUTED/PARTIAL/FAILED) never erase the audit trail.
-        var (items, hasMore) = await _service.ListByStatusesAsync(
-            new[] { "APPROVED", "REJECTED", "EXECUTING", "EXECUTED", "PARTIAL", "FAILED" }, skip, take, ct);
-
-        var rows = items.Select(r => new
+        try
         {
-            r.RequestRef,
-            r.Status,
-            r.RequestedBySapUser,
-            r.ApprovedBySapUser,
-            r.RejectedBySapUser,
-            r.RejectionReason,
-            r.SubmittedAt,
-            r.ApprovedAt,
-            r.RejectedAt,
-            r.Comments
-        });
+            var (items, _, hasMore) = await _service.ListSummaryByStatusesAsync(
+                new[] { "APPROVED", "REJECTED", "EXECUTING", "EXECUTED", "PARTIAL", "FAILED" }, skip, take, ct);
 
-        return Ok(new { rows, hasMore, count = items.Count });
+            var rows = items.Select(r => new
+            {
+                r.RequestRef,
+                r.Status,
+                r.RequestedBySapUser,
+                r.ApprovedBySapUser,
+                r.RejectedBySapUser,
+                r.RejectionReason,
+                r.SubmittedAt,
+                r.ApprovedAt,
+                r.RejectedAt,
+                r.Comments
+            });
+
+            return Ok(new { rows, hasMore, count = items.Count });
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested || HttpContext.RequestAborted.IsCancellationRequested)
+        {
+            return StatusCode(499, "Request was canceled.");
+        }
+        catch (TaskCanceledException)
+        {
+            return StatusCode(StatusCodes.Status504GatewayTimeout, "Timed out while loading approval history.");
+        }
     }
 }

@@ -343,19 +343,12 @@ public class LiquiMolyReplenishmentService
             if (!string.IsNullOrWhiteSpace(status))
                 query = query.Where(r => r.Status == status);
 
-            var items = await query
-                .AsNoTracking()
-                .AsSplitQuery()
-                .OrderByDescending(r => r.CreatedAt)
-                .Skip(skip)
-                .Take(take + 1)
-                .Include(r => r.Lines)
-                .ToListAsync(ct);
-
-            var hasMore = items.Count > take;
-            if (hasMore) items.RemoveAt(items.Count - 1);
-
-            return (items, hasMore);
+            return await LoadListPageAsync(
+                query,
+                ordered => ordered.OrderByDescending(r => r.CreatedAt),
+                skip,
+                take,
+                ct);
         }
         finally
         {
@@ -369,6 +362,33 @@ public class LiquiMolyReplenishmentService
     /// preserving correct skip/take semantics across the combined result set.
     /// Used by the approvals report which needs APPROVED + REJECTED together.
     /// </summary>
+    public async Task<(IReadOnlyList<CacheLiquiMolyReplenishmentRequest> Items, IReadOnlyDictionary<int, int> LineCounts, bool HasMore)>
+        ListSummariesAsync(string? status, int skip, int take, CancellationToken ct = default)
+    {
+        take = Math.Clamp(take, 1, 200);
+
+        var previousTimeout = _db.Database.GetCommandTimeout();
+        _db.Database.SetCommandTimeout(120);
+
+        try
+        {
+            var query = _db.CacheLiquiMolyReplenishmentRequests.AsQueryable();
+            if (!string.IsNullOrWhiteSpace(status))
+                query = query.Where(r => r.Status == status);
+
+            return await LoadListPageWithLineCountsAsync(
+                query,
+                ordered => ordered.OrderByDescending(r => r.CreatedAt),
+                skip,
+                take,
+                ct);
+        }
+        finally
+        {
+            _db.Database.SetCommandTimeout(previousTimeout);
+        }
+    }
+
     public async Task<(IReadOnlyList<CacheLiquiMolyReplenishmentRequest> Items, bool HasMore)>
         ListByStatusesAsync(IReadOnlyList<string> statuses, int skip, int take, CancellationToken ct = default)
     {
@@ -380,20 +400,38 @@ public class LiquiMolyReplenishmentService
 
         try
         {
-            var items = await _db.CacheLiquiMolyReplenishmentRequests
-                .AsNoTracking()
-                .AsSplitQuery()
-                .Where(r => statuses.Contains(r.Status))
-                .OrderByDescending(r => r.ApprovedAt ?? r.RejectedAt ?? r.CreatedAt)
-                .Skip(skip)
-                .Take(take + 1)
-                .Include(r => r.Lines)
-                .ToListAsync(ct);
+            return await LoadListPageAsync(
+                _db.CacheLiquiMolyReplenishmentRequests
+                    .Where(r => statuses.Contains(r.Status)),
+                ordered => ordered.OrderByDescending(r => r.ApprovedAt ?? r.RejectedAt ?? r.CreatedAt),
+                skip,
+                take,
+                ct);
+        }
+        finally
+        {
+            // Restore previous timeout
+            _db.Database.SetCommandTimeout(previousTimeout);
+        }
+    }
 
-            var hasMore = items.Count > take;
-            if (hasMore) items.RemoveAt(items.Count - 1);
+    public async Task<(IReadOnlyList<CacheLiquiMolyReplenishmentRequest> Items, IReadOnlyDictionary<int, int> LineCounts, bool HasMore)>
+        ListSummaryByStatusesAsync(IReadOnlyList<string> statuses, int skip, int take, CancellationToken ct = default)
+    {
+        take = Math.Clamp(take, 1, 200);
 
-            return (items, hasMore);
+        var previousTimeout = _db.Database.GetCommandTimeout();
+        _db.Database.SetCommandTimeout(120);
+
+        try
+        {
+            return await LoadListPageWithLineCountsAsync(
+                _db.CacheLiquiMolyReplenishmentRequests
+                    .Where(r => statuses.Contains(r.Status)),
+                ordered => ordered.OrderByDescending(r => r.ApprovedAt ?? r.RejectedAt ?? r.CreatedAt),
+                skip,
+                take,
+                ct);
         }
         finally
         {
@@ -433,5 +471,60 @@ public class LiquiMolyReplenishmentService
 
         throw new InvalidOperationException(
             "Unable to generate a unique replenishment request reference after 100 attempts.");
+    }
+
+    private async Task<(IReadOnlyList<CacheLiquiMolyReplenishmentRequest> Items, bool HasMore)> LoadListPageAsync(
+        IQueryable<CacheLiquiMolyReplenishmentRequest> query,
+        Func<IQueryable<CacheLiquiMolyReplenishmentRequest>, IOrderedQueryable<CacheLiquiMolyReplenishmentRequest>> applyOrdering,
+        int skip,
+        int take,
+        CancellationToken ct)
+    {
+        var items = await applyOrdering(query)
+            .AsNoTracking()
+            .AsSplitQuery()
+            .Skip(skip)
+            .Take(take + 1)
+            .Include(r => r.Lines)
+            .ToListAsync(ct);
+
+        var hasMore = items.Count > take;
+        if (hasMore) items.RemoveAt(items.Count - 1);
+
+        return (items, hasMore);
+    }
+
+    private async Task<(IReadOnlyList<CacheLiquiMolyReplenishmentRequest> Items, IReadOnlyDictionary<int, int> LineCounts, bool HasMore)> LoadListPageWithLineCountsAsync(
+        IQueryable<CacheLiquiMolyReplenishmentRequest> query,
+        Func<IQueryable<CacheLiquiMolyReplenishmentRequest>, IOrderedQueryable<CacheLiquiMolyReplenishmentRequest>> applyOrdering,
+        int skip,
+        int take,
+        CancellationToken ct)
+    {
+        var items = await applyOrdering(query)
+            .AsNoTracking()
+            .Skip(skip)
+            .Take(take + 1)
+            .ToListAsync(ct);
+
+        var hasMore = items.Count > take;
+        if (hasMore)
+            items.RemoveAt(items.Count - 1);
+
+        if (items.Count == 0)
+            return (items, new Dictionary<int, int>(), hasMore);
+
+        var itemIds = items
+            .Select(r => r.Id)
+            .ToList();
+
+        var lineCounts = await _db.CacheLiquiMolyReplenishmentRequestLines
+            .AsNoTracking()
+            .Where(l => itemIds.Contains(l.RequestId))
+            .GroupBy(l => l.RequestId)
+            .Select(g => new { RequestId = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.RequestId, x => x.Count, ct);
+
+        return (items, lineCounts, hasMore);
     }
 }
