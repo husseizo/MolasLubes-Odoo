@@ -389,6 +389,38 @@ public class LiquiMolyReplenishmentService
         }
     }
 
+    public async Task<(IReadOnlyList<CacheLiquiMolyReplenishmentRequest> Items, IReadOnlyDictionary<int, int> LineCounts, bool HasMore)>
+        ListOwnSummariesAsync(string requestedBySapUser, string? status, int skip, int take, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(requestedBySapUser))
+            throw new ArgumentException("requestedBySapUser is required.", nameof(requestedBySapUser));
+
+        take = Math.Clamp(take, 1, 200);
+
+        var previousTimeout = _db.Database.GetCommandTimeout();
+        _db.Database.SetCommandTimeout(120);
+
+        try
+        {
+            var query = _db.CacheLiquiMolyReplenishmentRequests
+                .Where(r => r.RequestedBySapUser == requestedBySapUser);
+
+            if (!string.IsNullOrWhiteSpace(status))
+                query = query.Where(r => r.Status == status);
+
+            return await LoadListPageWithLineCountsAsync(
+                query,
+                ordered => ordered.OrderByDescending(r => r.CreatedAt),
+                skip,
+                take,
+                ct);
+        }
+        finally
+        {
+            _db.Database.SetCommandTimeout(previousTimeout);
+        }
+    }
+
     public async Task<(IReadOnlyList<CacheLiquiMolyReplenishmentRequest> Items, bool HasMore)>
         ListByStatusesAsync(IReadOnlyList<string> statuses, int skip, int take, CancellationToken ct = default)
     {
