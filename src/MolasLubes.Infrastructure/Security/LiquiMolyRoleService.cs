@@ -40,8 +40,14 @@ public class LiquiMolyRoleService
 
     /// <summary>
     /// Validates that the SAP user exists and is active (queries OUSR), then checks
-    /// that they hold the required role in the config allowlist.
+    /// that they hold the required capability in the config allowlist.
     /// Admins always pass the role check regardless of which role is required.
+    /// Effective capability matrix:
+    ///   Viewer     <= Viewer, Planner, Executor, Supervisor, Admin
+    ///   Planner    <= Planner, Executor, Supervisor, Admin
+    ///   Executor   <= Executor, Planner, Admin
+    ///   Supervisor <= Supervisor, Admin
+    ///   Admin      <= Admin
     /// Throws <see cref="UnauthorizedAccessException"/> on failure.
     /// </summary>
     public void Authorize(string sapUserCode, string requiredRole)
@@ -88,6 +94,38 @@ public class LiquiMolyRoleService
     // ── Private ──────────────────────────────────────────
 
     private bool HasRole(string userCode, string role)
+    {
+        if (IsInConfiguredRole(userCode, LiquiMolyRole.Admin))
+            return true;
+
+        return role switch
+        {
+            LiquiMolyRole.Viewer =>
+                IsInConfiguredRole(userCode, LiquiMolyRole.Viewer) ||
+                IsInConfiguredRole(userCode, LiquiMolyRole.Planner) ||
+                IsInConfiguredRole(userCode, LiquiMolyRole.Executor) ||
+                IsInConfiguredRole(userCode, LiquiMolyRole.Supervisor),
+
+            LiquiMolyRole.Planner =>
+                IsInConfiguredRole(userCode, LiquiMolyRole.Planner) ||
+                IsInConfiguredRole(userCode, LiquiMolyRole.Executor) ||
+                IsInConfiguredRole(userCode, LiquiMolyRole.Supervisor),
+
+            LiquiMolyRole.Executor =>
+                IsInConfiguredRole(userCode, LiquiMolyRole.Executor) ||
+                IsInConfiguredRole(userCode, LiquiMolyRole.Planner),
+
+            LiquiMolyRole.Supervisor =>
+                IsInConfiguredRole(userCode, LiquiMolyRole.Supervisor),
+
+            LiquiMolyRole.Admin =>
+                IsInConfiguredRole(userCode, LiquiMolyRole.Admin),
+
+            _ => false
+        };
+    }
+
+    private bool IsInConfiguredRole(string userCode, string role)
     {
         var list = role switch
         {
