@@ -16,16 +16,13 @@ namespace MolasLubes.Api.Controllers.LiquiMoly;
 public class LiquiMolyReplenishmentController : ControllerBase
 {
     private readonly LiquiMolyReplenishmentService _service;
-    private readonly LiquiMolyRoleService _roleService;
     private readonly SapWarehouseReader _warehouseReader;
 
     public LiquiMolyReplenishmentController(
         LiquiMolyReplenishmentService service,
-        LiquiMolyRoleService roleService,
         SapWarehouseReader warehouseReader)
     {
         _service = service;
-        _roleService = roleService;
         _warehouseReader = warehouseReader;
     }
 
@@ -36,12 +33,11 @@ public class LiquiMolyReplenishmentController : ControllerBase
     {
         try
         {
-            var sapUserCode = GetCurrentSapUserCode();
-            _roleService.Authorize(sapUserCode, LiquiMolyRole.Planner);
+            GetCurrentSapUserCode();
             var result = _warehouseReader.GetWarehouseOptions(sourceProfile, targetProfile);
             return Ok(result);
         }
-        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (UnauthorizedAccessException ex) { return StatusCode(401, ex.Message); }
         catch (Exception ex) { return StatusCode(500, ex.Message); }
     }
 
@@ -55,10 +51,10 @@ public class LiquiMolyReplenishmentController : ControllerBase
             var sapUserCode = GetCurrentSapUserCode();
             request.Actor = BuildActor(sapUserCode, request.Actor?.Comment);
 
-            var (requestRef, rows) = await _service.GenerateDraftAsync(request, ct);
+            var (requestRef, rows) = await _service.GenerateDraftAsync(request, ct, authorizeActor: false);
             return Ok(new { requestRef, rowCount = rows.Count, rows });
         }
-        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (UnauthorizedAccessException ex) { return StatusCode(401, ex.Message); }
         catch (Exception ex) { return StatusCode(500, ex.Message); }
     }
 
@@ -72,7 +68,6 @@ public class LiquiMolyReplenishmentController : ControllerBase
         try
         {
             var sapUserCode = GetCurrentSapUserCode();
-            _roleService.Authorize(sapUserCode, LiquiMolyRole.Planner);
 
             var (items, lineCounts, hasMore) = await _service.ListOwnSummariesAsync(sapUserCode, status, skip, take, ct);
             return Ok(new
@@ -82,7 +77,7 @@ public class LiquiMolyReplenishmentController : ControllerBase
                 count = items.Count
             });
         }
-        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (UnauthorizedAccessException ex) { return StatusCode(401, ex.Message); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested || HttpContext.RequestAborted.IsCancellationRequested)
         {
             return StatusCode(499, "Request was canceled.");
@@ -101,7 +96,6 @@ public class LiquiMolyReplenishmentController : ControllerBase
         try
         {
             var sapUserCode = GetCurrentSapUserCode();
-            _roleService.Authorize(sapUserCode, LiquiMolyRole.Planner);
 
             var header = await _service.GetAsync(requestRef, ct);
             if (header == null)
@@ -112,7 +106,7 @@ public class LiquiMolyReplenishmentController : ControllerBase
 
             return Ok(ToRequestResponse(header));
         }
-        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (UnauthorizedAccessException ex) { return StatusCode(401, ex.Message); }
     }
 
     [HttpPost("{requestRef}/draft-lines/apply")]
@@ -124,7 +118,6 @@ public class LiquiMolyReplenishmentController : ControllerBase
         try
         {
             var sapUserCode = GetCurrentSapUserCode();
-            _roleService.Authorize(sapUserCode, LiquiMolyRole.Planner);
 
             var current = await _service.GetAsync(requestRef, ct);
             if (current == null)
@@ -135,10 +128,10 @@ public class LiquiMolyReplenishmentController : ControllerBase
 
             request.Actor = BuildActor(sapUserCode, request.Actor?.Comment);
 
-            var result = await _service.ApplyDraftLinesAsync(requestRef, request, ct);
+            var result = await _service.ApplyDraftLinesAsync(requestRef, request, ct, authorizeActor: false);
             return Ok(result);
         }
-        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (UnauthorizedAccessException ex) { return StatusCode(401, ex.Message); }
         catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
         catch (ArgumentException ex) { return UnprocessableEntity(new { message = "Validation failed.", errors = new { operations = ex.Message } }); }
         catch (InvalidOperationException ex) when (ex.Message.StartsWith("DRAFT_VERSION_CONFLICT"))
@@ -163,7 +156,6 @@ public class LiquiMolyReplenishmentController : ControllerBase
         try
         {
             var sapUserCode = GetCurrentSapUserCode();
-            _roleService.Authorize(sapUserCode, LiquiMolyRole.Planner);
 
             var current = await _service.GetAsync(requestRef, ct);
             if (current == null)
@@ -174,10 +166,10 @@ public class LiquiMolyReplenishmentController : ControllerBase
 
             request.Actor = BuildActor(sapUserCode, request.Actor?.Comment);
 
-            var header = await _service.SubmitForApprovalAsync(requestRef, request, ct);
+            var header = await _service.SubmitForApprovalAsync(requestRef, request, ct, authorizeActor: false);
             return Ok(new { header.RequestRef, header.Status, header.SubmittedAt });
         }
-        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+        catch (UnauthorizedAccessException ex) { return StatusCode(401, ex.Message); }
         catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
         catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
         catch (Exception ex) { return StatusCode(500, ex.Message); }

@@ -37,9 +37,10 @@ public class LiquiMolyReplenishmentService
     // ── Generate Draft ────────────────────────────────────────────────
 
     public async Task<(string RequestRef, IReadOnlyList<LiquiMolyRecommendationRow> Rows)>
-        GenerateDraftAsync(GenerateReplenishmentRequest request, CancellationToken ct = default)
+        GenerateDraftAsync(GenerateReplenishmentRequest request, CancellationToken ct = default, bool authorizeActor = true)
     {
-        _roleService.Authorize(request.Actor.SapUserCode, LiquiMolyRole.Planner);
+        if (authorizeActor)
+            _roleService.Authorize(request.Actor.SapUserCode, LiquiMolyRole.Planner);
 
         var rows = _analyzer.Analyze(
             request.SourceProfile,
@@ -107,9 +108,11 @@ public class LiquiMolyReplenishmentService
     public async Task<DraftLineApplyResponse> ApplyDraftLinesAsync(
         string requestRef,
         DraftLineApplyRequest request,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool authorizeActor = true)
     {
-        _roleService.Authorize(request.Actor.SapUserCode, LiquiMolyRole.Planner);
+        if (authorizeActor)
+            _roleService.Authorize(request.Actor.SapUserCode, LiquiMolyRole.Planner);
 
         var header = await _db.CacheLiquiMolyReplenishmentRequests
             .Include(r => r.Lines)
@@ -208,9 +211,10 @@ public class LiquiMolyReplenishmentService
     // ── Submit for Approval ───────────────────────────────────────────
 
     public async Task<CacheLiquiMolyReplenishmentRequest> SubmitForApprovalAsync(
-        string requestRef, SubmitReplenishmentRequest request, CancellationToken ct = default)
+        string requestRef, SubmitReplenishmentRequest request, CancellationToken ct = default, bool authorizeActor = true)
     {
-        _roleService.Authorize(request.Actor.SapUserCode, LiquiMolyRole.Planner);
+        if (authorizeActor)
+            _roleService.Authorize(request.Actor.SapUserCode, LiquiMolyRole.Planner);
 
         var header = await LoadOrThrow(requestRef, ct);
 
