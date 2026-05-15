@@ -111,7 +111,10 @@ public class LiquiMolyProductsController : ControllerBase
             // ── Approvals & Specifications ────────────────────────────
             Approvals          = Deserialise<List<string>>(p.Approvals),
             Specifications     = Deserialise<Dictionary<string, string>>(p.Specifications),
+            SpecificationItems = Deserialise<List<string>>(p.SpecificationItems),
             OverviewProperties = Deserialise<List<string>>(p.OverviewProperties),
+            Application        = p.Application,
+            LiquiMolyRecommendations = Deserialise<List<string>>(p.LiquiMolyRecommendations),
 
             // ── Downloads ─────────────────────────────────────────────
             p.ProductInfoPdfUrl,

@@ -46,8 +46,17 @@ public class CacheLiquiMolyProduct
     /// <summary>Technical specifications as a JSON object (e.g. {"Viscosity class":"SAE 5W-30"}).</summary>
     public string? Specifications  { get; set; }          // JSON-serialised Dictionary<string,string>
 
+    /// <summary>Specification items as a JSON array (e.g. ["ACEA C3","API SP"]).</summary>
+    public string? SpecificationItems { get; set; }       // JSON-serialised List<string>
+
     /// <summary>Overview properties / benefits as a JSON array.</summary>
     public string? OverviewProperties { get; set; }       // JSON-serialised List<string>
+
+    /// <summary>Application / usage instructions as plain text.</summary>
+    public string? Application { get; set; }
+
+    /// <summary>LIQUI MOLY recommendations as a JSON array.</summary>
+    public string? LiquiMolyRecommendations { get; set; } // JSON-serialised List<string>
 
     // =============================
     // DOWNLOADS

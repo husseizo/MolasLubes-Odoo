@@ -35,22 +35,39 @@ public class LiquiMolyProductDto
 
     // ─── Approvals & Specifications ────────────────────────────────────────────
     /// <summary>
-    /// Full list of OEM / industry approvals (e.g. "BMW Longlife-04", "MB 229.51").
+    /// Full list of OEM / industry approvals (e.g. "BMW Longlife-04", "MB-Approval 229.51").
     /// Each entry is one approval text as listed on the product page.
     /// </summary>
     public List<string> Approvals { get; set; } = new();
 
     /// <summary>
     /// Key-value technical specifications as shown in the "Specifications" table
-    /// on the product page (e.g. "Viscosity class" → "SAE 5W-30").
+    /// on the product page when available.
+    /// Kept for backward compatibility with older consumers.
     /// </summary>
     public Dictionary<string, string> Specifications { get; set; } = new();
+
+    /// <summary>
+    /// Plain list of specification items from the "Specifications / Approvals" section
+    /// (e.g. "ACEA C3", "API SP").
+    /// </summary>
+    public List<string> SpecificationItems { get; set; } = new();
 
     /// <summary>
     /// Bullet-point overview properties / benefits from the product detail page.
     /// Stored in scrape order.
     /// </summary>
     public List<string> OverviewProperties { get; set; } = new();
+
+    /// <summary>
+    /// Product application / usage instructions from the "Application" section.
+    /// </summary>
+    public string? Application { get; set; }
+
+    /// <summary>
+    /// LIQUI MOLY recommendation items from the "LIQUI MOLY recommends" section.
+    /// </summary>
+    public List<string> LiquiMolyRecommendations { get; set; } = new();
 
     // ─── Downloads ─────────────────────────────────────────────────────────────
     /// <summary>Direct URL to the English Production / Product Information PDF.</summary>

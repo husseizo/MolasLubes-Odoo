@@ -452,10 +452,10 @@ public class LiquiMolyProductScraperService
         doc.LoadHtml(html);
 
         var name        = ExtractName(doc);
-        var desc        = ExtractDescription(doc);
+        var (desc, application) = ExtractDescriptionAndApplication(doc);
         var images      = ExtractAllImages(doc, requestedSku);
         var (cat, sub)  = ExtractCategories(doc);
-        var approvals   = ExtractApprovals(doc);
+        var (specificationItems, approvals, recommendations) = ExtractApprovalSpecificationData(doc);
         var overviewProperties = ExtractOverviewProperties(doc);
 
         // Sizes come from the category listing pages (captured during index build).
@@ -504,8 +504,11 @@ public class LiquiMolyProductScraperService
             Category              = cat,
             SubCategory           = sub,
             Specifications        = new Dictionary<string, string>(),
+            SpecificationItems    = specificationItems,
             Approvals             = approvals,
             OverviewProperties    = overviewProperties,
+            Application           = application,
+            LiquiMolyRecommendations = recommendations,
             SpecGrade             = specGrade,
             ProductInfoPdfUrl     = pdf,
             SafetyDataSheetPdfUrl = sds,
@@ -526,16 +529,53 @@ public class LiquiMolyProductScraperService
     }
 
     /// <summary>
-    /// Product description from the Description tab section.
-    /// Magento 2 uses <c>div.product-info-description</c> or <c>div[@itemprop='description']</c>.
+    /// Product description and application text from the Description tab section.
+    /// The page often renders the "Application" heading inside the same container as
+    /// the main description, followed by usage instructions and then the SKU table.
     /// </summary>
-    private static string? ExtractDescription(HtmlDocument doc)
+    private static (string? Description, string? Application) ExtractDescriptionAndApplication(HtmlDocument doc)
     {
         var node = doc.DocumentNode.SelectSingleNode("//div[contains(@class,'product-info-description')]")
                 ?? doc.DocumentNode.SelectSingleNode("//div[@itemprop='description']")
                 ?? doc.DocumentNode.SelectSingleNode("//div[contains(@class,'description')]");
 
-        return node == null ? null : HtmlEntity.DeEntitize(node.InnerText.Trim());
+        if (node == null)
+            return (null, null);
+
+        var lines = HtmlEntity.DeEntitize(node.InnerText)
+            .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(x => x.Trim())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Where(x => !IsNoiseLine(x))
+            .ToList();
+
+        if (lines.Count == 0)
+            return (null, null);
+
+        var applicationIndex = lines.FindIndex(x =>
+            x.Equals("Application", StringComparison.OrdinalIgnoreCase));
+
+        if (applicationIndex < 0)
+            return (string.Join(Environment.NewLine + Environment.NewLine, lines), null);
+
+        var descriptionLines = lines
+            .Take(applicationIndex)
+            .ToList();
+
+        var applicationLines = lines
+            .Skip(applicationIndex + 1)
+            .TakeWhile(x => !IsDescriptionSectionStopLine(x))
+            .ToList();
+
+        var description = descriptionLines.Count == 0
+            ? null
+            : string.Join(Environment.NewLine + Environment.NewLine, descriptionLines);
+
+        var application = applicationLines.Count == 0
+            ? null
+            : string.Join(" ", applicationLines);
+
+        return (description, application);
     }
 
     /// <summary>
@@ -680,15 +720,12 @@ public class LiquiMolyProductScraperService
     }
 
     /// <summary>
-    /// Extracts OEM/industry approvals from the "Approvals &amp; Specifications" tab.
-    ///
-    /// Liqui-Moly uses plain comma-separated text under a "Specifications / Approvals"
-    /// bold heading, e.g.:
-    ///   ACEA C3, API SQ, BMW Longlife-04, MB-Approval 229.31/229.51/229.52, ...
+    /// Extracts specification items, OEM approvals, and LIQUI MOLY recommendations
+    /// from the "Approvals &amp; Specifications" tab.
     /// </summary>
-    private static List<string> ExtractApprovals(HtmlDocument doc)
+    private static (List<string> SpecificationItems, List<string> Approvals, List<string> Recommendations)
+        ExtractApprovalSpecificationData(HtmlDocument doc)
     {
-        // Try the approvals tab content div (Magento tab ID)
         var approvalDivSelectors = new[]
         {
             "//div[@id='tab-detail-approvalsandspecifications']",
@@ -702,11 +739,15 @@ public class LiquiMolyProductScraperService
             var node = doc.DocumentNode.SelectSingleNode(sel);
             if (node == null) continue;
 
-            var items = ParseApprovalText(HtmlEntity.DeEntitize(node.InnerText));
-            if (items.Count > 0) return items;
+            var extracted = ParseApprovalSpecificationSection(HtmlEntity.DeEntitize(node.InnerText));
+            if (extracted.SpecificationItems.Count > 0 ||
+                extracted.Approvals.Count > 0 ||
+                extracted.Recommendations.Count > 0)
+            {
+                return extracted;
+            }
         }
 
-        // Fallback: find the paragraph after "Specifications / Approvals" bold heading
         var boldHeadings = doc.DocumentNode
             .SelectNodes("//strong | //b")
             ?.Where(n => n.InnerText.Contains("Specifications", StringComparison.OrdinalIgnoreCase)
@@ -722,28 +763,74 @@ public class LiquiMolyProductScraperService
                 if (parent == null) continue;
 
                 var fullText = HtmlEntity.DeEntitize(parent.InnerText);
-                // Strip the heading label itself and parse what remains
-                var colonIdx = fullText.IndexOf(':', StringComparison.Ordinal);
-                if (colonIdx >= 0)
+                var extracted = ParseApprovalSpecificationSection(fullText);
+                if (extracted.SpecificationItems.Count > 0 ||
+                    extracted.Approvals.Count > 0 ||
+                    extracted.Recommendations.Count > 0)
                 {
-                    var items = ParseApprovalText(fullText[(colonIdx + 1)..]);
-                    if (items.Count > 0) return items;
+                    return extracted;
                 }
             }
         }
 
-        return new List<string>();
+        return (new List<string>(), new List<string>(), new List<string>());
     }
 
-    private static List<string> ParseApprovalText(string text)
+    private static (List<string> SpecificationItems, List<string> Approvals, List<string> Recommendations)
+        ParseApprovalSpecificationSection(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return (new List<string>(), new List<string>(), new List<string>());
+
+        var normalized = NormalizeWhitespace(text);
+        if (string.IsNullOrWhiteSpace(normalized))
+            return (new List<string>(), new List<string>(), new List<string>());
+
+        const string recommendationLead =
+            "LIQUI MOLY recommends this product for vehicles or assemblies for which the following specifications or original spare part numbers are required";
+
+        var specsText = string.Empty;
+        var recommendationsText = string.Empty;
+
+        var leadIndex = normalized.IndexOf(recommendationLead, StringComparison.OrdinalIgnoreCase);
+        if (leadIndex >= 0)
+        {
+            var prefix = normalized[..leadIndex].Trim();
+            specsText = StripSpecificationsHeading(prefix);
+
+            var suffix = normalized[(leadIndex + recommendationLead.Length)..].TrimStart(' ', ':');
+            recommendationsText = CutAtFirstSectionHeading(suffix);
+        }
+        else
+        {
+            specsText = CutAtFirstSectionHeading(StripSpecificationsHeading(normalized));
+        }
+
+        var specAndApprovalItems = ParseCommaSeparatedItems(specsText);
+        var recommendations = ParseCommaSeparatedItems(recommendationsText);
+
+        var specificationItems = specAndApprovalItems
+            .Where(IsSpecificationItem)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var approvals = specAndApprovalItems
+            .Where(x => !IsSpecificationItem(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return (specificationItems, approvals, recommendations);
+    }
+
+    private static List<string> ParseCommaSeparatedItems(string text)
     {
         if (string.IsNullOrWhiteSpace(text)) return new List<string>();
 
         return text
             .Split(new[] { ',', ';', '\n' }, StringSplitOptions.RemoveEmptyEntries)
             .Select(p => p.Trim())
-            .Where(p => p.Length > 2 && p.Length < 120) // skip blanks and runaway paragraphs
-            .Distinct()
+            .Where(p => p.Length > 2 && p.Length < 180)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
 
@@ -766,6 +853,78 @@ public class LiquiMolyProductScraperService
             .Where(text => !string.IsNullOrWhiteSpace(text))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    private static bool IsNoiseLine(string text) =>
+        text.Equals("Description", StringComparison.OrdinalIgnoreCase) ||
+        text.Equals("Learn More", StringComparison.OrdinalIgnoreCase) ||
+        text.Equals("Show more", StringComparison.OrdinalIgnoreCase) ||
+        text.Equals("Show details", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsDescriptionSectionStopLine(string text) =>
+        text.Equals("SKU", StringComparison.OrdinalIgnoreCase) ||
+        text.Equals("Informations", StringComparison.OrdinalIgnoreCase) ||
+        text.Equals("Container type", StringComparison.OrdinalIgnoreCase) ||
+        text.Equals("Container contents", StringComparison.OrdinalIgnoreCase) ||
+        text.Equals("Language line", StringComparison.OrdinalIgnoreCase) ||
+        text.Equals("PU", StringComparison.OrdinalIgnoreCase) ||
+        text.Equals("Pallet unit", StringComparison.OrdinalIgnoreCase) ||
+        text.Equals("Sea pallet unit", StringComparison.OrdinalIgnoreCase) ||
+        text.Equals("Specifications / Approvals", StringComparison.OrdinalIgnoreCase) ||
+        text.Equals("Product Information", StringComparison.OrdinalIgnoreCase) ||
+        text.Equals("Downloads", StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeWhitespace(string text) =>
+        Regex.Replace(text, @"\s+", " ").Trim();
+
+    private static string StripSpecificationsHeading(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return string.Empty;
+
+        return Regex.Replace(
+            text,
+            @"^\s*Specifications\s*/\s*Approvals\s*:?\s*",
+            string.Empty,
+            RegexOptions.IgnoreCase).Trim();
+    }
+
+    private static string CutAtFirstSectionHeading(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return string.Empty;
+
+        var headings = new[]
+        {
+            "Product Information",
+            "Safety data sheets",
+            "Images and documents",
+            "Downloads",
+            "Show all variants"
+        };
+
+        var cutIndex = text.Length;
+        foreach (var heading in headings)
+        {
+            var idx = text.IndexOf(heading, StringComparison.OrdinalIgnoreCase);
+            if (idx >= 0 && idx < cutIndex)
+                cutIndex = idx;
+        }
+
+        return text[..cutIndex].Trim();
+    }
+
+    private static bool IsSpecificationItem(string item)
+    {
+        if (string.IsNullOrWhiteSpace(item))
+            return false;
+
+        var normalized = item.Trim();
+        return normalized.StartsWith("ACEA ", StringComparison.OrdinalIgnoreCase) ||
+               normalized.StartsWith("API ", StringComparison.OrdinalIgnoreCase) ||
+               normalized.StartsWith("ILSAC ", StringComparison.OrdinalIgnoreCase) ||
+               normalized.StartsWith("JASO ", StringComparison.OrdinalIgnoreCase) ||
+               normalized.StartsWith("SAE ", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

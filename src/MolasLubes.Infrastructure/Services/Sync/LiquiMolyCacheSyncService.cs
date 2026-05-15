@@ -138,8 +138,18 @@ public class LiquiMolyCacheSyncService
             ? JsonSerializer.Serialize(dto.Specifications, _json)
             : null;
 
+        entity.SpecificationItems    = dto.SpecificationItems.Count > 0
+            ? JsonSerializer.Serialize(dto.SpecificationItems, _json)
+            : null;
+
         entity.OverviewProperties    = dto.OverviewProperties.Count > 0
             ? JsonSerializer.Serialize(dto.OverviewProperties, _json)
+            : null;
+
+        entity.Application           = dto.Application;
+
+        entity.LiquiMolyRecommendations = dto.LiquiMolyRecommendations.Count > 0
+            ? JsonSerializer.Serialize(dto.LiquiMolyRecommendations, _json)
             : null;
 
         entity.ProductInfoPdfUrl     = dto.ProductInfoPdfUrl;
