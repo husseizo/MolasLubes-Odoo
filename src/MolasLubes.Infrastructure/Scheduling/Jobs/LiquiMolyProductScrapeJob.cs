@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MolasLubes.Infrastructure.Integrations.LiquiMoly;
 using MolasLubes.Infrastructure.Integrations.Meguin;
+using MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 using MolasLubes.Infrastructure.Persistence;
 using MolasLubes.Infrastructure.Services.Sync;
 using MolasLubes.Infrastructure.Scheduling;
@@ -47,6 +48,7 @@ public class LiquiMolyProductScrapeJob : IJob
             var cacheDb        = scope.ServiceProvider.GetRequiredService<MolasCacheDbContext>();
             var lmScraper      = scope.ServiceProvider.GetRequiredService<LiquiMolyProductScraperService>();
             var meguinScraper  = scope.ServiceProvider.GetRequiredService<MeguinProductScraperService>();
+            var barcodeReader  = scope.ServiceProvider.GetRequiredService<SapProductBarcodeReader>();
             var cacheSync      = scope.ServiceProvider.GetRequiredService<LiquiMolyCacheSyncService>();
             var neonSync       = scope.ServiceProvider.GetRequiredService<LiquiMolyNeonSyncService>();
             var settings       = scope.ServiceProvider.GetRequiredService<IOptions<LiquiMolyScraperSettings>>().Value;
@@ -91,11 +93,11 @@ public class LiquiMolyProductScrapeJob : IJob
             int totalFound = 0;
 
             totalFound += await ScrapeInBatchesAsync(
-                lmSkus, lmScraper, cacheSync, neonSync, batchSize,
+                lmSkus, lmScraper, barcodeReader, cacheSync, neonSync, batchSize,
                 "LiquiMoly", allScrapedNumbers, context.CancellationToken);
 
             totalFound += await ScrapeInBatchesAsync(
-                meguinSkus, meguinScraper, cacheSync, neonSync, batchSize,
+                meguinSkus, meguinScraper, barcodeReader, cacheSync, neonSync, batchSize,
                 "Meguin", allScrapedNumbers, context.CancellationToken);
 
             if (allScrapedNumbers.Count == 0)
@@ -131,6 +133,7 @@ public class LiquiMolyProductScrapeJob : IJob
     private async Task<int> ScrapeInBatchesAsync(
         List<string> skus,
         LiquiMolyProductScraperService scraper,
+        SapProductBarcodeReader barcodeReader,
         LiquiMolyCacheSyncService cacheSync,
         LiquiMolyNeonSyncService neonSync,
         int batchSize,
@@ -170,6 +173,8 @@ public class LiquiMolyProductScrapeJob : IJob
 
             totalFound += products.Count;
             allScrapedNumbers.AddRange(products.Select(p => p.ArticleNumber));
+
+            await barcodeReader.EnrichAsync(products, ct);
 
             await cacheSync.UpsertAsync(products);
             await neonSync.UpsertAsync(products);

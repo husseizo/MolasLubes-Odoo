@@ -394,8 +394,21 @@ namespace MolasLubes.Infrastructure.Persistence.Migrations.Neon
                     b.Property<string>("AllPackagingSizes")
                         .HasColumnType("text");
 
+                    b.Property<string>("AllBarcodes")
+                        .HasColumnType("text");
+
                     b.Property<string>("Approvals")
                         .HasColumnType("text");
+
+                    b.Property<string>("Application")
+                        .HasColumnType("text");
+
+                    b.Property<string>("BarcodeResolutionNote")
+                        .HasColumnType("text");
+
+                    b.Property<string>("BarcodeResolutionStatus")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
 
                     b.Property<string>("Category")
                         .HasMaxLength(100)
@@ -409,6 +422,9 @@ namespace MolasLubes.Infrastructure.Persistence.Migrations.Neon
                         .HasColumnType("character varying(500)");
 
                     b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("HasUnitBarcode")
                         .HasColumnType("boolean");
 
                     b.Property<string>("Name")
@@ -425,6 +441,27 @@ namespace MolasLubes.Infrastructure.Persistence.Migrations.Neon
                     b.Property<string>("OverviewProperties")
                         .HasColumnType("text");
 
+                    b.Property<string>("LiquiMolyRecommendations")
+                        .HasColumnType("text");
+
+                    b.Property<string>("PrimaryBarcode")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<decimal?>("PrimaryBarcodeBaseQtyInGroup")
+                        .HasColumnType("numeric(19,6)");
+
+                    b.Property<int?>("PrimaryBarcodeUomEntry")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("PrimaryBarcodeUomCode")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("PrimaryBarcodeUomName")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
                     b.Property<string>("ProductInfoPdfUrl")
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)");
@@ -437,10 +474,16 @@ namespace MolasLubes.Infrastructure.Persistence.Migrations.Neon
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)");
 
+                    b.Property<string>("SapUomInfo")
+                        .HasColumnType("text");
+
                     b.Property<DateTime>("ScrapedAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Specifications")
+                        .HasColumnType("text");
+
+                    b.Property<string>("SpecificationItems")
                         .HasColumnType("text");
 
                     b.Property<string>("SpecGrade")

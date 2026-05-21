@@ -14,6 +14,35 @@ namespace MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 /// </summary>
 public class SapGoodsIssueWriter
 {
+    /// <summary>
+    /// Checks if a warehouse is bin-activated (BinActivat = 'Y' in OWHS).
+    /// </summary>
+    private bool IsWarehouseBinActivated(string warehouseCode, Company company)
+    {
+        var rs = (SAPbobsCOM.Recordset)company.GetBusinessObject(SAPbobsCOM.BoObjectTypes.BoRecordset);
+        try
+        {
+            rs.DoQuery($"SELECT BinActivat FROM OWHS WHERE WhsCode = '{warehouseCode.Replace("'", "''")}'");
+            return !rs.EoF && rs.Fields.Item("BinActivat").Value?.ToString() == "Y";
+        }
+        finally { Marshal.ReleaseComObject(rs); }
+    }
+
+    /// <summary>
+    /// Gets the System Bin AbsEntry for a warehouse by BinCode pattern (ends with '-SYSTEM-BIN-LOCATION').
+    /// </summary>
+    private int GetSystemBinAbsEntry(string warehouseCode, Company company)
+    {
+        var rs = (SAPbobsCOM.Recordset)company.GetBusinessObject(SAPbobsCOM.BoObjectTypes.BoRecordset);
+        try
+        {
+            rs.DoQuery($"SELECT AbsEntry FROM OBIN WHERE WhsCode = '{warehouseCode.Replace("'", "''")}' AND BinCode LIKE '%SYSTEM-BIN-LOCATION'");
+            if (!rs.EoF && rs.Fields.Item("AbsEntry").Value != null)
+                return Convert.ToInt32(rs.Fields.Item("AbsEntry").Value);
+            throw new Exception($"System Bin (BinCode LIKE '%SYSTEM-BIN-LOCATION') not found for warehouse '{warehouseCode}'");
+        }
+        finally { Marshal.ReleaseComObject(rs); }
+    }
     private readonly IntegrationProfilesOptions _profiles;
     private readonly ILogger<SapGoodsIssueWriter> _logger;
 
@@ -64,6 +93,16 @@ public class SapGoodsIssueWriter
                     gi.Lines.ItemCode      = line.ItemCode;
                     gi.Lines.Quantity      = (double)line.Quantity;
                     gi.Lines.WarehouseCode = warehouseCode;
+
+                    // Bin allocation for bin-activated warehouses: allocate all to System Bin
+                    if (IsWarehouseBinActivated(warehouseCode, company))
+                    {
+                        int systemBinAbs = GetSystemBinAbsEntry(warehouseCode, company);
+                        var binAlloc = gi.Lines.BinAllocations;
+                        binAlloc.BinAbsEntry = systemBinAbs;
+                        binAlloc.Quantity = (double)line.Quantity;
+                        binAlloc.Add();
+                    }
                 }
 
                 int rc = gi.Add();

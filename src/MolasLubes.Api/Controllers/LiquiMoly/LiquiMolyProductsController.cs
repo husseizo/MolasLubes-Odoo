@@ -2,15 +2,12 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MolasLubes.Api.Security;
+using MolasLubes.Infrastructure.Integrations.LiquiMoly;
 using MolasLubes.Infrastructure.Persistence;
 using MolasLubes.Infrastructure.Services.Sync;
 using Quartz;
 
 namespace MolasLubes.Api.Controllers.LiquiMoly;
-
-// =====================================================================
-// READ CONTROLLER  — query Liqui-Moly products from Neon
-// =====================================================================
 
 [ApiController]
 [Route("api/liquimoly/products")]
@@ -23,7 +20,6 @@ public class LiquiMolyProductsController : ControllerBase
         _db = db;
     }
 
-    // GET /api/liquimoly/products
     [HttpGet]
     public async Task<IActionResult> GetAll(
         [FromQuery] string? search,
@@ -47,7 +43,8 @@ public class LiquiMolyProductsController : ControllerBase
             q = q.Where(x =>
                 x.ArticleNumber.Contains(s) ||
                 x.Name.Contains(s) ||
-                (x.SpecGrade != null && x.SpecGrade.Contains(s)));
+                (x.SpecGrade != null && x.SpecGrade.Contains(s)) ||
+                (x.PrimaryBarcode != null && x.PrimaryBarcode.Contains(s)));
         }
 
         var data = await q
@@ -66,13 +63,16 @@ public class LiquiMolyProductsController : ControllerBase
                 x.ScrapedAt,
                 x.ProductUrl,
                 x.ImageUrl,
+                x.PrimaryBarcode,
+                x.PrimaryBarcodeUomCode,
+                x.HasUnitBarcode,
+                x.BarcodeResolutionStatus,
             })
             .ToListAsync();
 
         return Ok(data);
     }
 
-    // GET /api/liquimoly/products/{articleNumber}
     [HttpGet("{articleNumber}")]
     public async Task<IActionResult> GetOne(string articleNumber)
     {
@@ -80,47 +80,52 @@ public class LiquiMolyProductsController : ControllerBase
             .Where(x => x.ArticleNumber == articleNumber)
             .FirstOrDefaultAsync();
 
-        if (p is null) return NotFound();
+        if (p is null)
+            return NotFound();
 
-        // Deserialise JSON-stored fields back to typed objects for the response
         var response = new
         {
-            // ── Identity ──────────────────────────────────────────────
             p.ArticleNumber,
             p.Name,
             p.ProductUrl,
-
-            // ── Classification ────────────────────────────────────────
             p.Category,
             p.SubCategory,
-
-            // ── Description ───────────────────────────────────────────
             p.Description,
-
-            // ── Packaging / sizes ─────────────────────────────────────
             p.PackagingSize,
             AllPackagingSizes = Deserialise<List<string>>(p.AllPackagingSizes),
-
-            // ── Spec grade ────────────────────────────────────────────
+            p.Liter,
             p.SpecGrade,
-
-            // ── Media ─────────────────────────────────────────────────
             p.ImageUrl,
             AllImageUrls = Deserialise<List<string>>(p.AllImageUrls),
-
-            // ── Approvals & Specifications ────────────────────────────
-            Approvals          = Deserialise<List<string>>(p.Approvals),
-            Specifications     = Deserialise<Dictionary<string, string>>(p.Specifications),
+            p.PrimaryBarcode,
+            p.PrimaryBarcodeUomCode,
+            p.PrimaryBarcodeUomName,
+            p.PrimaryBarcodeUomEntry,
+            p.PrimaryBarcodeBaseQtyInGroup,
+            p.HasUnitBarcode,
+            p.BarcodeResolutionStatus,
+            p.BarcodeResolutionNote,
+            BarcodeInfo = new
+            {
+                p.HasUnitBarcode,
+                p.PrimaryBarcode,
+                p.PrimaryBarcodeUomCode,
+                p.PrimaryBarcodeUomName,
+                p.PrimaryBarcodeUomEntry,
+                p.PrimaryBarcodeBaseQtyInGroup,
+                p.BarcodeResolutionStatus,
+                p.BarcodeResolutionNote,
+                AllBarcodes = Deserialise<List<LiquiMolyBarcodeRowDto>>(p.AllBarcodes)
+            },
+            SapUomInfo = Deserialise<LiquiMolySapUomInfoDto>(p.SapUomInfo),
+            Approvals = Deserialise<List<string>>(p.Approvals),
+            Specifications = Deserialise<Dictionary<string, string>>(p.Specifications),
             SpecificationItems = Deserialise<List<string>>(p.SpecificationItems),
             OverviewProperties = Deserialise<List<string>>(p.OverviewProperties),
-            Application        = p.Application,
+            Application = p.Application,
             LiquiMolyRecommendations = Deserialise<List<string>>(p.LiquiMolyRecommendations),
-
-            // ── Downloads ─────────────────────────────────────────────
             p.ProductInfoPdfUrl,
             p.SafetyDataSheetPdfUrl,
-
-            // ── Meta ──────────────────────────────────────────────────
             p.IsActive,
             p.ScrapedAt,
         };
@@ -128,7 +133,6 @@ public class LiquiMolyProductsController : ControllerBase
         return Ok(response);
     }
 
-    // GET /api/liquimoly/products/categories
     [HttpGet("categories")]
     public async Task<IActionResult> GetCategories()
     {
@@ -142,8 +146,6 @@ public class LiquiMolyProductsController : ControllerBase
         return Ok(categories);
     }
 
-    // ── Private helpers ───────────────────────────────────────────────────────
-
     private static T? Deserialise<T>(string? json) where T : class
     {
         if (string.IsNullOrWhiteSpace(json)) return null;
@@ -151,10 +153,6 @@ public class LiquiMolyProductsController : ControllerBase
         catch { return null; }
     }
 }
-
-// =====================================================================
-// ADMIN CONTROLLER  — manual scrape trigger
-// =====================================================================
 
 [ApiController]
 [Route("api/admin/liquimoly")]
@@ -172,7 +170,6 @@ public class AdminLiquiMolyController : ControllerBase
         _neonSyncService = neonSyncService;
     }
 
-    // POST /api/admin/liquimoly/scrape
     [HttpPost("scrape")]
     public async Task<IActionResult> TriggerScrape()
     {
@@ -182,7 +179,6 @@ public class AdminLiquiMolyController : ControllerBase
         return Ok(new { Message = "Liqui-Moly product scrape triggered" });
     }
 
-    // POST /api/admin/liquimoly/sync-neon
     [HttpPost("sync-neon")]
     public async Task<IActionResult> SyncNeon(CancellationToken ct)
     {

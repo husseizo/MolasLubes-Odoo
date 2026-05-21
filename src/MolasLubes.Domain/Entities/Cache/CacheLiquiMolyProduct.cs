@@ -38,6 +38,20 @@ public class CacheLiquiMolyProduct
     public string? AllImageUrls { get; set; }             // JSON-serialised List<string>
 
     // =============================
+    // BARCODES / SAP UOM
+    // =============================
+    public string? PrimaryBarcode { get; set; }
+    public string? PrimaryBarcodeUomCode { get; set; }
+    public string? PrimaryBarcodeUomName { get; set; }
+    public int? PrimaryBarcodeUomEntry { get; set; }
+    public decimal? PrimaryBarcodeBaseQtyInGroup { get; set; }
+    public bool HasUnitBarcode { get; set; }
+    public string? BarcodeResolutionStatus { get; set; }
+    public string? BarcodeResolutionNote { get; set; }
+    public string? AllBarcodes { get; set; }              // JSON-serialised List<LiquiMolyBarcodeRowDto>
+    public string? SapUomInfo { get; set; }               // JSON-serialised LiquiMolySapUomInfoDto
+
+    // =============================
     // APPROVALS & SPECIFICATIONS
     // =============================
     /// <summary>OEM / industry approvals as a JSON array (e.g. ["BMW Longlife-04","MB 229.51"]).</summary>

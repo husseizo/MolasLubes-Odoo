@@ -22,6 +22,7 @@ public class SapInterCompanySalesOrderWriter
 
     // Customer code representing AutoHub in MolasLubes company
     private const string AUTOHUB_CUSTOMER_CODE = "SHP00118";
+    private const double INTERCOMPANY_LINE_DISCOUNT_PERCENT = 100d;
 
     public SapInterCompanySalesOrderWriter(
         IOptions<IntegrationProfilesOptions> profileOptions,
@@ -130,11 +131,12 @@ public class SapInterCompanySalesOrderWriter
                         so.Lines.ItemCode = line.SourceItemCode;
                         so.Lines.Quantity = (double)line.Quantity;
                         so.Lines.Price = (double)price;
+                        so.Lines.DiscountPercent = INTERCOMPANY_LINE_DISCOUNT_PERCENT;
                         so.Lines.Currency = "TZS";
 
                         _logger.LogDebug(
-                            "SapInterCompanySalesOrderWriter: Line {Index} | Item={Item} | Qty={Qty} | Price={Price:F2}",
-                            lineIndex, line.SourceItemCode, line.Quantity, price);
+                            "SapInterCompanySalesOrderWriter: Line {Index} | Item={Item} | Qty={Qty} | Price={Price:F2} | Discount={Discount:F0}%",
+                            lineIndex, line.SourceItemCode, line.Quantity, price, INTERCOMPANY_LINE_DISCOUNT_PERCENT);
 
                         lineIndex++;
                     }

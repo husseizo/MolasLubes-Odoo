@@ -407,8 +407,22 @@ namespace MolasLubes.Infrastructure.Migrations
                     b.Property<string>("AllPackagingSizes")
                         .HasColumnType("nvarchar(max)");
 
+                    b.Property<string>("AllBarcodes")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<string>("Approvals")
                         .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("Application")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("BarcodeResolutionNote")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("BarcodeResolutionStatus")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
 
                     b.Property<string>("Category")
                         .HasMaxLength(100)
@@ -428,6 +442,9 @@ namespace MolasLubes.Infrastructure.Migrations
                     b.Property<decimal?>("Liter")
                         .HasColumnType("decimal(8,3)");
 
+                    b.Property<bool>("HasUnitBarcode")
+                        .HasColumnType("bit");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
@@ -438,6 +455,27 @@ namespace MolasLubes.Infrastructure.Migrations
 
                     b.Property<string>("OverviewProperties")
                         .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("LiquiMolyRecommendations")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("PrimaryBarcode")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<decimal?>("PrimaryBarcodeBaseQtyInGroup")
+                        .HasColumnType("decimal(19,6)");
+
+                    b.Property<int?>("PrimaryBarcodeUomEntry")
+                        .HasColumnType("int");
+
+                    b.Property<string>("PrimaryBarcodeUomCode")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("PrimaryBarcodeUomName")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
 
                     b.Property<string>("ProductInfoPdfUrl")
                         .HasMaxLength(500)
@@ -451,12 +489,18 @@ namespace MolasLubes.Infrastructure.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
 
+                    b.Property<string>("SapUomInfo")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<DateTime>("ScrapedAt")
                         .HasColumnType("datetime2");
 
                     b.Property<string>("SpecGrade")
                         .HasMaxLength(50)
                         .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("SpecificationItems")
+                        .HasColumnType("nvarchar(max)");
 
                     b.Property<string>("Specifications")
                         .HasColumnType("nvarchar(max)");

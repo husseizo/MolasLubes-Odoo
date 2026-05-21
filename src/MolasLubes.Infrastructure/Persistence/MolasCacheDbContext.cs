@@ -391,6 +391,14 @@ public class MolasCacheDbContext : DbContext
             entity.Property(x => x.AllPackagingSizes);          // JSON array of strings
             entity.Property(x => x.ImageUrl).HasMaxLength(500);
             entity.Property(x => x.AllImageUrls);               // JSON array of strings
+            entity.Property(x => x.PrimaryBarcode).HasMaxLength(50);
+            entity.Property(x => x.PrimaryBarcodeUomCode).HasMaxLength(20);
+            entity.Property(x => x.PrimaryBarcodeUomName).HasMaxLength(100);
+            entity.Property(x => x.PrimaryBarcodeBaseQtyInGroup).HasColumnType("decimal(19,6)");
+            entity.Property(x => x.BarcodeResolutionStatus).HasMaxLength(50);
+            entity.Property(x => x.BarcodeResolutionNote).HasMaxLength(500);
+            entity.Property(x => x.AllBarcodes);                // JSON array of barcode rows
+            entity.Property(x => x.SapUomInfo);                 // JSON object snapshot
             entity.Property(x => x.Approvals);                  // JSON array of strings
             entity.Property(x => x.Specifications);             // JSON object (key-value)
             entity.Property(x => x.SpecificationItems);         // JSON array of strings

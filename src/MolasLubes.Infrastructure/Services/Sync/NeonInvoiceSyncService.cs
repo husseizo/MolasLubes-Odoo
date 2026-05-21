@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using MolasLubes.Domain.Entities.Neon;
 using MolasLubes.Infrastructure.Common;
 using MolasLubes.Infrastructure.Persistence;
+using Npgsql;
 
 namespace MolasLubes.Infrastructure.Services.Sync;
 
@@ -22,486 +23,537 @@ public class NeonInvoiceSyncService
         _logger = logger;
     }
 
-    // =====================================================
-    // 🧾 INVOICE DELTA SYNC (CACHE → NEON)
-    // =====================================================
+    // Delta sync from cache into Neon.
     public async Task SyncDeltaAsync()
     {
-        _logger.LogInformation("🧾 Neon INVOICE DELTA sync started");
+        _logger.LogInformation("Neon INVOICE DELTA sync started");
 
-        var strategy = _neonDb.Database.CreateExecutionStrategy();
-        var now = DateTime.UtcNow;
-        var hasSyncedHeaders = false;
-
-        await strategy.ExecuteAsync(async () =>
+        try
         {
-            // -------------------------------------------------
-            // 1️⃣ SAFE LAST SYNC (UTC)
-            // -------------------------------------------------
-            var lastSync = await _neonDb.Invoices
-                .OrderByDescending(x => x.SyncedAt)
-                .Select(x => x.SyncedAt)
-                .FirstOrDefaultAsync();
+            var strategy = _neonDb.Database.CreateExecutionStrategy();
+            var now = DateTime.UtcNow;
+            var hasSyncedHeaders = false;
 
-            if (lastSync == default)
-                lastSync = DateTime.MinValue;
-
-            lastSync = lastSync.AsUtc();
-
-            // -------------------------------------------------
-            // 2️⃣ READ FROM CACHE (HEADERS)
-            // -------------------------------------------------
-            var invoices = await _cacheDb.CacheInvoices
-                .AsNoTracking()
-                .Where(x => x.CachedAt > lastSync)
-                .Select(x => new NeonInvoice
-                {
-                    SapDocEntry = x.SapDocEntry,
-                    DocNum = x.SapDocNum,
-                    CustomerCode = x.CardCode,
-                    CardName = x.CardName,
-
-                    InvoiceDate = x.DocDate.AsUtc(),
-                    DocTotal = x.DocTotal,
-                    VatSum = x.VatSum,
-
-                    // 💳 PAYMENT STATE – refreshed below from NeonPayments
-                    PaidAmount = 0m,
-                    IsPaid = false,
-
-                    // 🔗 ODOO UDFS (UTC SAFE)
-                    OdooInvoiceId = x.OdooInvoiceId,
-                    OdooStatus = x.OdooStatus,
-                    OdooSyncDir = x.OdooSyncDir,
-                    OdooErrorMsg = x.OdooErrorMsg,
-                    OdooLastSync = x.OdooLastSync.AsUtc(),
-
-                    SyncedAt = now
-                })
-                .ToListAsync();
-
-            if (invoices.Count == 0)
+            await strategy.ExecuteAsync(async () =>
             {
-                _logger.LogInformation("ℹ No invoice changes for Neon");
-                return;
-            }
-
-            // -------------------------------------------------
-            // 3️⃣ UPSERT HEADERS
-            // -------------------------------------------------
-            var keys = invoices
-                .Select(i => i.SapDocEntry)
-                .ToList();
-
-            var existingMap = await _neonDb.Invoices
-                .Where(i => keys.Contains(i.SapDocEntry))
-                .ToDictionaryAsync(i => i.SapDocEntry);
-
-            // Carry forward existing PaidAmount/IsPaid so payment data isn't reset
-            var paidLookup = await _neonDb.Payments
-                .Where(p => keys.Contains(p.InvoiceEntry))
-                .GroupBy(p => p.InvoiceEntry)
-                .Select(g => new { InvoiceEntry = g.Key, PaidAmount = g.Sum(p => p.Amount) })
-                .ToDictionaryAsync(x => x.InvoiceEntry, x => x.PaidAmount);
-
-            foreach (var incoming in invoices)
-            {
-                var paidAmount = paidLookup.GetValueOrDefault(incoming.SapDocEntry, 0m);
-                var isPaid = paidAmount >= incoming.DocTotal && incoming.DocTotal > 0;
-
-                if (!existingMap.TryGetValue(incoming.SapDocEntry, out var entity))
+                var lastSync = await TryGetLastInvoiceSyncUtcAsync();
+                if (lastSync is null)
                 {
-                    incoming.PaidAmount = paidAmount;
-                    incoming.IsPaid = isPaid;
-                    _neonDb.Invoices.Add(incoming);
-                }
-                else
-                {
-                    entity.DocNum = incoming.DocNum;
-                    entity.CustomerCode = incoming.CustomerCode;
-                    entity.CardName = incoming.CardName;
-                    entity.InvoiceDate = incoming.InvoiceDate;
-                    entity.DocTotal = incoming.DocTotal;
-                    entity.VatSum = incoming.VatSum;
-
-                    // Only refresh payment state if payments exist; otherwise preserve
-                    entity.PaidAmount = paidLookup.ContainsKey(incoming.SapDocEntry)
-                        ? paidAmount
-                        : entity.PaidAmount;
-                    entity.IsPaid = entity.PaidAmount >= entity.DocTotal && entity.DocTotal > 0;
-
-                    entity.OdooInvoiceId = incoming.OdooInvoiceId;
-                    entity.OdooStatus = incoming.OdooStatus;
-                    entity.OdooSyncDir = incoming.OdooSyncDir;
-                    entity.OdooErrorMsg = incoming.OdooErrorMsg;
-                    entity.OdooLastSync = incoming.OdooLastSync.AsUtc();
-
-                    entity.SyncedAt = now;
-                }
-            }
-
-            // -------------------------------------------------
-            // 4️⃣ SYNC LINES (INV1) - BATCHED TO PREVENT LARGE ARRAY QUERIES
-            // -------------------------------------------------
-            const int batchSize = 500; // Process 500 invoices at a time
-            var batches = keys.Chunk(batchSize).ToList();
-
-            _logger.LogInformation(
-                "📦 Processing invoice lines in {Batches} batches of max {BatchSize}",
-                batches.Count,
-                batchSize);
-
-            await using var tx = await _neonDb.Database.BeginTransactionAsync();
-
-            try
-            {
-                var totalLinesProcessed = 0;
-
-                foreach (var batch in batches)
-                {
-                    var batchKeys = batch.ToList();
-
-                    // Load cache lines for this batch
-                    var cacheLines = await _cacheDb.CacheInvoiceLines
-                        .AsNoTracking()
-                        .Where(l => batchKeys.Contains(l.SapDocEntry))
-                        .Select(l => new NeonInvoiceLine
-                        {
-                            InvoiceEntry = l.SapDocEntry,
-                            ItemCode = l.ItemCode,
-                            Description = l.Description,
-                            Quantity = l.Quantity,
-                            LineTotal = l.LineTotal,
-                            GrossBuyPr = l.GrossBuyPr,
-                            BaseEntry = l.BaseEntry,
-                            BaseLine = l.BaseLine,
-                            OdooInvoiceLineId = l.OdooInvoiceLineId,
-                            OdooStatus = l.OdooStatus,
-                            OdooSyncDir = l.OdooSyncDir,
-                            OdooErrorMsg = l.OdooErrorMsg,
-                            OdooLastSync = l.OdooLastSync.AsUtc()
-                        })
-                        .ToListAsync();
-
-                    // Delete existing lines for this batch
-                    var existingLines = await _neonDb.InvoiceLines
-                        .Where(l => batchKeys.Contains(l.InvoiceEntry))
-                        .ToListAsync();
-
-                    _neonDb.InvoiceLines.RemoveRange(existingLines);
-                    _neonDb.InvoiceLines.AddRange(cacheLines);
-
-                    totalLinesProcessed += cacheLines.Count;
-
-                    _logger.LogDebug(
-                        "✅ Batch processed | Invoices={Count} Lines={Lines}",
-                        batchKeys.Count,
-                        cacheLines.Count);
+                    _logger.LogWarning(
+                        "Skipping Neon INVOICE DELTA sync because the Neon watermark could not be read safely");
+                    return;
                 }
 
-                await _neonDb.SaveChangesAsync();
-                await tx.CommitAsync();
+                var invoices = await _cacheDb.CacheInvoices
+                    .AsNoTracking()
+                    .Where(x => x.CachedAt > lastSync.Value)
+                    .Select(x => new NeonInvoice
+                    {
+                        SapDocEntry = x.SapDocEntry,
+                        DocNum = x.SapDocNum,
+                        CustomerCode = x.CardCode,
+                        CardName = x.CardName,
+                        InvoiceDate = x.DocDate.AsUtc(),
+                        DocTotal = x.DocTotal,
+                        VatSum = x.VatSum,
+                        PaidAmount = 0m,
+                        IsPaid = false,
+                        OdooInvoiceId = x.OdooInvoiceId,
+                        OdooStatus = x.OdooStatus,
+                        OdooSyncDir = x.OdooSyncDir,
+                        OdooErrorMsg = x.OdooErrorMsg,
+                        OdooLastSync = x.OdooLastSync.AsUtc(),
+                        SyncedAt = now
+                    })
+                    .ToListAsync();
 
-                hasSyncedHeaders = true; // Flag that we synced headers
+                if (invoices.Count == 0)
+                {
+                    _logger.LogInformation("No invoice changes for Neon");
+                    return;
+                }
+
+                var keys = invoices
+                    .Select(i => i.SapDocEntry)
+                    .ToList();
+
+                var existingMap = await _neonDb.Invoices
+                    .Where(i => keys.Contains(i.SapDocEntry))
+                    .ToDictionaryAsync(i => i.SapDocEntry);
+
+                var paidLookup = await _neonDb.Payments
+                    .Where(p => keys.Contains(p.InvoiceEntry))
+                    .GroupBy(p => p.InvoiceEntry)
+                    .Select(g => new { InvoiceEntry = g.Key, PaidAmount = g.Sum(p => p.Amount) })
+                    .ToDictionaryAsync(x => x.InvoiceEntry, x => x.PaidAmount);
+
+                foreach (var incoming in invoices)
+                {
+                    var paidAmount = paidLookup.GetValueOrDefault(incoming.SapDocEntry, 0m);
+                    var isPaid = paidAmount >= incoming.DocTotal && incoming.DocTotal > 0;
+
+                    if (!existingMap.TryGetValue(incoming.SapDocEntry, out var entity))
+                    {
+                        incoming.PaidAmount = paidAmount;
+                        incoming.IsPaid = isPaid;
+                        _neonDb.Invoices.Add(incoming);
+                    }
+                    else
+                    {
+                        entity.DocNum = incoming.DocNum;
+                        entity.CustomerCode = incoming.CustomerCode;
+                        entity.CardName = incoming.CardName;
+                        entity.InvoiceDate = incoming.InvoiceDate;
+                        entity.DocTotal = incoming.DocTotal;
+                        entity.VatSum = incoming.VatSum;
+
+                        entity.PaidAmount = paidLookup.ContainsKey(incoming.SapDocEntry)
+                            ? paidAmount
+                            : entity.PaidAmount;
+                        entity.IsPaid = entity.PaidAmount >= entity.DocTotal && entity.DocTotal > 0;
+
+                        entity.OdooInvoiceId = incoming.OdooInvoiceId;
+                        entity.OdooStatus = incoming.OdooStatus;
+                        entity.OdooSyncDir = incoming.OdooSyncDir;
+                        entity.OdooErrorMsg = incoming.OdooErrorMsg;
+                        entity.OdooLastSync = incoming.OdooLastSync.AsUtc();
+                        entity.SyncedAt = now;
+                    }
+                }
+
+                const int batchSize = 500;
+                var batches = keys.Chunk(batchSize).ToList();
 
                 _logger.LogInformation(
-                    "✅ Neon INVOICE DELTA sync completed | Headers={Headers} Lines={Lines} Batches={Batches}",
-                    invoices.Count,
-                    totalLinesProcessed,
-                    batches.Count);
-            }
-            catch (Exception ex)
-            {
-                await tx.RollbackAsync();
-                _logger.LogError(ex,
-                    "❌ Neon INVOICE DELTA sync FAILED - transaction rolled back | Headers={Count}",
-                    invoices.Count);
-                throw;
-            }
-        });
+                    "Processing invoice lines in {Batches} batches of max {BatchSize}",
+                    batches.Count,
+                    batchSize);
 
-        // -------------------------------------------------
-        // 5️⃣ ORPHAN LINE BACKFILL (CONDITIONAL)
-        // Only run orphan backfill if we actually synced headers
-        // to avoid expensive scanning every time
-        // -------------------------------------------------
-        if (hasSyncedHeaders)
+                await using var tx = await _neonDb.Database.BeginTransactionAsync();
+
+                try
+                {
+                    var totalLinesProcessed = 0;
+
+                    foreach (var batch in batches)
+                    {
+                        var batchKeys = batch.ToList();
+
+                        var cacheLines = await _cacheDb.CacheInvoiceLines
+                            .AsNoTracking()
+                            .Where(l => batchKeys.Contains(l.SapDocEntry))
+                            .Select(l => new NeonInvoiceLine
+                            {
+                                InvoiceEntry = l.SapDocEntry,
+                                ItemCode = l.ItemCode,
+                                Description = l.Description,
+                                Quantity = l.Quantity,
+                                LineTotal = l.LineTotal,
+                                GrossBuyPr = l.GrossBuyPr,
+                                BaseEntry = l.BaseEntry,
+                                BaseLine = l.BaseLine,
+                                OdooInvoiceLineId = l.OdooInvoiceLineId,
+                                OdooStatus = l.OdooStatus,
+                                OdooSyncDir = l.OdooSyncDir,
+                                OdooErrorMsg = l.OdooErrorMsg,
+                                OdooLastSync = l.OdooLastSync.AsUtc()
+                            })
+                            .ToListAsync();
+
+                        var existingLines = await _neonDb.InvoiceLines
+                            .Where(l => batchKeys.Contains(l.InvoiceEntry))
+                            .ToListAsync();
+
+                        _neonDb.InvoiceLines.RemoveRange(existingLines);
+                        _neonDb.InvoiceLines.AddRange(cacheLines);
+
+                        totalLinesProcessed += cacheLines.Count;
+
+                        _logger.LogDebug(
+                            "Invoice batch processed | Invoices={Count} Lines={Lines}",
+                            batchKeys.Count,
+                            cacheLines.Count);
+                    }
+
+                    await _neonDb.SaveChangesAsync();
+                    await tx.CommitAsync();
+
+                    hasSyncedHeaders = true;
+
+                    _logger.LogInformation(
+                        "Neon INVOICE DELTA sync completed | Headers={Headers} Lines={Lines} Batches={Batches}",
+                        invoices.Count,
+                        totalLinesProcessed,
+                        batches.Count);
+                }
+                catch (Exception ex)
+                {
+                    await tx.RollbackAsync();
+                    _logger.LogError(ex,
+                        "Neon INVOICE DELTA sync failed - transaction rolled back | Headers={Count}",
+                        invoices.Count);
+                    throw;
+                }
+            });
+
+            if (hasSyncedHeaders)
+            {
+                await SyncOrphanedLinesAsync();
+            }
+        }
+        catch (Exception ex) when (IsTransientNeonStreamReadFailure(ex))
         {
-            await SyncOrphanedLinesAsync();
+            await ResetNeonConnectionAsync(
+                ex,
+                "Neon INVOICE DELTA sync",
+                "Clearing the Neon pool and skipping this run. The next scheduled execution will retry.");
         }
     }
 
-    // =====================================================
-    // 🔥 INVOICE FULL SYNC (CACHE → NEON)
-    // =====================================================
+    // Full sync from cache into Neon.
     public async Task SyncFullAsync()
     {
-        _logger.LogInformation("🔥 Neon INVOICE FULL sync started");
+        _logger.LogInformation("Neon INVOICE FULL sync started");
 
-        var strategy = _neonDb.Database.CreateExecutionStrategy();
-        var now = DateTime.UtcNow;
-
-        await strategy.ExecuteAsync(async () =>
+        try
         {
-            // -------------------------------------------------
-            // 1️⃣ READ ALL FROM CACHE (HEADERS)
-            // -------------------------------------------------
-            var invoices = await _cacheDb.CacheInvoices
-                .AsNoTracking()
-                .Select(x => new NeonInvoice
+            var strategy = _neonDb.Database.CreateExecutionStrategy();
+            var now = DateTime.UtcNow;
+
+            await strategy.ExecuteAsync(async () =>
+            {
+                var invoices = await _cacheDb.CacheInvoices
+                    .AsNoTracking()
+                    .Select(x => new NeonInvoice
+                    {
+                        SapDocEntry = x.SapDocEntry,
+                        DocNum = x.SapDocNum,
+                        CustomerCode = x.CardCode,
+                        CardName = x.CardName,
+                        InvoiceDate = x.DocDate.AsUtc(),
+                        DocTotal = x.DocTotal,
+                        VatSum = x.VatSum,
+                        PaidAmount = 0m,
+                        IsPaid = false,
+                        OdooInvoiceId = x.OdooInvoiceId,
+                        OdooStatus = x.OdooStatus,
+                        OdooSyncDir = x.OdooSyncDir,
+                        OdooErrorMsg = x.OdooErrorMsg,
+                        OdooLastSync = x.OdooLastSync.AsUtc(),
+                        SyncedAt = now
+                    })
+                    .ToListAsync();
+
+                if (invoices.Count == 0)
                 {
-                    SapDocEntry = x.SapDocEntry,
-                    DocNum = x.SapDocNum,
-                    CustomerCode = x.CardCode,
-                    CardName = x.CardName,
+                    _logger.LogInformation("No invoices in cache for full sync");
+                    return;
+                }
 
-                    InvoiceDate = x.DocDate.AsUtc(),
-                    DocTotal = x.DocTotal,
-                    VatSum = x.VatSum,
+                var keys = invoices
+                    .Select(i => i.SapDocEntry)
+                    .ToList();
 
-                    PaidAmount = 0m,
-                    IsPaid = false,
+                var existingMap = await _neonDb.Invoices
+                    .Where(i => keys.Contains(i.SapDocEntry))
+                    .ToDictionaryAsync(i => i.SapDocEntry);
 
-                    OdooInvoiceId = x.OdooInvoiceId,
-                    OdooStatus = x.OdooStatus,
-                    OdooSyncDir = x.OdooSyncDir,
-                    OdooErrorMsg = x.OdooErrorMsg,
-                    OdooLastSync = x.OdooLastSync.AsUtc(),
+                var paidLookup = await _neonDb.Payments
+                    .Where(p => keys.Contains(p.InvoiceEntry))
+                    .GroupBy(p => p.InvoiceEntry)
+                    .Select(g => new { InvoiceEntry = g.Key, PaidAmount = g.Sum(p => p.Amount) })
+                    .ToDictionaryAsync(x => x.InvoiceEntry, x => x.PaidAmount);
 
-                    SyncedAt = now
-                })
+                foreach (var incoming in invoices)
+                {
+                    var paidAmount = paidLookup.GetValueOrDefault(incoming.SapDocEntry, 0m);
+                    var isPaid = paidAmount >= incoming.DocTotal && incoming.DocTotal > 0;
+
+                    if (!existingMap.TryGetValue(incoming.SapDocEntry, out var entity))
+                    {
+                        incoming.PaidAmount = paidAmount;
+                        incoming.IsPaid = isPaid;
+                        _neonDb.Invoices.Add(incoming);
+                    }
+                    else
+                    {
+                        entity.DocNum = incoming.DocNum;
+                        entity.CustomerCode = incoming.CustomerCode;
+                        entity.CardName = incoming.CardName;
+                        entity.InvoiceDate = incoming.InvoiceDate;
+                        entity.DocTotal = incoming.DocTotal;
+                        entity.VatSum = incoming.VatSum;
+                        entity.PaidAmount = paidAmount;
+                        entity.IsPaid = isPaid;
+                        entity.OdooInvoiceId = incoming.OdooInvoiceId;
+                        entity.OdooStatus = incoming.OdooStatus;
+                        entity.OdooSyncDir = incoming.OdooSyncDir;
+                        entity.OdooErrorMsg = incoming.OdooErrorMsg;
+                        entity.OdooLastSync = incoming.OdooLastSync.AsUtc();
+                        entity.SyncedAt = now;
+                    }
+                }
+
+                const int batchSize = 500;
+                var batches = keys.Chunk(batchSize).ToList();
+
+                _logger.LogInformation(
+                    "Processing invoice lines in {Batches} batches of max {BatchSize}",
+                    batches.Count,
+                    batchSize);
+
+                await using var tx = await _neonDb.Database.BeginTransactionAsync();
+
+                try
+                {
+                    var totalLinesProcessed = 0;
+
+                    foreach (var batch in batches)
+                    {
+                        var batchKeys = batch.ToList();
+
+                        var cacheLines = await _cacheDb.CacheInvoiceLines
+                            .AsNoTracking()
+                            .Where(l => batchKeys.Contains(l.SapDocEntry))
+                            .Select(l => new NeonInvoiceLine
+                            {
+                                InvoiceEntry = l.SapDocEntry,
+                                ItemCode = l.ItemCode,
+                                Description = l.Description,
+                                Quantity = l.Quantity,
+                                LineTotal = l.LineTotal,
+                                GrossBuyPr = l.GrossBuyPr,
+                                BaseEntry = l.BaseEntry,
+                                BaseLine = l.BaseLine,
+                                OdooInvoiceLineId = l.OdooInvoiceLineId,
+                                OdooStatus = l.OdooStatus,
+                                OdooSyncDir = l.OdooSyncDir,
+                                OdooErrorMsg = l.OdooErrorMsg,
+                                OdooLastSync = l.OdooLastSync.AsUtc()
+                            })
+                            .ToListAsync();
+
+                        var existingLines = await _neonDb.InvoiceLines
+                            .Where(l => batchKeys.Contains(l.InvoiceEntry))
+                            .ToListAsync();
+
+                        _neonDb.InvoiceLines.RemoveRange(existingLines);
+                        _neonDb.InvoiceLines.AddRange(cacheLines);
+
+                        totalLinesProcessed += cacheLines.Count;
+
+                        _logger.LogDebug(
+                            "Invoice batch processed | Invoices={Count} Lines={Lines}",
+                            batchKeys.Count,
+                            cacheLines.Count);
+                    }
+
+                    await _neonDb.SaveChangesAsync();
+                    await tx.CommitAsync();
+
+                    _logger.LogInformation(
+                        "Neon INVOICE FULL sync completed | Headers={Headers} Lines={Lines} Batches={Batches}",
+                        invoices.Count,
+                        totalLinesProcessed,
+                        batches.Count);
+                }
+                catch (Exception ex)
+                {
+                    await tx.RollbackAsync();
+                    _logger.LogError(ex,
+                        "Neon INVOICE FULL sync failed - transaction rolled back | Headers={Count}",
+                        invoices.Count);
+                    throw;
+                }
+            });
+        }
+        catch (Exception ex) when (IsTransientNeonStreamReadFailure(ex))
+        {
+            await ResetNeonConnectionAsync(
+                ex,
+                "Neon INVOICE FULL sync",
+                "Clearing the Neon pool and skipping this run. A later full sync can retry cleanly.");
+        }
+    }
+
+    // Backfill lines for invoice headers that were synced before line support existed.
+    public async Task SyncOrphanedLinesAsync()
+    {
+        try
+        {
+            var neonLineKeys = await _neonDb.InvoiceLines
+                .AsNoTracking()
+                .Select(l => l.InvoiceEntry)
+                .Distinct()
                 .ToListAsync();
 
-            if (invoices.Count == 0)
+            var neonLineKeySet = neonLineKeys.ToHashSet();
+
+            var cacheLineKeys = await _cacheDb.CacheInvoiceLines
+                .AsNoTracking()
+                .Select(l => l.SapDocEntry)
+                .Distinct()
+                .ToListAsync();
+
+            var orphanedKeys = cacheLineKeys
+                .Where(k => !neonLineKeySet.Contains(k))
+                .ToList();
+
+            if (orphanedKeys.Count == 0)
             {
-                _logger.LogInformation("ℹ No invoices in cache for full sync");
+                _logger.LogDebug("No orphaned invoice lines found");
                 return;
             }
 
-            // -------------------------------------------------
-            // 2️⃣ UPSERT HEADERS
-            // -------------------------------------------------
-            var keys = invoices
+            var safeOrphanKeys = await _neonDb.Invoices
+                .AsNoTracking()
+                .Where(i => orphanedKeys.Contains(i.SapDocEntry))
                 .Select(i => i.SapDocEntry)
-                .ToList();
+                .ToListAsync();
 
-            var existingMap = await _neonDb.Invoices
-                .Where(i => keys.Contains(i.SapDocEntry))
-                .ToDictionaryAsync(i => i.SapDocEntry);
-
-            // Carry forward payment state calculated from NeonPayments
-            var paidLookup = await _neonDb.Payments
-                .Where(p => keys.Contains(p.InvoiceEntry))
-                .GroupBy(p => p.InvoiceEntry)
-                .Select(g => new { InvoiceEntry = g.Key, PaidAmount = g.Sum(p => p.Amount) })
-                .ToDictionaryAsync(x => x.InvoiceEntry, x => x.PaidAmount);
-
-            foreach (var incoming in invoices)
+            if (safeOrphanKeys.Count == 0)
             {
-                var paidAmount = paidLookup.GetValueOrDefault(incoming.SapDocEntry, 0m);
-                var isPaid = paidAmount >= incoming.DocTotal && incoming.DocTotal > 0;
-
-                if (!existingMap.TryGetValue(incoming.SapDocEntry, out var entity))
-                {
-                    incoming.PaidAmount = paidAmount;
-                    incoming.IsPaid = isPaid;
-                    _neonDb.Invoices.Add(incoming);
-                }
-                else
-                {
-                    entity.DocNum = incoming.DocNum;
-                    entity.CustomerCode = incoming.CustomerCode;
-                    entity.CardName = incoming.CardName;
-                    entity.InvoiceDate = incoming.InvoiceDate;
-                    entity.DocTotal = incoming.DocTotal;
-                    entity.VatSum = incoming.VatSum;
-
-                    entity.PaidAmount = paidAmount;
-                    entity.IsPaid = isPaid;
-
-                    entity.OdooInvoiceId = incoming.OdooInvoiceId;
-                    entity.OdooStatus = incoming.OdooStatus;
-                    entity.OdooSyncDir = incoming.OdooSyncDir;
-                    entity.OdooErrorMsg = incoming.OdooErrorMsg;
-                    entity.OdooLastSync = incoming.OdooLastSync.AsUtc();
-
-                    entity.SyncedAt = now;
-                }
+                _logger.LogInformation(
+                    "Orphaned lines found but parent headers are missing in Neon | Count={Count}",
+                    orphanedKeys.Count);
+                return;
             }
 
-            // -------------------------------------------------
-            // 3️⃣ SYNC LINES (INV1) - BATCHED TO PREVENT LARGE ARRAY QUERIES
-            // -------------------------------------------------
-            const int batchSize = 500; // Process 500 invoices at a time
-            var batches = keys.Chunk(batchSize).ToList();
-
             _logger.LogInformation(
-                "📦 Processing invoice lines in {Batches} batches of max {BatchSize}",
-                batches.Count,
-                batchSize);
+                "Backfilling orphaned invoice lines | Invoices={Count}",
+                safeOrphanKeys.Count);
 
-            await using var tx = await _neonDb.Database.BeginTransactionAsync();
+            var strategy = _neonDb.Database.CreateExecutionStrategy();
 
-            try
+            await strategy.ExecuteAsync(async () =>
             {
-                var totalLinesProcessed = 0;
+                await using var tx = await _neonDb.Database.BeginTransactionAsync();
 
-                foreach (var batch in batches)
-                {
-                    var batchKeys = batch.ToList();
+                var orphanLines = await _cacheDb.CacheInvoiceLines
+                    .AsNoTracking()
+                    .Where(l => safeOrphanKeys.Contains(l.SapDocEntry))
+                    .Select(l => new NeonInvoiceLine
+                    {
+                        InvoiceEntry = l.SapDocEntry,
+                        ItemCode = l.ItemCode,
+                        Description = l.Description,
+                        Quantity = l.Quantity,
+                        LineTotal = l.LineTotal,
+                        GrossBuyPr = l.GrossBuyPr,
+                        BaseEntry = l.BaseEntry,
+                        BaseLine = l.BaseLine,
+                        OdooInvoiceLineId = l.OdooInvoiceLineId,
+                        OdooStatus = l.OdooStatus,
+                        OdooSyncDir = l.OdooSyncDir,
+                        OdooErrorMsg = l.OdooErrorMsg,
+                        OdooLastSync = l.OdooLastSync.AsUtc()
+                    })
+                    .ToListAsync();
 
-                    // Load cache lines for this batch
-                    var cacheLines = await _cacheDb.CacheInvoiceLines
-                        .AsNoTracking()
-                        .Where(l => batchKeys.Contains(l.SapDocEntry))
-                        .Select(l => new NeonInvoiceLine
-                        {
-                            InvoiceEntry = l.SapDocEntry,
-                            ItemCode = l.ItemCode,
-                            Description = l.Description,
-                            Quantity = l.Quantity,
-                            LineTotal = l.LineTotal,
-                            GrossBuyPr = l.GrossBuyPr,
-                            BaseEntry = l.BaseEntry,
-                            BaseLine = l.BaseLine,
-                            OdooInvoiceLineId = l.OdooInvoiceLineId,
-                            OdooStatus = l.OdooStatus,
-                            OdooSyncDir = l.OdooSyncDir,
-                            OdooErrorMsg = l.OdooErrorMsg,
-                            OdooLastSync = l.OdooLastSync.AsUtc()
-                        })
-                        .ToListAsync();
-
-                    // Delete existing lines for this batch
-                    var existingLines = await _neonDb.InvoiceLines
-                        .Where(l => batchKeys.Contains(l.InvoiceEntry))
-                        .ToListAsync();
-
-                    _neonDb.InvoiceLines.RemoveRange(existingLines);
-                    _neonDb.InvoiceLines.AddRange(cacheLines);
-
-                    totalLinesProcessed += cacheLines.Count;
-
-                    _logger.LogDebug(
-                        "✅ Batch processed | Invoices={Count} Lines={Lines}",
-                        batchKeys.Count,
-                        cacheLines.Count);
-                }
+                _neonDb.InvoiceLines.AddRange(orphanLines);
 
                 await _neonDb.SaveChangesAsync();
                 await tx.CommitAsync();
 
                 _logger.LogInformation(
-                    "✅ Neon INVOICE FULL sync completed | Headers={Headers} Lines={Lines} Batches={Batches}",
-                    invoices.Count,
-                    totalLinesProcessed,
-                    batches.Count);
-            }
-            catch (Exception ex)
-            {
-                await tx.RollbackAsync();
-                _logger.LogError(ex,
-                    "❌ Neon INVOICE FULL sync FAILED - transaction rolled back | Headers={Count}",
-                    invoices.Count);
-                throw;
-            }
-        });
+                    "Orphaned invoice lines backfilled | Invoices={Invoices} Lines={Lines}",
+                    safeOrphanKeys.Count,
+                    orphanLines.Count);
+            });
+        }
+        catch (Exception ex) when (IsTransientNeonStreamReadFailure(ex))
+        {
+            await ResetNeonConnectionAsync(
+                ex,
+                "Neon INVOICE orphan line backfill",
+                "Clearing the Neon pool and skipping orphan backfill for this run.");
+        }
     }
 
-    // =====================================================
-    // 🩹 ORPHAN LINE BACKFILL
-    // Syncs invoice lines that exist in cache but were
-    // never propagated to Neon because the parent invoice
-    // was originally synced before line support was added.
-    // =====================================================
-    public async Task SyncOrphanedLinesAsync()
+    private async Task<DateTime?> TryGetLastInvoiceSyncUtcAsync()
     {
-        // 1️⃣ Which invoice entries already have lines in Neon?
-        var neonLineKeys = await _neonDb.InvoiceLines
-            .AsNoTracking()
-            .Select(l => l.InvoiceEntry)
-            .Distinct()
-            .ToListAsync();
+        const int maxAttempts = 2;
 
-        var neonLineKeySet = neonLineKeys.ToHashSet();
-
-        // 2️⃣ Which invoice entries have lines in cache?
-        var cacheLineKeys = await _cacheDb.CacheInvoiceLines
-            .AsNoTracking()
-            .Select(l => l.SapDocEntry)
-            .Distinct()
-            .ToListAsync();
-
-        // 3️⃣ Orphaned = in cache lines but NOT yet in Neon lines,
-        //    AND the parent NeonInvoice header already exists
-        var orphanedKeys = cacheLineKeys
-            .Where(k => !neonLineKeySet.Contains(k))
-            .ToList();
-
-        if (orphanedKeys.Count == 0)
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            _logger.LogDebug("✅ No orphaned invoice lines found");
-            return;
-        }
+            try
+            {
+                var lastSync = await _neonDb.Invoices
+                    .AsNoTracking()
+                    .OrderByDescending(x => x.SyncedAt)
+                    .Select(x => x.SyncedAt)
+                    .FirstOrDefaultAsync();
 
-        // Confirm parent headers exist in Neon (safety check)
-        var neonInvoiceKeys = await _neonDb.Invoices
-            .AsNoTracking()
-            .Where(i => orphanedKeys.Contains(i.SapDocEntry))
-            .Select(i => i.SapDocEntry)
-            .ToListAsync();
-
-        var safeOrphanKeys = neonInvoiceKeys; // only backfill where header exists
-
-        if (safeOrphanKeys.Count == 0)
-        {
-            _logger.LogInformation(
-                "⚠ Orphaned lines found but parent headers missing in Neon | Count={Count}",
-                orphanedKeys.Count);
-            return;
-        }
-
-        _logger.LogInformation(
-            "🩹 Backfilling orphaned invoice lines | Invoices={Count}",
-            safeOrphanKeys.Count);
-
-        // 4️⃣ Load & insert the missing lines inside a transaction
-        var strategy = _neonDb.Database.CreateExecutionStrategy();
-
-        await strategy.ExecuteAsync(async () =>
-        {
-            await using var tx = await _neonDb.Database.BeginTransactionAsync();
-
-            var orphanLines = await _cacheDb.CacheInvoiceLines
-                .AsNoTracking()
-                .Where(l => safeOrphanKeys.Contains(l.SapDocEntry))
-                .Select(l => new NeonInvoiceLine
+                if (lastSync == default)
                 {
-                    InvoiceEntry = l.SapDocEntry,
-                    ItemCode = l.ItemCode,
-                    Description = l.Description,
-                    Quantity = l.Quantity,
-                    LineTotal = l.LineTotal,
-                    GrossBuyPr = l.GrossBuyPr,
-                    BaseEntry = l.BaseEntry,
-                    BaseLine = l.BaseLine,
-                    OdooInvoiceLineId = l.OdooInvoiceLineId,
-                    OdooStatus = l.OdooStatus,
-                    OdooSyncDir = l.OdooSyncDir,
-                    OdooErrorMsg = l.OdooErrorMsg,
-                    OdooLastSync = l.OdooLastSync.AsUtc()
-                })
-                .ToListAsync();
+                    lastSync = DateTime.MinValue;
+                }
 
-            _neonDb.InvoiceLines.AddRange(orphanLines);
+                return lastSync.AsUtc();
+            }
+            catch (Exception ex) when (IsTransientNeonStreamReadFailure(ex) && attempt < maxAttempts)
+            {
+                await ResetNeonConnectionAsync(
+                    ex,
+                    "Neon INVOICE watermark read",
+                    "Clearing the Neon pool and retrying the watermark query on a fresh connection.");
+            }
+            catch (Exception ex) when (IsTransientNeonStreamReadFailure(ex))
+            {
+                await ResetNeonConnectionAsync(
+                    ex,
+                    "Neon INVOICE watermark read",
+                    "Clearing the Neon pool and skipping this invoice sync run.");
+                return null;
+            }
+        }
 
-            await _neonDb.SaveChangesAsync();
-            await tx.CommitAsync();
+        return null;
+    }
 
-            _logger.LogInformation(
-                "✅ Orphaned invoice lines backfilled | Invoices={Invoices} Lines={Lines}",
-                safeOrphanKeys.Count,
-                orphanLines.Count);
-        });
+    private async Task ResetNeonConnectionAsync(
+        Exception ex,
+        string operationName,
+        string recoveryAction)
+    {
+        _logger.LogWarning(ex,
+            "{Operation} hit a transient Neon stream read failure. {RecoveryAction}",
+            operationName,
+            recoveryAction);
+
+        try
+        {
+            await _neonDb.Database.CloseConnectionAsync();
+
+            if (_neonDb.Database.GetDbConnection() is NpgsqlConnection npgsqlConnection)
+            {
+                NpgsqlConnection.ClearPool(npgsqlConnection);
+            }
+        }
+        catch (Exception resetEx)
+        {
+            _logger.LogWarning(resetEx,
+                "Failed to reset the Neon PostgreSQL connection after {Operation}",
+                operationName);
+        }
+    }
+
+    private static bool IsTransientNeonStreamReadFailure(Exception ex)
+    {
+        if (ex is EndOfStreamException or IOException)
+        {
+            return true;
+        }
+
+        if (ex is NpgsqlException npgsqlException &&
+            npgsqlException.Message.Contains(
+                "Exception while reading from stream",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return ex.InnerException is not null &&
+               IsTransientNeonStreamReadFailure(ex.InnerException);
     }
 }

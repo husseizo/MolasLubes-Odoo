@@ -13,10 +13,16 @@ public class DraftLineApplyRequest
 
 public class DraftLineOperation
 {
-    /// <summary>"SET_QTY" or "DELETE_LINE"</summary>
+    /// <summary>"SET_QTY", "DELETE_LINE", or "ADD_LINE"</summary>
     public string  Op          { get; set; } = null!;
-    public int     LineId      { get; set; }
-    public decimal? ApprovedQty { get; set; }  // only for SET_QTY
+    public int     LineId      { get; set; }   // required for SET_QTY / DELETE_LINE
+    public decimal? ApprovedQty { get; set; }  // required for SET_QTY / ADD_LINE
+
+    // ADD_LINE payload
+    public string? SourceItemCode { get; set; }
+    public string? TargetItemCode { get; set; }
+    public string? ArticleNumber  { get; set; }
+    public string? ItemName       { get; set; }
 }
 
 public class DraftLineApplyResponse

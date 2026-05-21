@@ -120,6 +120,14 @@ public class LiquiMolyCacheSyncService
         entity.ProductUrl            = dto.ProductUrl;
         entity.IsActive              = true;
         entity.ScrapedAt             = now;
+        entity.PrimaryBarcode        = dto.PrimaryBarcode;
+        entity.PrimaryBarcodeUomCode = dto.PrimaryBarcodeUomCode;
+        entity.PrimaryBarcodeUomName = dto.PrimaryBarcodeUomName;
+        entity.PrimaryBarcodeUomEntry = dto.PrimaryBarcodeUomEntry;
+        entity.PrimaryBarcodeBaseQtyInGroup = dto.PrimaryBarcodeBaseQtyInGroup;
+        entity.HasUnitBarcode        = dto.HasUnitBarcode;
+        entity.BarcodeResolutionStatus = dto.BarcodeResolutionStatus;
+        entity.BarcodeResolutionNote = dto.BarcodeResolutionNote;
 
         // Serialise list/dict fields to JSON strings
         entity.AllPackagingSizes     = dto.AllPackagingSizes.Count > 0
@@ -128,6 +136,14 @@ public class LiquiMolyCacheSyncService
 
         entity.AllImageUrls          = dto.AllImageUrls.Count > 0
             ? JsonSerializer.Serialize(dto.AllImageUrls, _json)
+            : null;
+
+        entity.AllBarcodes           = dto.AllBarcodes.Count > 0
+            ? JsonSerializer.Serialize(dto.AllBarcodes, _json)
+            : null;
+
+        entity.SapUomInfo            = dto.SapUomInfo != null
+            ? JsonSerializer.Serialize(dto.SapUomInfo, _json)
             : null;
 
         entity.Approvals             = dto.Approvals.Count > 0

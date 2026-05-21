@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using MolasLubes.Application.LiquiMolyReplenishment;
 using MolasLubes.Domain.Entities.Cache;
+using MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 using MolasLubes.Infrastructure.Persistence;
 using MolasLubes.Infrastructure.Security;
 
@@ -17,6 +18,7 @@ public class LiquiMolyReplenishmentService
     private readonly LiquiMolyReplenishmentAnalyzer  _analyzer;
     private readonly ReplenishmentRefGenerator       _refGen;
     private readonly LiquiMolyRoleService            _roleService;
+    private readonly SapLiquiMolyItemMapper          _itemMapper;
     private readonly MolasCacheDbContext             _db;
     private readonly ILogger<LiquiMolyReplenishmentService> _logger;
 
@@ -24,12 +26,14 @@ public class LiquiMolyReplenishmentService
         LiquiMolyReplenishmentAnalyzer  analyzer,
         ReplenishmentRefGenerator       refGen,
         LiquiMolyRoleService            roleService,
+        SapLiquiMolyItemMapper          itemMapper,
         MolasCacheDbContext             db,
         ILogger<LiquiMolyReplenishmentService> logger)
     {
         _analyzer    = analyzer;
         _refGen      = refGen;
         _roleService = roleService;
+        _itemMapper  = itemMapper;
         _db          = db;
         _logger      = logger;
     }
@@ -102,7 +106,7 @@ public class LiquiMolyReplenishmentService
     // ── Draft line edits (atomic) ─────────────────────────────────────
 
     /// <summary>
-    /// Atomically applies SET_QTY and DELETE_LINE operations to a DRAFT request.
+    /// Atomically applies SET_QTY, DELETE_LINE, and ADD_LINE operations to a DRAFT request.
     /// Validates optimistic concurrency via ExpectedVersion before writing.
     /// </summary>
     public async Task<DraftLineApplyResponse> ApplyDraftLinesAsync(
@@ -134,41 +138,134 @@ public class LiquiMolyReplenishmentService
 
         // Validate all operations before applying any (transactional semantics)
         var lineIndex = header.Lines.ToDictionary(l => l.Id);
+        var validatedOps = new List<ValidatedDraftOperation>(request.Operations.Count);
 
-        foreach (var op in request.Operations)
+        for (var i = 0; i < request.Operations.Count; i++)
         {
-            if (op.Op != "SET_QTY" && op.Op != "DELETE_LINE")
-                throw new ArgumentException($"Unknown operation type '{op.Op}'.");
+            var op = request.Operations[i];
+            var normalizedOp = op.Op?.Trim().ToUpperInvariant();
 
-            if (!lineIndex.ContainsKey(op.LineId))
-                throw new KeyNotFoundException($"Line {op.LineId} not found in request '{requestRef}'.");
+            if (normalizedOp != "SET_QTY" && normalizedOp != "DELETE_LINE" && normalizedOp != "ADD_LINE")
+                throw new ArgumentException($"operations[{i}].op '{op.Op}' is not supported.");
 
-            if (op.Op == "SET_QTY")
+            if (normalizedOp == "SET_QTY" || normalizedOp == "DELETE_LINE")
             {
-                if (!op.ApprovedQty.HasValue)
-                    throw new ArgumentException($"operations[{op.LineId}].approvedQty is required for SET_QTY.");
+                if (!lineIndex.ContainsKey(op.LineId))
+                    throw new KeyNotFoundException($"Line {op.LineId} not found in request '{requestRef}'.");
 
-                if (op.ApprovedQty.Value < 0)
-                    throw new ArgumentException($"operations[{op.LineId}].approvedQty must be >= 0.");
+                if (normalizedOp == "SET_QTY")
+                {
+                    if (!op.ApprovedQty.HasValue)
+                        throw new ArgumentException($"operations[{i}].approvedQty is required for SET_QTY.");
+
+                    if (op.ApprovedQty.Value < 0)
+                        throw new ArgumentException($"operations[{i}].approvedQty must be >= 0.");
+                }
+
+                validatedOps.Add(new ValidatedDraftOperation(
+                    normalizedOp,
+                    op.LineId,
+                    op.ApprovedQty,
+                    null,
+                    null,
+                    null,
+                    null));
+                continue;
             }
+
+            // ADD_LINE
+            if (!op.ApprovedQty.HasValue)
+                throw new ArgumentException($"operations[{i}].approvedQty is required for ADD_LINE.");
+
+            if (op.ApprovedQty.Value <= 0)
+                throw new ArgumentException($"operations[{i}].approvedQty must be > 0 for ADD_LINE.");
+
+            if (string.IsNullOrWhiteSpace(op.SourceItemCode))
+                throw new ArgumentException($"operations[{i}].sourceItemCode is required for ADD_LINE.");
+
+            var mapped = _itemMapper.MapLine(
+                header.SourceProfile,
+                header.TargetProfile,
+                op.SourceItemCode.Trim());
+
+            if (!mapped.IsOk || string.IsNullOrWhiteSpace(mapped.TargetItemCode))
+                throw new ArgumentException(
+                    $"operations[{i}] sourceItemCode '{op.SourceItemCode}' is invalid: {mapped.FailReason ?? mapped.Outcome}.");
+
+            var resolvedTarget = mapped.TargetItemCode;
+            if (!string.IsNullOrWhiteSpace(op.TargetItemCode) &&
+                !string.Equals(op.TargetItemCode.Trim(), mapped.TargetItemCode, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException(
+                    $"operations[{i}].targetItemCode '{op.TargetItemCode}' does not match mapped target '{mapped.TargetItemCode}' for source '{op.SourceItemCode}'.");
+            }
+
+            var resolvedArticle = !string.IsNullOrWhiteSpace(op.ArticleNumber)
+                ? op.ArticleNumber.Trim()
+                : (mapped.ArticleNumber ?? mapped.SourceItemCode);
+
+            if (string.IsNullOrWhiteSpace(resolvedArticle))
+                throw new ArgumentException($"operations[{i}] could not resolve articleNumber for ADD_LINE.");
+
+            var resolvedName = !string.IsNullOrWhiteSpace(op.ItemName)
+                ? op.ItemName.Trim()
+                : (mapped.SourceItemName ?? mapped.TargetItemName);
+
+            validatedOps.Add(new ValidatedDraftOperation(
+                "ADD_LINE",
+                0,
+                op.ApprovedQty,
+                mapped.SourceItemCode,
+                resolvedTarget,
+                resolvedArticle,
+                resolvedName));
         }
 
         // Apply operations
         var lineIdsToDelete = new HashSet<int>();
+        var addedCount = 0;
+        var nextPriority = header.Lines.Count == 0 ? 1 : header.Lines.Max(l => l.Priority) + 1;
 
-        foreach (var op in request.Operations)
+        foreach (var op in validatedOps)
         {
-            var line = lineIndex[op.LineId];
-
             if (op.Op == "SET_QTY")
             {
+                var line = lineIndex[op.LineId];
                 line.ApprovedQty = op.ApprovedQty!.Value;
+                continue;
             }
-            else if (op.Op == "DELETE_LINE")
+
+            if (op.Op == "DELETE_LINE")
             {
+                var line = lineIndex[op.LineId];
                 lineIdsToDelete.Add(op.LineId);
                 _db.Remove(line);
+                continue;
             }
+
+            var qty = op.ApprovedQty!.Value;
+            header.Lines.Add(new CacheLiquiMolyReplenishmentRequestLine
+            {
+                RequestId = header.Id,
+                SourceItemCode = op.SourceItemCode!,
+                TargetItemCode = op.TargetItemCode!,
+                ArticleNumber = op.ArticleNumber!,
+                ItemName = op.ItemName,
+                CurrentStockTarget = 0m,
+                AvailableSupplierStock = 0m,
+                QtySold30d = 0m,
+                QtySold60d = 0m,
+                QtySold90d = 0m,
+                AvgDailySales30d = 0m,
+                DaysOfStock = 0m,
+                SuggestedQty = qty,
+                TrendCategory = "MANUAL",
+                Priority = nextPriority++,
+                ApprovedQty = qty,
+                ExecutionStatus = "PENDING",
+                ExecutionMessage = null
+            });
+            addedCount++;
         }
 
         header.Version++;
@@ -176,8 +273,8 @@ public class LiquiMolyReplenishmentService
         await _db.SaveChangesAsync(ct);
 
         _logger.LogInformation(
-            "Replenishment: draft lines applied | Ref={Ref} | Ops={OpCount} | Deleted={Del} | Version={V} | Actor={Actor}",
-            requestRef, request.Operations.Count, lineIdsToDelete.Count, header.Version, request.Actor.SapUserCode);
+            "Replenishment: draft lines applied | Ref={Ref} | Ops={OpCount} | Added={Added} | Deleted={Del} | Version={V} | Actor={Actor}",
+            requestRef, request.Operations.Count, addedCount, lineIdsToDelete.Count, header.Version, request.Actor.SapUserCode);
 
         var remainingLines = header.Lines
             .Where(l => !lineIdsToDelete.Contains(l.Id))
@@ -477,6 +574,15 @@ public class LiquiMolyReplenishmentService
     }
 
     // ── Private ──────────────────────────────────────────────────────
+
+    private sealed record ValidatedDraftOperation(
+        string Op,
+        int LineId,
+        decimal? ApprovedQty,
+        string? SourceItemCode,
+        string? TargetItemCode,
+        string? ArticleNumber,
+        string? ItemName);
 
     private async Task<CacheLiquiMolyReplenishmentRequest> LoadOrThrow(
         string requestRef, CancellationToken ct)

@@ -589,60 +589,162 @@ public class LiquiMolyProductScraperService
     /// </summary>
     private static List<string> ExtractAllImages(HtmlDocument doc, string requestedSku)
     {
-        var urls = new List<string>();
+        var ranked = new List<(string Url, int Score)>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        // Primary: SKU-specific gallery container → preview panels → images
-        // Selector equivalent: #gallery-preview-{sku} div.product-gallery-preview-media img
-        var nodes = doc.DocumentNode.SelectNodes(
-                        $"//div[@id='gallery-preview-{requestedSku}']" +
-                        "//div[contains(@class,'product-gallery-preview-media')]//img")
-                 // Fallback A: any preview-media panel on the page
-                 ?? doc.DocumentNode.SelectNodes(
-                        "//div[contains(@class,'product-gallery-preview-media')]//img")
-                 // Fallback B: gallery-image-* divs
-                 ?? doc.DocumentNode.SelectNodes(
-                        "//div[starts-with(@id,'gallery-image-')]//img");
+        // Tier 1: variant-specific gallery. This is the most reliable source for the
+        // exact package size image, e.g. a 205 l barrel instead of a 5 l bottle.
+        AddRankedImageUrls(
+            ranked,
+            seen,
+            doc.DocumentNode.SelectNodes(
+                $"//div[@id='gallery-preview-{requestedSku}']//div[contains(@class,'product-gallery-preview-media')]//img"),
+            requestedSku,
+            baseScore: 300);
 
-        if (nodes == null) return urls;
+        // Tier 2: variant-specific block fallback. Some pages hide the gallery inside
+        // variantswitch-sku-{sku} containers without exposing the expected preview id first.
+        AddRankedImageUrls(
+            ranked,
+            seen,
+            doc.DocumentNode.SelectNodes(
+                $"//div[contains(@class,'variantswitch-sku-{requestedSku}')]//img"),
+            requestedSku,
+            baseScore: 220);
+
+        // Tier 3: page-wide gallery fallback if the exact variant markup is missing.
+        AddRankedImageUrls(
+            ranked,
+            seen,
+            doc.DocumentNode.SelectNodes(
+                "//div[contains(@class,'product-gallery-preview-media')]//img"),
+            requestedSku,
+            baseScore: 120);
+
+        // Tier 4: broader gallery-image-* fallback.
+        AddRankedImageUrls(
+            ranked,
+            seen,
+            doc.DocumentNode.SelectNodes(
+                "//div[starts-with(@id,'gallery-image-')]//img"),
+            requestedSku,
+            baseScore: 80);
+
+        // Final fallback: product image anchors.
+        AddRankedAnchorUrls(
+            ranked,
+            seen,
+            doc.DocumentNode.SelectNodes("//a[contains(@href,'pim.liqui-moly.de/ws/media/article-image/')]"),
+            requestedSku,
+            baseScore: 40);
+
+        return ranked
+            .OrderByDescending(x => x.Score)
+            .ThenBy(x => x.Url, StringComparer.OrdinalIgnoreCase)
+            .Select(x => x.Url)
+            .ToList();
+    }
+
+    private static void AddRankedImageUrls(
+        List<(string Url, int Score)> ranked,
+        HashSet<string> seen,
+        HtmlNodeCollection? nodes,
+        string requestedSku,
+        int baseScore)
+    {
+        if (nodes == null) return;
 
         foreach (var node in nodes)
         {
-            // Prefer the highest-resolution URL from data-srcset (format: "url 1x, url 1.5x, url 2x").
-            // Fall back to src / data-src when srcset is absent.
-            var url = BestUrlFromSrcset(node.GetAttributeValue("data-srcset", null))
-                   ?? node.GetAttributeValue("src", null)
-                   ?? node.GetAttributeValue("data-src", null);
-
-            if (string.IsNullOrWhiteSpace(url)) continue;
-
-            // Accept Magento catalog images or Liqui-Moly PIM article images;
-            // filter out logo.svg, footer SVGs, GHS icons and other non-product assets.
-            if (!url.Contains("/media/catalog/product/")
-             && !url.Contains("pim.liqui-moly.de/ws/media/article-image/"))
+            var url = GetImageUrl(node);
+            if (!TryNormalizeProductImageUrl(url, out var normalized))
                 continue;
 
-            if (!urls.Contains(url))
-                urls.Add(url);
-        }
+            if (!seen.Add(normalized))
+                continue;
 
-        // Fallback: Liqui-Moly wraps product images in <a href="pim.liqui-moly.de/ws/media/article-image/…">
-        // anchor tags (for direct download). If the img-based pass found nothing, harvest those hrefs.
-        if (urls.Count == 0)
+            ranked.Add((normalized, ScoreProductImageUrl(normalized, requestedSku, baseScore)));
+        }
+    }
+
+    private static void AddRankedAnchorUrls(
+        List<(string Url, int Score)> ranked,
+        HashSet<string> seen,
+        HtmlNodeCollection? anchors,
+        string requestedSku,
+        int baseScore)
+    {
+        if (anchors == null) return;
+
+        foreach (var anchor in anchors)
         {
-            var anchorImgs = doc.DocumentNode
-                .SelectNodes("//a[contains(@href,'pim.liqui-moly.de/ws/media/article-image/')]");
-            if (anchorImgs != null)
-            {
-                foreach (var a in anchorImgs)
-                {
-                    var href = a.GetAttributeValue("href", null)?.Trim();
-                    if (!string.IsNullOrWhiteSpace(href) && !urls.Contains(href))
-                        urls.Add(href);
-                }
-            }
+            var href = anchor.GetAttributeValue("href", null);
+            if (!TryNormalizeProductImageUrl(href, out var normalized))
+                continue;
+
+            if (!seen.Add(normalized))
+                continue;
+
+            ranked.Add((normalized, ScoreProductImageUrl(normalized, requestedSku, baseScore)));
+        }
+    }
+
+    private static string? GetImageUrl(HtmlNode node)
+    {
+        // Liqui Moly product pages often use ci-src instead of src/data-src.
+        return BestUrlFromSrcset(node.GetAttributeValue("data-srcset", null))
+            ?? node.GetAttributeValue("ci-src", null)
+            ?? node.GetAttributeValue("src", null)
+            ?? node.GetAttributeValue("data-src", null);
+    }
+
+    private static bool TryNormalizeProductImageUrl(string? rawUrl, out string normalized)
+    {
+        normalized = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(rawUrl))
+            return false;
+
+        var candidate = HtmlEntity.DeEntitize(rawUrl).Trim();
+        if (string.IsNullOrWhiteSpace(candidate))
+            return false;
+
+        if (!candidate.Contains("/media/catalog/product/", StringComparison.OrdinalIgnoreCase)
+         && !candidate.Contains("pim.liqui-moly.de/ws/media/article-image/", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        normalized = candidate;
+        return true;
+    }
+
+    private static int ScoreProductImageUrl(string url, string requestedSku, int baseScore)
+    {
+        var score = baseScore;
+
+        if (url.Contains($"/{requestedSku}_", StringComparison.OrdinalIgnoreCase)
+         || url.Contains($"{requestedSku}_", StringComparison.OrdinalIgnoreCase)
+         || url.Contains($"/{requestedSku}.", StringComparison.OrdinalIgnoreCase)
+         || url.Contains($"{requestedSku}.", StringComparison.OrdinalIgnoreCase))
+        {
+            score += 100;
         }
 
-        return urls;
+        // Product pack shots are usually named with the SKU and product title.
+        // Lifestyle/marketing tiles often contain LM_A_quad and are less useful as the lead image.
+        if (url.Contains("_LM_A_quad_", StringComparison.OrdinalIgnoreCase))
+            score -= 35;
+        else
+            score += 20;
+
+        // Prefer larger preview/modal images over small thumbnails.
+        if (url.Contains("w=800", StringComparison.OrdinalIgnoreCase))
+            score += 20;
+        else if (url.Contains("w=365", StringComparison.OrdinalIgnoreCase))
+            score += 10;
+        else if (url.Contains("w=100", StringComparison.OrdinalIgnoreCase))
+            score -= 20;
+
+        return score;
     }
 
     /// Parses an HTML srcset attribute and returns the URL with the highest

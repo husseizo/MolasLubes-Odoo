@@ -203,6 +203,14 @@ public class LiquiMolyNeonSyncService
         entity.ProductUrl            = dto.ProductUrl;
         entity.IsActive              = true;
         entity.ScrapedAt             = now;
+        entity.PrimaryBarcode        = dto.PrimaryBarcode;
+        entity.PrimaryBarcodeUomCode = dto.PrimaryBarcodeUomCode;
+        entity.PrimaryBarcodeUomName = dto.PrimaryBarcodeUomName;
+        entity.PrimaryBarcodeUomEntry = dto.PrimaryBarcodeUomEntry;
+        entity.PrimaryBarcodeBaseQtyInGroup = dto.PrimaryBarcodeBaseQtyInGroup;
+        entity.HasUnitBarcode        = dto.HasUnitBarcode;
+        entity.BarcodeResolutionStatus = dto.BarcodeResolutionStatus;
+        entity.BarcodeResolutionNote = dto.BarcodeResolutionNote;
 
         // Serialise list/dict fields to JSON strings
         entity.AllPackagingSizes     = dto.AllPackagingSizes.Count > 0
@@ -211,6 +219,14 @@ public class LiquiMolyNeonSyncService
 
         entity.AllImageUrls          = dto.AllImageUrls.Count > 0
             ? JsonSerializer.Serialize(dto.AllImageUrls, _json)
+            : null;
+
+        entity.AllBarcodes           = dto.AllBarcodes.Count > 0
+            ? JsonSerializer.Serialize(dto.AllBarcodes, _json)
+            : null;
+
+        entity.SapUomInfo            = dto.SapUomInfo != null
+            ? JsonSerializer.Serialize(dto.SapUomInfo, _json)
             : null;
 
         entity.Approvals             = dto.Approvals.Count > 0
@@ -264,14 +280,24 @@ public class LiquiMolyNeonSyncService
         entity.ProductUrl            = row.ProductUrl;
         entity.IsActive              = row.IsActive;
         entity.ScrapedAt             = row.ScrapedAt;
+        entity.PrimaryBarcode        = row.PrimaryBarcode;
+        entity.PrimaryBarcodeUomCode = row.PrimaryBarcodeUomCode;
+        entity.PrimaryBarcodeUomName = row.PrimaryBarcodeUomName;
+        entity.PrimaryBarcodeUomEntry = row.PrimaryBarcodeUomEntry;
+        entity.PrimaryBarcodeBaseQtyInGroup = row.PrimaryBarcodeBaseQtyInGroup;
+        entity.HasUnitBarcode        = row.HasUnitBarcode;
+        entity.BarcodeResolutionStatus = row.BarcodeResolutionStatus;
+        entity.BarcodeResolutionNote = row.BarcodeResolutionNote;
         entity.AllPackagingSizes     = row.AllPackagingSizes;
         entity.AllImageUrls          = row.AllImageUrls;
+        entity.AllBarcodes           = row.AllBarcodes;
         entity.Approvals             = row.Approvals;
         entity.Specifications        = row.Specifications;
         entity.SpecificationItems    = row.SpecificationItems;
         entity.OverviewProperties    = row.OverviewProperties;
         entity.Application           = row.Application;
         entity.LiquiMolyRecommendations = row.LiquiMolyRecommendations;
+        entity.SapUomInfo            = row.SapUomInfo;
         entity.ProductInfoPdfUrl     = row.ProductInfoPdfUrl;
         entity.SafetyDataSheetPdfUrl = row.SafetyDataSheetPdfUrl;
     }

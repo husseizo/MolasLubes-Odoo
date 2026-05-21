@@ -33,6 +33,37 @@ public class LiquiMolyProductDto
     /// <summary>All product image URLs scraped from the product detail page gallery.</summary>
     public List<string> AllImageUrls { get; set; } = new();
 
+    // —— Barcode / SAP UoM snapshot ———————————————————————————————————————————————
+    /// <summary>Primary SAP barcode selected for this article.</summary>
+    public string? PrimaryBarcode { get; set; }
+
+    /// <summary>UoM code of the selected primary barcode (e.g. "Unit", "4-PU").</summary>
+    public string? PrimaryBarcodeUomCode { get; set; }
+
+    /// <summary>Human-readable UoM name of the selected primary barcode.</summary>
+    public string? PrimaryBarcodeUomName { get; set; }
+
+    /// <summary>SAP UoM entry for the selected primary barcode.</summary>
+    public int? PrimaryBarcodeUomEntry { get; set; }
+
+    /// <summary>Base quantity inside the SAP UoM group for the selected primary barcode.</summary>
+    public decimal? PrimaryBarcodeBaseQtyInGroup { get; set; }
+
+    /// <summary>True when SAP has a Unit barcode row for this article.</summary>
+    public bool HasUnitBarcode { get; set; }
+
+    /// <summary>How the primary barcode was resolved from SAP barcode rows.</summary>
+    public string? BarcodeResolutionStatus { get; set; }
+
+    /// <summary>Optional explanation for fallback/ambiguous barcode selections.</summary>
+    public string? BarcodeResolutionNote { get; set; }
+
+    /// <summary>All SAP barcode rows captured for this article.</summary>
+    public List<LiquiMolyBarcodeRowDto> AllBarcodes { get; set; } = new();
+
+    /// <summary>Read-only SAP item/UoM snapshot used for diagnostics and API display.</summary>
+    public LiquiMolySapUomInfoDto? SapUomInfo { get; set; }
+
     // ─── Approvals & Specifications ────────────────────────────────────────────
     /// <summary>
     /// Full list of OEM / industry approvals (e.g. "BMW Longlife-04", "MB-Approval 229.51").
@@ -80,4 +111,25 @@ public class LiquiMolyProductDto
     public string? SpecificationsText { get; set; }
 
 
+}
+
+public class LiquiMolyBarcodeRowDto
+{
+    public string Code { get; set; } = string.Empty;
+    public string? UomCode { get; set; }
+    public string? UomName { get; set; }
+    public int? UomEntry { get; set; }
+    public decimal? BaseQtyInGroup { get; set; }
+    public bool IsPrimary { get; set; }
+    public bool IsUnit { get; set; }
+}
+
+public class LiquiMolySapUomInfoDto
+{
+    public int? UomGroupEntry { get; set; }
+    public string? UomGroupName { get; set; }
+    public string? DefaultCountingUomName { get; set; }
+    public string? InventoryUomName { get; set; }
+    public string? SalesUomName { get; set; }
+    public string? PurchaseUomName { get; set; }
 }

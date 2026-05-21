@@ -18,4 +18,12 @@ public class SapSettings
     /// Leave null for single-branch companies (branch is set automatically by SAP).
     /// </summary>
     public int? BranchId { get; set; }
+
+    /// <summary>
+    /// SQL Server login for direct ADO.NET queries (e.g. pricing reads).
+    /// Falls back to UserName/Password if not set, but SAP B1 users are often
+    /// not valid SQL Server logins — set this to 'sa' or a dedicated SQL login.
+    /// </summary>
+    public string? SqlUserName { get; set; }
+    public string? SqlPassword { get; set; }
 }

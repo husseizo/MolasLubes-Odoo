@@ -30,8 +30,10 @@ public class PL05PricingCalculator
                 $"Default SAP profile '{profiles.Default}' not found in IntegrationProfiles.");
 
         var sap = molasLubesProfile.Sap;
+        var sqlUser = sap.SqlUserName ?? sap.UserName;
+        var sqlPass = sap.SqlPassword ?? sap.Password;
         _connectionString =
-            $"Server={sap.Server};Database={sap.CompanyDB};User Id={sap.UserName};Password={sap.Password};TrustServerCertificate=True;Connection Timeout=30;";
+            $"Server={sap.Server};Database={sap.CompanyDB};User Id={sqlUser};Password={sqlPass};TrustServerCertificate=True;Connection Timeout=30;";
     }
 
     /// <summary>
