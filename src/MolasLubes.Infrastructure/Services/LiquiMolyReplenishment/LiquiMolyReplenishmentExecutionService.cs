@@ -7,6 +7,7 @@ using MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 using MolasLubes.Infrastructure.Persistence;
 using MolasLubes.Infrastructure.Security;
 using MolasLubes.Infrastructure.Services.LiquiMolyTransfers;
+using MolasLubes.Infrastructure.Services.Notifications;
 
 namespace MolasLubes.Infrastructure.Services.LiquiMolyReplenishment;
 
@@ -24,6 +25,7 @@ public class LiquiMolyReplenishmentExecutionService
     private readonly LiquiMolyTransferService              _transferService;
     private readonly LiquiMolyRoleService                  _roleService;
     private readonly MolasCacheDbContext                   _db;
+    private readonly LiquiMolyPushNotificationService      _pushNotificationService;
     private readonly SapInterCompanySalesOrderWriter       _soWriter;
     private readonly SapPurchaseOrderWriter                _poWriter;
     private readonly SapGoodsReceiptWriter                 _grWriter;
@@ -33,6 +35,7 @@ public class LiquiMolyReplenishmentExecutionService
         LiquiMolyTransferService              transferService,
         LiquiMolyRoleService                  roleService,
         MolasCacheDbContext                   db,
+        LiquiMolyPushNotificationService      pushNotificationService,
         SapInterCompanySalesOrderWriter       soWriter,
         SapPurchaseOrderWriter                poWriter,
         SapGoodsReceiptWriter                 grWriter,
@@ -41,6 +44,7 @@ public class LiquiMolyReplenishmentExecutionService
         _transferService = transferService;
         _roleService     = roleService;
         _db              = db;
+        _pushNotificationService = pushNotificationService;
         _soWriter        = soWriter;
         _poWriter        = poWriter;
         _grWriter        = grWriter;
@@ -61,6 +65,7 @@ public class LiquiMolyReplenishmentExecutionService
         header.Status          = "EXECUTING";
         header.ExecutedBySapUser = request.Actor.SapUserCode;
         await _db.SaveChangesAsync(ct);
+        await TryNotifyStartedAsync(header, ct);
 
         var transferRequest = BuildTransferRequest(header);
 
@@ -75,6 +80,7 @@ public class LiquiMolyReplenishmentExecutionService
             header.ErrorMessage = $"Transfer execution threw: {ex.Message}";
             header.ExecutedAt   = DateTime.UtcNow;
             await _db.SaveChangesAsync(ct);
+            await TryNotifyResultAsync(header, ct);
 
             _logger.LogError(ex,
                 "Replenishment execution exception | Ref={Ref}", requestRef);
@@ -102,6 +108,7 @@ public class LiquiMolyReplenishmentExecutionService
         UpdateLineStatuses(header.Lines, result);
 
         await _db.SaveChangesAsync(ct);
+        await TryNotifyResultAsync(header, ct);
 
         _logger.LogInformation(
             "Replenishment: execution done | Ref={Ref} | TransferRef={TRef} | Status={Status} | Error={Error}",
@@ -134,6 +141,7 @@ public class LiquiMolyReplenishmentExecutionService
         header.ExecutionMode     = "SALES_PURCHASE";
         header.ExecutedBySapUser = request.Actor.SapUserCode;
         await _db.SaveChangesAsync(ct);
+        await TryNotifyStartedAsync(header, ct);
 
         var soLines = header.Lines
             .Select(l => new InterCompanySalesOrderLine(
@@ -166,6 +174,7 @@ public class LiquiMolyReplenishmentExecutionService
             header.ErrorMessage = $"SO creation failed: {ex.Message}";
             header.ExecutedAt   = DateTime.UtcNow;
             await _db.SaveChangesAsync(ct);
+            await TryNotifyResultAsync(header, ct);
             _logger.LogError(ex, "Replenishment SO failed | Ref={Ref}", requestRef);
             throw;
         }
@@ -203,6 +212,7 @@ public class LiquiMolyReplenishmentExecutionService
             header.ErrorMessage = $"PO creation failed (SO {soRef.DocNum} exists): {ex.Message}";
             header.ExecutedAt   = DateTime.UtcNow;
             await _db.SaveChangesAsync(ct);
+            await TryNotifyResultAsync(header, ct);
             _logger.LogError(ex, "Replenishment PO failed | Ref={Ref} | SODocEntry={Entry}", requestRef, soRef.DocEntry);
             throw;
         }
@@ -225,6 +235,7 @@ public class LiquiMolyReplenishmentExecutionService
                 line.ExecutionStatus = "EXECUTED";
 
             await _db.SaveChangesAsync(ct);
+            await TryNotifyResultAsync(header, ct);
 
             _logger.LogInformation(
                 "Replenishment GR PO created | Ref={Ref} | GRDocEntry={Entry} | GRDocNum={Num} | Status=EXECUTED",
@@ -236,6 +247,7 @@ public class LiquiMolyReplenishmentExecutionService
             header.ErrorMessage = $"GR creation failed (SO {soRef.DocNum}, PO {poRef.DocNum} exist): {ex.Message}";
             header.ExecutedAt   = DateTime.UtcNow;
             await _db.SaveChangesAsync(ct);
+            await TryNotifyResultAsync(header, ct);
             _logger.LogError(ex, "Replenishment GR PO failed | Ref={Ref} | PODocEntry={Entry}", requestRef, poRef.DocEntry);
             throw;
         }
@@ -301,6 +313,7 @@ public class LiquiMolyReplenishmentExecutionService
                 header.Status       = "PARTIAL";
                 header.ErrorMessage = $"GR retry failed (PO {header.PurchaseOrderDocNum} exists): {ex.Message}";
                 await _db.SaveChangesAsync(ct);
+                await TryNotifyResultAsync(header, ct);
                 _logger.LogError(ex,
                     "Replenishment GR retry failed | Ref={Ref} | PODocEntry={Entry}",
                     requestRef, header.PurchaseOrderDocEntry.Value);
@@ -317,6 +330,7 @@ public class LiquiMolyReplenishmentExecutionService
                 line.ExecutionStatus = "EXECUTED";
 
             await _db.SaveChangesAsync(ct);
+            await TryNotifyResultAsync(header, ct);
 
             return new LiquiMolyTransferApplyResult
             {
@@ -367,6 +381,7 @@ public class LiquiMolyReplenishmentExecutionService
         }
 
         await _db.SaveChangesAsync(ct);
+        await TryNotifyResultAsync(header, ct);
 
         return result;
     }
@@ -457,5 +472,36 @@ public class LiquiMolyReplenishmentExecutionService
             Comments        = $"Replenishment {header.RequestRef}",
             Lines           = lines
         };
+    }
+
+    private async Task TryNotifyStartedAsync(CacheLiquiMolyReplenishmentRequest header, CancellationToken ct)
+    {
+        try
+        {
+            await _pushNotificationService.NotifyExecutionStartedAsync(header, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Push notification failed (non-fatal) | Ref={Ref} | Status=EXECUTING",
+                header.RequestRef);
+        }
+    }
+
+    private async Task TryNotifyResultAsync(CacheLiquiMolyReplenishmentRequest header, CancellationToken ct)
+    {
+        try
+        {
+            await _pushNotificationService.NotifyExecutionResultAsync(header, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Push notification failed (non-fatal) | Ref={Ref} | Status={Status}",
+                header.RequestRef,
+                header.Status);
+        }
     }
 }

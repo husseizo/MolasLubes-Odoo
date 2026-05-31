@@ -5,6 +5,7 @@ using MolasLubes.Domain.Entities.Cache;
 using MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 using MolasLubes.Infrastructure.Persistence;
 using MolasLubes.Infrastructure.Security;
+using MolasLubes.Infrastructure.Services.Notifications;
 
 namespace MolasLubes.Infrastructure.Services.LiquiMolyReplenishment;
 
@@ -19,6 +20,8 @@ public class LiquiMolyReplenishmentService
     private readonly ReplenishmentRefGenerator       _refGen;
     private readonly LiquiMolyRoleService            _roleService;
     private readonly SapLiquiMolyItemMapper          _itemMapper;
+    private readonly SapInventoryTransferRequestWriter _transferRequestWriter;
+    private readonly LiquiMolyPushNotificationService _pushNotificationService;
     private readonly MolasCacheDbContext             _db;
     private readonly ILogger<LiquiMolyReplenishmentService> _logger;
 
@@ -27,6 +30,8 @@ public class LiquiMolyReplenishmentService
         ReplenishmentRefGenerator       refGen,
         LiquiMolyRoleService            roleService,
         SapLiquiMolyItemMapper          itemMapper,
+        SapInventoryTransferRequestWriter transferRequestWriter,
+        LiquiMolyPushNotificationService pushNotificationService,
         MolasCacheDbContext             db,
         ILogger<LiquiMolyReplenishmentService> logger)
     {
@@ -34,6 +39,8 @@ public class LiquiMolyReplenishmentService
         _refGen      = refGen;
         _roleService = roleService;
         _itemMapper  = itemMapper;
+        _transferRequestWriter = transferRequestWriter;
+        _pushNotificationService = pushNotificationService;
         _db          = db;
         _logger      = logger;
     }
@@ -45,6 +52,8 @@ public class LiquiMolyReplenishmentService
     {
         if (authorizeActor)
             _roleService.Authorize(request.Actor.SapUserCode, LiquiMolyRole.Planner);
+
+        ValidateWarehousePair(request.SourceWarehouse, request.TargetWarehouse);
 
         var rows = _analyzer.Analyze(
             request.SourceProfile,
@@ -183,39 +192,71 @@ public class LiquiMolyReplenishmentService
             if (string.IsNullOrWhiteSpace(op.SourceItemCode))
                 throw new ArgumentException($"operations[{i}].sourceItemCode is required for ADD_LINE.");
 
-            var mapped = _itemMapper.MapLine(
-                header.SourceProfile,
-                header.TargetProfile,
-                op.SourceItemCode.Trim());
+            var isSameProfileTransfer = IsSameProfileTransfer(header.SourceProfile, header.TargetProfile);
 
-            if (!mapped.IsOk || string.IsNullOrWhiteSpace(mapped.TargetItemCode))
-                throw new ArgumentException(
-                    $"operations[{i}] sourceItemCode '{op.SourceItemCode}' is invalid: {mapped.FailReason ?? mapped.Outcome}.");
+            string resolvedSource;
+            string resolvedTarget;
+            string resolvedArticle;
+            string? resolvedName;
 
-            var resolvedTarget = mapped.TargetItemCode;
-            if (!string.IsNullOrWhiteSpace(op.TargetItemCode) &&
-                !string.Equals(op.TargetItemCode.Trim(), mapped.TargetItemCode, StringComparison.OrdinalIgnoreCase))
+            if (isSameProfileTransfer)
             {
-                throw new ArgumentException(
-                    $"operations[{i}].targetItemCode '{op.TargetItemCode}' does not match mapped target '{mapped.TargetItemCode}' for source '{op.SourceItemCode}'.");
+                resolvedSource = op.SourceItemCode.Trim();
+                resolvedTarget = string.IsNullOrWhiteSpace(op.TargetItemCode)
+                    ? resolvedSource
+                    : op.TargetItemCode.Trim();
+
+                if (!string.Equals(resolvedTarget, resolvedSource, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new ArgumentException(
+                        $"operations[{i}].targetItemCode must match sourceItemCode for same-profile transfers.");
+                }
+
+                resolvedArticle = !string.IsNullOrWhiteSpace(op.ArticleNumber)
+                    ? op.ArticleNumber.Trim()
+                    : resolvedSource;
+
+                resolvedName = string.IsNullOrWhiteSpace(op.ItemName)
+                    ? null
+                    : op.ItemName.Trim();
             }
+            else
+            {
+                var mapped = _itemMapper.MapLine(
+                    header.SourceProfile,
+                    header.TargetProfile,
+                    op.SourceItemCode.Trim());
 
-            var resolvedArticle = !string.IsNullOrWhiteSpace(op.ArticleNumber)
-                ? op.ArticleNumber.Trim()
-                : (mapped.ArticleNumber ?? mapped.SourceItemCode);
+                if (!mapped.IsOk || string.IsNullOrWhiteSpace(mapped.TargetItemCode))
+                    throw new ArgumentException(
+                        $"operations[{i}] sourceItemCode '{op.SourceItemCode}' is invalid: {mapped.FailReason ?? mapped.Outcome}.");
 
-            if (string.IsNullOrWhiteSpace(resolvedArticle))
-                throw new ArgumentException($"operations[{i}] could not resolve articleNumber for ADD_LINE.");
+                resolvedSource = mapped.SourceItemCode;
+                resolvedTarget = mapped.TargetItemCode;
+                if (!string.IsNullOrWhiteSpace(op.TargetItemCode) &&
+                    !string.Equals(op.TargetItemCode.Trim(), mapped.TargetItemCode, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new ArgumentException(
+                        $"operations[{i}].targetItemCode '{op.TargetItemCode}' does not match mapped target '{mapped.TargetItemCode}' for source '{op.SourceItemCode}'.");
+                }
 
-            var resolvedName = !string.IsNullOrWhiteSpace(op.ItemName)
-                ? op.ItemName.Trim()
-                : (mapped.SourceItemName ?? mapped.TargetItemName);
+                resolvedArticle = !string.IsNullOrWhiteSpace(op.ArticleNumber)
+                    ? op.ArticleNumber.Trim()
+                    : (mapped.ArticleNumber ?? mapped.SourceItemCode);
+
+                if (string.IsNullOrWhiteSpace(resolvedArticle))
+                    throw new ArgumentException($"operations[{i}] could not resolve articleNumber for ADD_LINE.");
+
+                resolvedName = !string.IsNullOrWhiteSpace(op.ItemName)
+                    ? op.ItemName.Trim()
+                    : (mapped.SourceItemName ?? mapped.TargetItemName);
+            }
 
             validatedOps.Add(new ValidatedDraftOperation(
                 "ADD_LINE",
                 0,
                 op.ApprovedQty,
-                mapped.SourceItemCode,
+                resolvedSource,
                 resolvedTarget,
                 resolvedArticle,
                 resolvedName));
@@ -326,6 +367,10 @@ public class LiquiMolyReplenishmentService
             header.RequestedBySapUser = request.Actor.SapUserCode;
 
         await _db.SaveChangesAsync(ct);
+        await TryNotifyAsync(
+            () => _pushNotificationService.NotifyPendingApprovalAsync(header, ct),
+            header.RequestRef,
+            "PENDING_APPROVAL");
 
         _logger.LogInformation(
             "Replenishment: submitted | Ref={Ref} | Actor={Actor}",
@@ -363,6 +408,31 @@ public class LiquiMolyReplenishmentService
             }
         }
 
+        if (IsMolasWarehouseTransfer(header.SourceProfile, header.TargetProfile))
+        {
+            var requestLines = header.Lines
+                .Select(l => new InventoryTransferRequestLine(
+                    ItemCode: l.SourceItemCode,
+                    Quantity: l.ApprovedQty ?? l.SuggestedQty))
+                .Where(l => l.Quantity > 0)
+                .ToList();
+
+            if (requestLines.Count == 0)
+                throw new InvalidOperationException("Cannot approve transfer request without at least one positive quantity line.");
+
+            var transferRequestDoc = _transferRequestWriter.CreateTransferRequest(
+                profileKey: header.SourceProfile,
+                sourceWarehouse: header.SourceWarehouse,
+                targetWarehouse: header.TargetWarehouse,
+                requestRef: header.RequestRef,
+                comments: request.Actor.Comment ?? $"Replenishment {header.RequestRef}",
+                lines: requestLines);
+
+            _logger.LogInformation(
+                "Replenishment transfer request created on approval | Ref={Ref} | OWTQDocEntry={DocEntry} | OWTQDocNum={DocNum}",
+                header.RequestRef, transferRequestDoc.DocEntry, transferRequestDoc.DocNum);
+        }
+
         header.Status          = "APPROVED";
         header.ApprovedBySapUser = request.Actor.SapUserCode;
         header.ApprovedAt      = DateTime.UtcNow;
@@ -370,6 +440,10 @@ public class LiquiMolyReplenishmentService
             header.Comments = request.Actor.Comment;
 
         await _db.SaveChangesAsync(ct);
+        await TryNotifyAsync(
+            () => _pushNotificationService.NotifyApprovedAsync(header, ct),
+            header.RequestRef,
+            "APPROVED");
 
         _logger.LogInformation(
             "Replenishment: approved | Ref={Ref} | Actor={Actor}",
@@ -397,6 +471,10 @@ public class LiquiMolyReplenishmentService
         header.RejectionReason = request.Reason;
 
         await _db.SaveChangesAsync(ct);
+        await TryNotifyAsync(
+            () => _pushNotificationService.NotifyRejectedAsync(header, ct),
+            header.RequestRef,
+            "REJECTED");
 
         _logger.LogInformation(
             "Replenishment: rejected | Ref={Ref} | Actor={Actor} | Reason={Reason}",
@@ -668,5 +746,43 @@ public class LiquiMolyReplenishmentService
             .ToDictionaryAsync(x => x.RequestId, x => x.Count, ct);
 
         return (items, lineCounts, hasMore);
+    }
+
+    private static void ValidateWarehousePair(string sourceWarehouse, string targetWarehouse)
+    {
+        if (string.IsNullOrWhiteSpace(sourceWarehouse))
+            throw new ArgumentException("sourceWarehouse is required.");
+
+        if (string.IsNullOrWhiteSpace(targetWarehouse))
+            throw new ArgumentException("targetWarehouse is required.");
+
+        if (string.Equals(sourceWarehouse.Trim(), targetWarehouse.Trim(), StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Source and target warehouse cannot be the same.");
+    }
+
+    private static bool IsSameProfileTransfer(string sourceProfile, string targetProfile) =>
+        string.Equals(sourceProfile?.Trim(), targetProfile?.Trim(), StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsMolasWarehouseTransfer(string sourceProfile, string targetProfile) =>
+        string.Equals(sourceProfile?.Trim(), "MolasLubes", StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(targetProfile?.Trim(), "MolasLubes", StringComparison.OrdinalIgnoreCase);
+
+    private async Task TryNotifyAsync(
+        Func<Task> notifyAction,
+        string requestRef,
+        string status)
+    {
+        try
+        {
+            await notifyAction();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Push notification failed (non-fatal) | Ref={Ref} | Status={Status}",
+                requestRef,
+                status);
+        }
     }
 }

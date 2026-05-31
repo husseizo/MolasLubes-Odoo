@@ -83,22 +83,24 @@ public class SapProductBarcodeReader
 
         var thread = new Thread(() =>
         {
-            Company? company = null;
-            Recordset? rs = null;
-
-            try
+            SapDiApiCriticalSection.Run(() =>
             {
-                company = _connection.CreateNewCompany();
-                if (company.Connect() != 0)
+                Company? company = null;
+                Recordset? rs = null;
+
+                try
                 {
-                    company.GetLastError(out var code, out var message);
-                    throw new Exception($"SAP connect failed {code}: {message}");
-                }
+                    company = _connection.CreateNewCompany();
+                    if (company.Connect() != 0)
+                    {
+                        company.GetLastError(out var code, out var message);
+                        throw new Exception($"SAP connect failed {code}: {message}");
+                    }
 
-                rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
-                var inList = string.Join(", ", articleNumbers.Select(ToSqlLiteral));
+                    rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
+                    var inList = string.Join(", ", articleNumbers.Select(ToSqlLiteral));
 
-                rs.DoQuery($@"
+                    rs.DoQuery($@"
 SELECT
     I.ItemCode AS ArticleNumber,
     I.ItemName,
@@ -131,75 +133,81 @@ ORDER BY
     U.UomCode,
     B.BcdCode");
 
-                var buckets = new Dictionary<string, SapProductBarcodeAccumulator>(StringComparer.OrdinalIgnoreCase);
+                    var buckets = new Dictionary<string, SapProductBarcodeAccumulator>(StringComparer.OrdinalIgnoreCase);
 
-                while (!rs.EoF)
-                {
-                    var article = ReadString(rs, "ArticleNumber");
-                    if (string.IsNullOrWhiteSpace(article))
+                    while (!rs.EoF)
                     {
-                        rs.MoveNext();
-                        continue;
-                    }
-
-                    if (!buckets.TryGetValue(article, out var bucket))
-                    {
-                        bucket = new SapProductBarcodeAccumulator(
-                            article,
-                            ReadString(rs, "ItemName"),
-                            new LiquiMolySapUomInfoDto
-                            {
-                                UomGroupEntry = ReadInt(rs, "UomGroupEntry"),
-                                UomGroupName = ReadString(rs, "UomGroupName"),
-                                DefaultCountingUomName = ReadString(rs, "DefaultCountingUomName"),
-                                InventoryUomName = ReadString(rs, "InventoryUomName"),
-                                SalesUomName = ReadString(rs, "SalesUomName"),
-                                PurchaseUomName = ReadString(rs, "PurchaseUomName"),
-                            });
-                        buckets[article] = bucket;
-                    }
-
-                    var barcode = ReadString(rs, "Barcode");
-                    if (!string.IsNullOrWhiteSpace(barcode))
-                    {
-                        bucket.Barcodes.Add(new LiquiMolyBarcodeRowDto
+                        var article = ReadString(rs, "ArticleNumber");
+                        if (string.IsNullOrWhiteSpace(article))
                         {
-                            Code = barcode,
-                            UomCode = ReadString(rs, "BarcodeUomCode"),
-                            UomName = ReadString(rs, "BarcodeUomName"),
-                            UomEntry = ReadInt(rs, "BarcodeUomEntry"),
-                            BaseQtyInGroup = ReadDecimal(rs, "BarcodeUomBaseQtyInGroup"),
-                        });
+                            rs.MoveNext();
+                            continue;
+                        }
+
+                        if (!buckets.TryGetValue(article, out var bucket))
+                        {
+                            bucket = new SapProductBarcodeAccumulator(
+                                article,
+                                ReadString(rs, "ItemName"),
+                                new LiquiMolySapUomInfoDto
+                                {
+                                    UomGroupEntry = ReadInt(rs, "UomGroupEntry"),
+                                    UomGroupName = ReadString(rs, "UomGroupName"),
+                                    DefaultCountingUomName = ReadString(rs, "DefaultCountingUomName"),
+                                    InventoryUomName = ReadString(rs, "InventoryUomName"),
+                                    SalesUomName = ReadString(rs, "SalesUomName"),
+                                    PurchaseUomName = ReadString(rs, "PurchaseUomName"),
+                                });
+                            buckets[article] = bucket;
+                        }
+
+                        var barcode = ReadString(rs, "Barcode");
+                        if (!string.IsNullOrWhiteSpace(barcode))
+                        {
+                            bucket.Barcodes.Add(new LiquiMolyBarcodeRowDto
+                            {
+                                Code = barcode,
+                                UomCode = ReadString(rs, "BarcodeUomCode"),
+                                UomName = ReadString(rs, "BarcodeUomName"),
+                                UomEntry = ReadInt(rs, "BarcodeUomEntry"),
+                                BaseQtyInGroup = ReadDecimal(rs, "BarcodeUomBaseQtyInGroup"),
+                            });
+                        }
+
+                        rs.MoveNext();
                     }
 
-                    rs.MoveNext();
-                }
-
-                foreach (var article in articleNumbers)
-                {
-                    if (!buckets.TryGetValue(article, out var bucket))
+                    foreach (var article in articleNumbers)
                     {
-                        result[article] = BuildNoRowSnapshot(article);
-                        continue;
+                        if (!buckets.TryGetValue(article, out var bucket))
+                        {
+                            result[article] = BuildNoRowSnapshot(article);
+                            continue;
+                        }
+
+                        result[article] = FinalizeSnapshot(bucket);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    threadException = ex;
+                }
+                finally
+                {
+                    ReleaseComSafely(rs, "Recordset");
+
+                    if (company != null && company.Connected)
+                    {
+                        try { company.Disconnect(); }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "SapProductBarcodeReader: failed to disconnect SAP company cleanly.");
+                        }
                     }
 
-                    result[article] = FinalizeSnapshot(bucket);
+                    ReleaseComSafely(company, "Company");
                 }
-            }
-            catch (Exception ex)
-            {
-                threadException = ex;
-            }
-            finally
-            {
-                if (rs != null) Marshal.ReleaseComObject(rs);
-
-                if (company != null && company.Connected)
-                    company.Disconnect();
-
-                if (company != null)
-                    Marshal.ReleaseComObject(company);
-            }
+            });
         });
 
         thread.SetApartmentState(ApartmentState.STA);
@@ -214,6 +222,21 @@ ORDER BY
             articleNumbers.Count, result.Count);
 
         return result;
+    }
+
+    private void ReleaseComSafely(object? comObject, string objectName)
+    {
+        if (comObject == null)
+            return;
+
+        try
+        {
+            Marshal.FinalReleaseComObject(comObject);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "SapProductBarcodeReader: failed to release COM object {ObjectName}.", objectName);
+        }
     }
 
     private static SapProductBarcodeSnapshot BuildNoRowSnapshot(string articleNumber)

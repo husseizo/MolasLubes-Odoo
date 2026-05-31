@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
 using MolasLubes.Domain.Entities.Neon;
 using MolasLubes.Infrastructure.Common;
@@ -188,7 +189,17 @@ public class NeonInvoiceSyncService
                 }
                 catch (Exception ex)
                 {
-                    await tx.RollbackAsync();
+                    await TryRollbackAsync(tx, "Neon INVOICE DELTA sync");
+
+                    if (IsTransientNeonStreamReadFailure(ex))
+                    {
+                        await ResetNeonConnectionAsync(
+                            ex,
+                            "Neon INVOICE DELTA sync (transaction save)",
+                            "Clearing the Neon pool and skipping this run. The next scheduled execution will retry.");
+                        return;
+                    }
+
                     _logger.LogError(ex,
                         "Neon INVOICE DELTA sync failed - transaction rolled back | Headers={Count}",
                         invoices.Count);
@@ -359,7 +370,17 @@ public class NeonInvoiceSyncService
                 }
                 catch (Exception ex)
                 {
-                    await tx.RollbackAsync();
+                    await TryRollbackAsync(tx, "Neon INVOICE FULL sync");
+
+                    if (IsTransientNeonStreamReadFailure(ex))
+                    {
+                        await ResetNeonConnectionAsync(
+                            ex,
+                            "Neon INVOICE FULL sync (transaction save)",
+                            "Clearing the Neon pool and skipping this run. A later full sync can retry cleanly.");
+                        return;
+                    }
+
                     _logger.LogError(ex,
                         "Neon INVOICE FULL sync failed - transaction rolled back | Headers={Count}",
                         invoices.Count);
@@ -555,5 +576,31 @@ public class NeonInvoiceSyncService
 
         return ex.InnerException is not null &&
                IsTransientNeonStreamReadFailure(ex.InnerException);
+    }
+
+    private async Task TryRollbackAsync(IDbContextTransaction tx, string operationName)
+    {
+        try
+        {
+            await tx.RollbackAsync();
+        }
+        catch (ObjectDisposedException ex)
+        {
+            _logger.LogDebug(ex,
+                "{Operation}: transaction already disposed before rollback (safe to ignore).",
+                operationName);
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogDebug(ex,
+                "{Operation}: rollback skipped due to invalid transaction state (safe to ignore).",
+                operationName);
+        }
+        catch (Exception ex) when (IsTransientNeonStreamReadFailure(ex))
+        {
+            _logger.LogDebug(ex,
+                "{Operation}: transient Neon failure occurred during rollback (safe to ignore).",
+                operationName);
+        }
     }
 }

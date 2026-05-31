@@ -58,6 +58,8 @@ public class SapWarehouseReader
 
         var thread = new Thread(() =>
         {
+            SapDiApiCriticalSection.Run(() =>
+            {
             Company? company = null;
             Recordset? rs    = null;
 
@@ -97,6 +99,7 @@ ORDER BY WhsCode
                     Marshal.ReleaseComObject(company);
                 }
             }
+            });
         });
 
         thread.SetApartmentState(ApartmentState.STA);

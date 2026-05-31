@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
 using MolasLubes.Domain.Entities.Neon;
 using MolasLubes.Infrastructure.Common;
@@ -164,7 +165,7 @@ public class NeonDeliverySyncService
             }
             catch (Exception ex)
             {
-                await tx.RollbackAsync();
+                await TryRollbackAsync(tx, "Neon DELIVERY DELTA sync");
                 _logger.LogError(ex,
                     "❌ Neon DELIVERY DELTA sync FAILED - transaction rolled back | Headers={Count} Lines={Lines}",
                     deliveries.Count,
@@ -394,5 +395,25 @@ public class NeonDeliverySyncService
                 safeOrphanKeys.Count,
                 orphanLines.Count);
         });
+    }
+
+    private async Task TryRollbackAsync(IDbContextTransaction tx, string operationName)
+    {
+        try
+        {
+            await tx.RollbackAsync();
+        }
+        catch (ObjectDisposedException ex)
+        {
+            _logger.LogDebug(ex,
+                "{Operation}: transaction already disposed before rollback (safe to ignore).",
+                operationName);
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogDebug(ex,
+                "{Operation}: rollback skipped due to invalid transaction state (safe to ignore).",
+                operationName);
+        }
     }
 }

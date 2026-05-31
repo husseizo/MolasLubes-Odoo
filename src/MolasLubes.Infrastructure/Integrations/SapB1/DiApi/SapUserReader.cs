@@ -38,6 +38,8 @@ public class SapUserReader
 
         var thread = new Thread(() =>
         {
+            SapDiApiCriticalSection.Run(() =>
+            {
             Company? company = null;
             Recordset? rs    = null;
 
@@ -63,6 +65,7 @@ WHERE USER_CODE = '{safeCode}'
                 if (rs != null) Marshal.ReleaseComObject(rs);
                 DisconnectAndRelease(company);
             }
+            });
         });
 
         thread.SetApartmentState(ApartmentState.STA);

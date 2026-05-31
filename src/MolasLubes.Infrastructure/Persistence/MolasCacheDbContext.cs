@@ -28,6 +28,7 @@ public class MolasCacheDbContext : DbContext
     public DbSet<CacheLiquiMolyTransferLine> CacheLiquiMolyTransferLines => Set<CacheLiquiMolyTransferLine>();
     public DbSet<CacheLiquiMolyReplenishmentRequest> CacheLiquiMolyReplenishmentRequests => Set<CacheLiquiMolyReplenishmentRequest>();
     public DbSet<CacheLiquiMolyReplenishmentRequestLine> CacheLiquiMolyReplenishmentRequestLines => Set<CacheLiquiMolyReplenishmentRequestLine>();
+    public DbSet<CacheNotificationDeviceToken> CacheNotificationDeviceTokens => Set<CacheNotificationDeviceToken>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -562,6 +563,42 @@ public class MolasCacheDbContext : DbContext
 
             entity.HasIndex(x => x.RequestId)
                   .HasDatabaseName("IX_CacheLMReplenishmentRequestLines_RequestId");
+        });
+
+        // =====================================================
+        // MOBILE PUSH TOKENS (APNS)
+        // =====================================================
+        modelBuilder.Entity<CacheNotificationDeviceToken>(entity =>
+        {
+            entity.ToTable("CacheNotificationDeviceTokens");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).ValueGeneratedOnAdd();
+
+            entity.Property(x => x.Platform)
+                  .HasMaxLength(20)
+                  .IsRequired();
+
+            entity.Property(x => x.DeviceToken)
+                  .HasMaxLength(400)
+                  .IsRequired();
+
+            entity.Property(x => x.SapUserCode)
+                  .HasMaxLength(50)
+                  .IsRequired();
+
+            entity.Property(x => x.BundleId)
+                  .HasMaxLength(200)
+                  .IsRequired();
+
+            entity.Property(x => x.LastError)
+                  .HasMaxLength(500);
+
+            entity.HasIndex(x => new { x.Platform, x.DeviceToken, x.BundleId })
+                  .IsUnique()
+                  .HasDatabaseName("IX_CacheNotificationTokens_Device");
+
+            entity.HasIndex(x => new { x.SapUserCode, x.IsActive })
+                  .HasDatabaseName("IX_CacheNotificationTokens_UserActive");
         });
 
         base.OnModelCreating(modelBuilder);

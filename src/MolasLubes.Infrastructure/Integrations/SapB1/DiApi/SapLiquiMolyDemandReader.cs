@@ -40,16 +40,20 @@ public class SapLiquiMolyDemandReader
 
         var thread = new Thread(() =>
         {
-            Company? company = null;
-            Recordset? rs    = null;
-
-            try
+            SapDiApiCriticalSection.Run(() =>
             {
-                company = CreateAndConnect(profile.Sap);
-                rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
+                Company? company = null;
+                Recordset? rs    = null;
 
-                var safeWhs = warehouseCode.Replace("'", "''");
-                rs.DoQuery($@"
+                try
+                {
+                    company = CreateAndConnect(profile.Sap);
+                    rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
+
+                    var safeWhs = warehouseCode.Replace("'", "''");
+                    var hasLiquiMolyUdf = HasLiquiMolyUdf(rs);
+                    rs.DoQuery(hasLiquiMolyUdf
+                        ? $@"
 SELECT
     i.ItemCode,
     i.ItemName,
@@ -72,37 +76,62 @@ WHERE i.U_MdlTEST = 'LIQUI MOLY'
   AND i.frozenFor = 'N'
 GROUP BY i.ItemCode, i.ItemName, w.OnHand, w.IsCommited
 ORDER BY i.ItemCode
+"
+                        : $@"
+SELECT
+    i.ItemCode,
+    i.ItemName,
+    ISNULL(w.OnHand,     0) AS OnHand,
+    ISNULL(w.IsCommited, 0) AS Committed,
+    ISNULL(SUM(CASE WHEN h.DocDate >= DATEADD(day, -30, GETDATE())
+                    THEN l.Quantity ELSE 0 END), 0) AS Qty30d,
+    ISNULL(SUM(CASE WHEN h.DocDate >= DATEADD(day, -60, GETDATE())
+                    THEN l.Quantity ELSE 0 END), 0) AS Qty60d,
+    ISNULL(SUM(CASE WHEN h.DocDate >= DATEADD(day, -90, GETDATE())
+                    THEN l.Quantity ELSE 0 END), 0) AS Qty90d
+FROM OITM i
+LEFT JOIN OITW w ON w.ItemCode = i.ItemCode
+                AND w.WhsCode  = '{safeWhs}'
+LEFT JOIN INV1 l ON l.ItemCode = i.ItemCode
+LEFT JOIN OINV h ON h.DocEntry  = l.DocEntry
+                AND h.DocDate  >= DATEADD(day, -90, GETDATE())
+                AND ISNULL(h.CANCELED, 'N') = 'N'
+WHERE i.frozenFor = 'N'
+  AND TRY_CONVERT(INT, i.ItemCode) IS NOT NULL
+GROUP BY i.ItemCode, i.ItemName, w.OnHand, w.IsCommited
+ORDER BY i.ItemCode
 ");
 
-                while (!rs.EoF)
-                {
-                    var itemCode      = rs.Fields.Item("ItemCode").Value?.ToString() ?? string.Empty;
-                    var itemName      = rs.Fields.Item("ItemName").Value?.ToString();
-                    var onHand        = Convert.ToDecimal((object)rs.Fields.Item("OnHand").Value);
-                    var committed     = Convert.ToDecimal((object)rs.Fields.Item("Committed").Value);
-                    var articleNumber = ExtractArticleNumber(itemName, itemCode);
+                    while (!rs.EoF)
+                    {
+                        var itemCode      = rs.Fields.Item("ItemCode").Value?.ToString() ?? string.Empty;
+                        var itemName      = rs.Fields.Item("ItemName").Value?.ToString();
+                        var onHand        = Convert.ToDecimal((object)rs.Fields.Item("OnHand").Value);
+                        var committed     = Convert.ToDecimal((object)rs.Fields.Item("Committed").Value);
+                        var articleNumber = ExtractArticleNumber(itemName, itemCode);
 
-                    results.Add(new LiquiMolyDemandItem(
-                        ItemCode:      itemCode,
-                        ItemName:      itemName,
-                        ArticleNumber: articleNumber,
-                        Available:     onHand - committed,
-                        QtySold30d:    Convert.ToDecimal((object)rs.Fields.Item("Qty30d").Value),
-                        QtySold60d:    Convert.ToDecimal((object)rs.Fields.Item("Qty60d").Value),
-                        QtySold90d:    Convert.ToDecimal((object)rs.Fields.Item("Qty90d").Value)));
+                        results.Add(new LiquiMolyDemandItem(
+                            ItemCode:      itemCode,
+                            ItemName:      itemName,
+                            ArticleNumber: articleNumber,
+                            Available:     onHand - committed,
+                            QtySold30d:    Convert.ToDecimal((object)rs.Fields.Item("Qty30d").Value),
+                            QtySold60d:    Convert.ToDecimal((object)rs.Fields.Item("Qty60d").Value),
+                            QtySold90d:    Convert.ToDecimal((object)rs.Fields.Item("Qty90d").Value)));
 
-                    rs.MoveNext();
+                        rs.MoveNext();
+                    }
                 }
-            }
-            catch (Exception ex)
-            {
-                threadException = ex;
-            }
-            finally
-            {
-                if (rs != null) Marshal.ReleaseComObject(rs);
-                DisconnectAndRelease(company);
-            }
+                catch (Exception ex)
+                {
+                    threadException = ex;
+                }
+                finally
+                {
+                    if (rs != null) Marshal.ReleaseComObject(rs);
+                    DisconnectAndRelease(company);
+                }
+            });
         });
 
         thread.SetApartmentState(ApartmentState.STA);
@@ -119,6 +148,19 @@ ORDER BY i.ItemCode
     }
 
     // ── Helpers ──────────────────────────────────────────
+
+    private static bool HasLiquiMolyUdf(Recordset rs)
+    {
+        rs.DoQuery(@"
+SELECT
+    CASE
+        WHEN COL_LENGTH('OITM', 'U_MdlTEST') IS NOT NULL
+        THEN 1 ELSE 0
+    END AS HasUdf
+");
+
+        return Convert.ToInt32(rs.Fields.Item("HasUdf").Value) == 1;
+    }
 
     private static string? ExtractArticleNumber(string? itemName, string? itemCode)
     {

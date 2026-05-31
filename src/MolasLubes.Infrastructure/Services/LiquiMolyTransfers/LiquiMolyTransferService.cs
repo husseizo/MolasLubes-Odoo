@@ -360,6 +360,14 @@ public class LiquiMolyTransferService
         if (string.IsNullOrWhiteSpace(request.TargetWarehouse))
             return ("targetWarehouse is required.", new());
 
+        if (string.Equals(
+                request.SourceWarehouse?.Trim(),
+                request.TargetWarehouse?.Trim(),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return ("sourceWarehouse and targetWarehouse cannot be the same.", new());
+        }
+
         if (request.Lines == null || request.Lines.Count == 0)
             return ("At least one line is required.", new());
 
@@ -379,23 +387,38 @@ public class LiquiMolyTransferService
                 continue;
             }
 
-            // Item mapping (validates brand, frozen status, article number, target item)
+            // Item mapping:
+            // - cross-profile: resolve source -> target via mapper
+            // - same-profile transfer: keep same item code on both sides
             LiquiMolyMappedLine mapped;
-            try
+            if (IsSameProfileTransfer(request.SourceProfile, request.TargetProfile))
             {
-                mapped = _mapper.MapLine(
-                    request.SourceProfile, request.TargetProfile, line.SourceItemCode);
-            }
-            catch (Exception ex)
-            {
-                rows.Add(new TransferLinePreflightRow
+                mapped = new LiquiMolyMappedLine
                 {
                     SourceItemCode = line.SourceItemCode,
-                    RequestedQty   = line.Quantity,
-                    Outcome        = "ERROR",
-                    Message        = ex.Message
-                });
-                continue;
+                    TargetItemCode = line.SourceItemCode,
+                    ArticleNumber  = line.SourceItemCode,
+                    Outcome        = "OK"
+                };
+            }
+            else
+            {
+                try
+                {
+                    mapped = _mapper.MapLine(
+                        request.SourceProfile, request.TargetProfile, line.SourceItemCode);
+                }
+                catch (Exception ex)
+                {
+                    rows.Add(new TransferLinePreflightRow
+                    {
+                        SourceItemCode = line.SourceItemCode,
+                        RequestedQty   = line.Quantity,
+                        Outcome        = "ERROR",
+                        Message        = ex.Message
+                    });
+                    continue;
+                }
             }
 
             if (!mapped.IsOk)
@@ -466,4 +489,7 @@ public class LiquiMolyTransferService
 
         return (null, rows);
     }
+
+    private static bool IsSameProfileTransfer(string sourceProfile, string targetProfile) =>
+        string.Equals(sourceProfile?.Trim(), targetProfile?.Trim(), StringComparison.OrdinalIgnoreCase);
 }

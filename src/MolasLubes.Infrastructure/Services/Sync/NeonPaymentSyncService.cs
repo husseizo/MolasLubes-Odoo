@@ -314,6 +314,12 @@ public class NeonPaymentSyncService
                 "{Operation} could not roll back because the Neon transaction was already disposed after the original failure",
                 operationName);
         }
+        catch (InvalidOperationException rollbackEx)
+        {
+            _logger.LogWarning(rollbackEx,
+                "{Operation} rollback skipped due to invalid transaction state after the original failure",
+                operationName);
+        }
         catch (Exception rollbackEx) when (IsTransientNeonStreamReadFailure(rollbackEx))
         {
             _logger.LogWarning(rollbackEx,

@@ -36,6 +36,8 @@ public class SapLiquiMolyStockReader
 
         var thread = new Thread(() =>
         {
+            SapDiApiCriticalSection.Run(() =>
+            {
             Company? company = null;
             Recordset? rs    = null;
 
@@ -70,6 +72,7 @@ WHERE ItemCode = '{safeCode}'
                     Marshal.ReleaseComObject(company);
                 }
             }
+            });
         });
 
         thread.SetApartmentState(ApartmentState.STA);

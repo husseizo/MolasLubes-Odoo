@@ -50,6 +50,8 @@ public class SapLiquiMolySourceMapReader
 
         var thread = new Thread(() =>
         {
+            SapDiApiCriticalSection.Run(() =>
+            {
             Company? company = null;
             Recordset? rs    = null;
 
@@ -109,6 +111,7 @@ ORDER BY i.ItemCode
                 if (rs != null) Marshal.ReleaseComObject(rs);
                 DisconnectAndRelease(company);
             }
+            });
         });
 
         thread.SetApartmentState(ApartmentState.STA);
@@ -138,6 +141,8 @@ ORDER BY i.ItemCode
 
         var thread = new Thread(() =>
         {
+            SapDiApiCriticalSection.Run(() =>
+            {
             Company? company = null;
             Recordset? rs    = null;
 
@@ -186,6 +191,7 @@ ORDER BY ItemCode
                 if (rs != null) Marshal.ReleaseComObject(rs);
                 DisconnectAndRelease(company);
             }
+            });
         });
 
         thread.SetApartmentState(ApartmentState.STA);

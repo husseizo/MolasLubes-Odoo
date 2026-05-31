@@ -56,6 +56,8 @@ public class SapLiquiMolyItemMapper
 
         var thread = new Thread(() =>
         {
+            SapDiApiCriticalSection.Run(() =>
+            {
             Company? srcCompany = null;
             Company? tgtCompany = null;
             Recordset? rs = null;
@@ -149,6 +151,7 @@ ORDER BY ItemCode
                 Disconnect(srcCompany);
                 Disconnect(tgtCompany);
             }
+            });
         });
 
         thread.SetApartmentState(ApartmentState.STA);

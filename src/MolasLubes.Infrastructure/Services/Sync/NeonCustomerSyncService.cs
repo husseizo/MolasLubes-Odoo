@@ -160,12 +160,34 @@ public class NeonCustomerSyncService
             }
             catch (Exception ex)
             {
-                await tx.RollbackAsync();
+                await TryRollbackAsync(tx, "Neon CUSTOMER DELTA sync");
                 _logger.LogError(ex,
                     "❌ Neon CUSTOMER DELTA sync FAILED - transaction rolled back | Count={Count}",
                     customers.Count);
                 throw;
             }
         });
+    }
+
+    private async Task TryRollbackAsync(
+        Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction tx,
+        string operationName)
+    {
+        try
+        {
+            await tx.RollbackAsync();
+        }
+        catch (ObjectDisposedException ex)
+        {
+            _logger.LogDebug(ex,
+                "{Operation}: transaction already disposed before rollback (safe to ignore).",
+                operationName);
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogDebug(ex,
+                "{Operation}: rollback skipped due to invalid transaction state (safe to ignore).",
+                operationName);
+        }
     }
 }

@@ -16,6 +16,7 @@ using MolasLubes.Infrastructure.Services.Sync;
 using MolasLubes.Infrastructure.Services.Backfill;
 using MolasLubes.Infrastructure.Services.LiquiMolyTransfers;
 using MolasLubes.Infrastructure.Services.LiquiMolyReplenishment;
+using MolasLubes.Infrastructure.Services.Notifications;
 using MolasLubes.Infrastructure.Services.Background;
 using MolasLubes.Infrastructure.Security;
 using MolasLubes.Infrastructure.Integrations.LiquiMoly;
@@ -255,6 +256,7 @@ builder.Services.AddScoped<SapProductBarcodeReader>();
 builder.Services.AddScoped<SapLiquiMolyStockReader>();
 builder.Services.AddScoped<SapGoodsIssueWriter>();
 builder.Services.AddScoped<SapGoodsReceiptWriter>();
+builder.Services.AddScoped<SapInventoryTransferRequestWriter>();
 builder.Services.AddScoped<SapSalesOrderCreator>();
 builder.Services.AddScoped<SapSalesOrderCanceler>();
 builder.Services.AddScoped<SapQuotationConverter>();
@@ -302,6 +304,16 @@ builder.Services.Configure<MolasLubes.Infrastructure.Security.LiquiMolyPermissio
     builder.Configuration.GetSection(
         MolasLubes.Infrastructure.Security.LiquiMolyPermissionsOptions.SectionName));
 
+builder.Services.Configure<ApnsOptions>(options =>
+{
+    builder.Configuration.GetSection(ApnsOptions.SectionName).Bind(options);
+    options.KeyId = FirstNonEmpty(options.KeyId, builder.Configuration["APNS_KEY_ID"]);
+    options.TeamId = FirstNonEmpty(options.TeamId, builder.Configuration["APNS_TEAM_ID"]);
+    options.BundleId = FirstNonEmpty(options.BundleId, builder.Configuration["APNS_BUNDLE_ID"]);
+    options.AuthKeyPath = FirstNonEmpty(options.AuthKeyPath, builder.Configuration["APNS_AUTH_KEY_PATH"]);
+    options.Env = FirstNonEmpty(options.Env, builder.Configuration["APNS_ENV"], "production");
+});
+
 builder.Services.AddScoped<MolasLubes.Infrastructure.Integrations.SapB1.DiApi.SapUserReader>();
 builder.Services.AddScoped<MolasLubes.Infrastructure.Security.LiquiMolyRoleService>();
 
@@ -312,6 +324,11 @@ builder.Services.AddScoped<LiquiMolyReplenishmentAnalyzer>();
 builder.Services.AddSingleton<ReplenishmentRefGenerator>();
 builder.Services.AddScoped<LiquiMolyReplenishmentService>();
 builder.Services.AddScoped<LiquiMolyReplenishmentExecutionService>();
+builder.Services.AddScoped<LiquiMolyPushNotificationService>();
+builder.Services.AddHttpClient<ApnsNotificationSender>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(15);
+});
 
 // Inter-company SO → PO → GR writers (Step 3, 4, 5)
 builder.Services.AddScoped<
@@ -704,3 +721,14 @@ app.MapGet("/debug/cache-counts", async (MolasCacheDbContext db) =>
 app.MapGet("/", () => Results.Ok("MolasLubes API is running 🚀"));
 
 app.Run();
+
+static string FirstNonEmpty(params string?[] values)
+{
+    foreach (var value in values)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+            return value.Trim();
+    }
+
+    return string.Empty;
+}
