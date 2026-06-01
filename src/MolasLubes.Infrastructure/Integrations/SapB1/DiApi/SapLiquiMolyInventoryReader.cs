@@ -217,7 +217,11 @@ FROM
             ELSE 'OPEN'
         END AS DocumentStatus,
         h.CardCode AS PartnerCode,
-        h.CardName AS PartnerName
+        h.CardName AS PartnerName,
+        h.CardCode AS CustomerCode,
+        h.CardName AS CustomerName,
+        CAST(NULL AS NVARCHAR(50)) AS VendorCode,
+        CAST(NULL AS NVARCHAR(100)) AS VendorName
     FROM ORDR h
     INNER JOIN RDR1 l ON h.DocEntry = l.DocEntry
     LEFT JOIN OITM i ON i.ItemCode = l.ItemCode
@@ -244,7 +248,11 @@ FROM
             ELSE 'OPEN'
         END AS DocumentStatus,
         h.CardCode AS PartnerCode,
-        h.CardName AS PartnerName
+        h.CardName AS PartnerName,
+        h.CardCode AS CustomerCode,
+        h.CardName AS CustomerName,
+        CAST(NULL AS NVARCHAR(50)) AS VendorCode,
+        CAST(NULL AS NVARCHAR(100)) AS VendorName
     FROM ODLN h
     INNER JOIN DLN1 l ON h.DocEntry = l.DocEntry
     LEFT JOIN OITM i ON i.ItemCode = l.ItemCode
@@ -271,7 +279,11 @@ FROM
             ELSE 'OPEN'
         END AS DocumentStatus,
         CAST(NULL AS NVARCHAR(50)) AS PartnerCode,
-        CAST(NULL AS NVARCHAR(100)) AS PartnerName
+        CAST(NULL AS NVARCHAR(100)) AS PartnerName,
+        CAST(NULL AS NVARCHAR(50)) AS CustomerCode,
+        CAST(NULL AS NVARCHAR(100)) AS CustomerName,
+        CAST(NULL AS NVARCHAR(50)) AS VendorCode,
+        CAST(NULL AS NVARCHAR(100)) AS VendorName
     FROM OWTQ h
     INNER JOIN WTQ1 l ON h.DocEntry = l.DocEntry
     LEFT JOIN OITM i ON i.ItemCode = l.ItemCode
@@ -298,7 +310,11 @@ FROM
             ELSE 'OPEN'
         END AS DocumentStatus,
         CAST(NULL AS NVARCHAR(50)) AS PartnerCode,
-        CAST(NULL AS NVARCHAR(100)) AS PartnerName
+        CAST(NULL AS NVARCHAR(100)) AS PartnerName,
+        CAST(NULL AS NVARCHAR(50)) AS CustomerCode,
+        CAST(NULL AS NVARCHAR(100)) AS CustomerName,
+        CAST(NULL AS NVARCHAR(50)) AS VendorCode,
+        CAST(NULL AS NVARCHAR(100)) AS VendorName
     FROM OWTR h
     INNER JOIN WTR1 l ON h.DocEntry = l.DocEntry
     LEFT JOIN OITM i ON i.ItemCode = l.ItemCode
@@ -324,7 +340,11 @@ FROM
             ELSE 'POSTED'
         END AS DocumentStatus,
         CAST(NULL AS NVARCHAR(50)) AS PartnerCode,
-        CAST(NULL AS NVARCHAR(100)) AS PartnerName
+        CAST(NULL AS NVARCHAR(100)) AS PartnerName,
+        CAST(NULL AS NVARCHAR(50)) AS CustomerCode,
+        CAST(NULL AS NVARCHAR(100)) AS CustomerName,
+        CAST(NULL AS NVARCHAR(50)) AS VendorCode,
+        CAST(NULL AS NVARCHAR(100)) AS VendorName
     FROM OIGN h
     INNER JOIN IGN1 l ON h.DocEntry = l.DocEntry
     LEFT JOIN OITM i ON i.ItemCode = l.ItemCode
@@ -350,7 +370,11 @@ FROM
             ELSE 'POSTED'
         END AS DocumentStatus,
         CAST(NULL AS NVARCHAR(50)) AS PartnerCode,
-        CAST(NULL AS NVARCHAR(100)) AS PartnerName
+        CAST(NULL AS NVARCHAR(100)) AS PartnerName,
+        CAST(NULL AS NVARCHAR(50)) AS CustomerCode,
+        CAST(NULL AS NVARCHAR(100)) AS CustomerName,
+        CAST(NULL AS NVARCHAR(50)) AS VendorCode,
+        CAST(NULL AS NVARCHAR(100)) AS VendorName
     FROM OIGE h
     INNER JOIN IGE1 l ON h.DocEntry = l.DocEntry
     LEFT JOIN OITM i ON i.ItemCode = l.ItemCode
@@ -380,7 +404,11 @@ ORDER BY M.MovementDate DESC, M.DocEntry DESC, M.LineNum DESC";
                             Direction = ReadString(rs, "Direction") ?? string.Empty,
                             DocumentStatus = ReadString(rs, "DocumentStatus"),
                             PartnerCode = ReadString(rs, "PartnerCode"),
-                            PartnerName = ReadString(rs, "PartnerName")
+                            PartnerName = ReadString(rs, "PartnerName"),
+                            CustomerCode = ReadString(rs, "CustomerCode"),
+                            CustomerName = ReadString(rs, "CustomerName"),
+                            VendorCode = ReadString(rs, "VendorCode"),
+                            VendorName = ReadString(rs, "VendorName")
                         });
                         rs.MoveNext();
                     }
@@ -815,9 +843,15 @@ public class InventoryMovementRow
     public string? MovementWarehouse { get; init; }
     public string? SourceWarehouse { get; init; }
     public string? TargetWarehouse { get; init; }
+    public string? FromWarehouse => SourceWarehouse;
+    public string? ToWarehouse => TargetWarehouse;
     public decimal Quantity { get; init; }
     public string Direction { get; init; } = string.Empty; // IN, OUT
     public string? DocumentStatus { get; init; }
     public string? PartnerCode { get; init; }
     public string? PartnerName { get; init; }
+    public string? CustomerCode { get; init; }
+    public string? CustomerName { get; init; }
+    public string? VendorCode { get; init; }
+    public string? VendorName { get; init; }
 }
