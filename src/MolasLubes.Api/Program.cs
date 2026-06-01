@@ -28,6 +28,7 @@ using Quartz;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
+using MolasLubes.Api.Utilities;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -341,6 +342,8 @@ builder.Services.AddScoped<
     MolasLubes.Infrastructure.Integrations.SapB1.DiApi.SapWarehouseReader>();
 builder.Services.AddScoped<
     MolasLubes.Infrastructure.Integrations.SapB1.DiApi.SapLiquiMolyDocumentReader>();
+builder.Services.AddScoped<
+    MolasLubes.Infrastructure.Integrations.SapB1.DiApi.SapLiquiMolyInventoryReader>();
 
 // =====================================================
 // AUTOHUB SERVICES — PROFILE B
@@ -407,6 +410,7 @@ builder.Services.AddHttpClient<LiquiMolyProductScraperService>((sp, client) =>
 
 builder.Services.AddScoped<MolasLubes.Infrastructure.Services.Sync.LiquiMolyCacheSyncService>();
 builder.Services.AddScoped<MolasLubes.Infrastructure.Services.Sync.LiquiMolyNeonSyncService>();
+builder.Services.AddSingleton<ManualProductScrapeQueueService>();
 
 // =====================================================
 // MEGUIN SCRAPER
