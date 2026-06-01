@@ -725,7 +725,7 @@ ORDER BY w.ItemCode, w.WhsCode");
         if (value is DateTime dateTime)
             return dateTime;
 
-        return DateTime.TryParse(value.ToString(), out var parsed)
+        return DateTime.TryParse(value.ToString(), out DateTime parsed)
             ? parsed
             : null;
     }
