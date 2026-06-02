@@ -89,7 +89,12 @@ public class AdminLiquiMolyInventoryController : ControllerBase
         string itemCode,
         [FromQuery] string actorSapUserCode = "",
         [FromQuery] string profile = DefaultProfile,
+        [FromQuery] DateOnly? dateFrom = null,
+        [FromQuery] DateOnly? dateTo = null,
+        [FromQuery] string? warehouse = null,
         [FromQuery] string? warehouseCode = null,
+        [FromQuery] string? movementTypes = null,
+        [FromQuery] int skip = 0,
         [FromQuery] int take = 200)
     {
         var auth = AuthorizeViewer(actorSapUserCode);
@@ -98,16 +103,84 @@ public class AdminLiquiMolyInventoryController : ControllerBase
         if (string.IsNullOrWhiteSpace(itemCode))
             return BadRequest(new { message = "itemCode is required." });
 
+        skip = Math.Max(0, skip);
         take = Math.Clamp(take, 1, 1000);
 
         try
         {
-            var data = _reader.GetMovements(profile, itemCode.Trim(), warehouseCode, take);
+            var resolvedWarehouse = !string.IsNullOrWhiteSpace(warehouse)
+                ? warehouse
+                : warehouseCode;
+
+            var data = _reader.GetMovements(
+                profile,
+                itemCode.Trim(),
+                dateFrom,
+                dateTo,
+                resolvedWarehouse,
+                movementTypes,
+                skip,
+                take);
             return Ok(data);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { message = ex.Message });
         }
         catch (Exception ex)
         {
             return StatusCode(500, new { message = "Failed to load inventory stock movements.", detail = ex.Message });
+        }
+    }
+
+    [HttpGet("deliveries")]
+    public IActionResult GetDeliveries(
+        [FromQuery] string actorSapUserCode = "",
+        [FromQuery] string profile = DefaultProfile,
+        [FromQuery] DateOnly? dateFrom = null,
+        [FromQuery] DateOnly? dateTo = null,
+        [FromQuery] string? warehouse = null,
+        [FromQuery] string? search = null,
+        [FromQuery] int skip = 0,
+        [FromQuery] int take = 50)
+    {
+        var auth = AuthorizeViewer(actorSapUserCode);
+        if (auth != null) return auth;
+
+        skip = Math.Max(0, skip);
+        take = Math.Clamp(take, 1, 1000);
+
+        try
+        {
+            var data = _reader.GetDeliveryAggregates(
+                profile,
+                dateFrom,
+                dateTo,
+                warehouse,
+                search,
+                skip,
+                take);
+
+            return Ok(new
+            {
+                data.AsOfUtc,
+                data.Version,
+                data.DateFrom,
+                data.DateTo,
+                data.Total,
+                skip,
+                take,
+                hasMore = skip + data.Rows.Count < data.Total,
+                rows = data.Rows
+            });
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to load delivery aggregates.", detail = ex.Message });
         }
     }
 

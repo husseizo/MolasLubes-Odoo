@@ -17,15 +17,23 @@ namespace MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 /// </summary>
 public class SapLiquiMolyInventoryReader
 {
+    private const decimal DefaultLowStockThreshold = 5m;
+    private const decimal DefaultOutOfStockThreshold = 0m;
+
     private readonly IntegrationProfilesOptions _profiles;
     private readonly MolasCacheDbContext _cacheDb;
     private readonly ILogger<SapLiquiMolyInventoryReader> _logger;
 
     private readonly SemaphoreSlim _refreshLock = new(1, 1);
     private readonly TimeSpan _refreshInterval = TimeSpan.FromSeconds(10);
+    private readonly TimeSpan _deliveryAggregateRefreshInterval = TimeSpan.FromSeconds(45);
     private long _versionCounter = 0;
 
     private readonly ConcurrentDictionary<string, SnapshotState> _states =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, DeliveryAggregateSnapshotState> _deliveryAggregateStates =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _deliveryAggregateLocks =
         new(StringComparer.OrdinalIgnoreCase);
 
     public SapLiquiMolyInventoryReader(
@@ -164,16 +172,62 @@ public class SapLiquiMolyInventoryReader
         };
     }
 
+    public InventoryDeliveryAggregateResponse GetDeliveryAggregates(
+        string profileKey,
+        DateOnly? dateFrom,
+        DateOnly? dateTo,
+        string? warehouseCode,
+        string? search,
+        int skip,
+        int take)
+    {
+        var range = ResolveRequiredDateRange(dateFrom, dateTo, defaultToBusinessToday: true);
+        var state = EnsureDeliveryAggregateSnapshot(profileKey, range.From, range.To);
+
+        IEnumerable<InventoryDeliveryAggregateRow> query = state.Rows;
+        query = ApplyDeliveryFilters(query, search, warehouseCode);
+
+        var total = query.Count();
+        var rows = query
+            .OrderByDescending(x => x.LastDeliveredAt ?? DateTime.MinValue)
+            .ThenByDescending(x => x.LastDeliveryDocEntry)
+            .ThenBy(x => x.ItemCode, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(x => x.Warehouse, StringComparer.OrdinalIgnoreCase)
+            .Skip(skip)
+            .Take(take)
+            .ToList();
+
+        return new InventoryDeliveryAggregateResponse
+        {
+            DateFrom = range.From,
+            DateTo = range.To,
+            AsOfUtc = state.AsOfUtc,
+            Version = state.Version,
+            Total = total,
+            Rows = rows
+        };
+    }
+
     public InventoryMovementResponse GetMovements(
         string profileKey,
         string itemCode,
+        DateOnly? dateFrom,
+        DateOnly? dateTo,
         string? warehouseCode,
+        string? movementTypes,
+        int skip,
         int take)
     {
         if (!_profiles.Profiles.TryGetValue(profileKey, out var profile))
             throw new InvalidOperationException($"Profile '{profileKey}' not configured.");
 
-        var rows = new List<InventoryMovementRow>();
+        skip = Math.Max(0, skip);
+        take = Math.Clamp(take, 1, 1000);
+
+        var resolvedRange = ResolveOptionalDateRange(dateFrom, dateTo);
+        var normalizedMovementTypes = NormalizeMovementTypes(movementTypes);
+
+        var filteredRows = new List<InventoryMovementRow>();
         Exception? threadException = null;
 
         var thread = new Thread(() =>
@@ -192,9 +246,11 @@ public class SapLiquiMolyInventoryReader
                     var whClause = string.IsNullOrWhiteSpace(safeWhs)
                         ? ""
                         : $" AND MovementWarehouse = '{safeWhs}'";
+                    var dateClause = BuildOptionalDateClause("MovementDate", resolvedRange);
+                    var movementTypeClause = BuildMovementTypeClause(normalizedMovementTypes);
 
                     var sql = $@"
-SELECT TOP {take}
+SELECT
     *
 FROM
 (
@@ -380,14 +436,14 @@ FROM
     LEFT JOIN OITM i ON i.ItemCode = l.ItemCode
     WHERE l.ItemCode = '{safeItem}'
 ) M
-WHERE 1=1 {whClause}
+WHERE 1=1 {whClause} {dateClause} {movementTypeClause}
 ORDER BY M.MovementDate DESC, M.DocEntry DESC, M.LineNum DESC";
 
                     rs.DoQuery(sql);
 
                     while (!rs.EoF)
                     {
-                        rows.Add(new InventoryMovementRow
+                        filteredRows.Add(new InventoryMovementRow
                         {
                             SourceType = ReadString(rs, "SourceType") ?? string.Empty,
                             DocType = ReadString(rs, "SourceType") ?? string.Empty,
@@ -432,11 +488,21 @@ ORDER BY M.MovementDate DESC, M.DocEntry DESC, M.LineNum DESC";
         if (threadException != null)
             throw threadException;
 
+        var total = filteredRows.Count;
+        var rows = filteredRows
+            .Skip(skip)
+            .Take(take)
+            .ToList();
+
         return new InventoryMovementResponse
         {
             ItemCode = itemCode,
             WarehouseCode = warehouseCode,
+            DateFrom = resolvedRange.From,
+            DateTo = resolvedRange.To,
+            MovementTypes = normalizedMovementTypes?.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList(),
             AsOfUtc = DateTime.UtcNow,
+            Total = total,
             Rows = rows
         };
     }
@@ -470,22 +536,45 @@ ORDER BY M.MovementDate DESC, M.DocEntry DESC, M.LineNum DESC";
         }
     }
 
+    private DeliveryAggregateSnapshotState EnsureDeliveryAggregateSnapshot(
+        string profileKey,
+        DateOnly dateFrom,
+        DateOnly dateTo)
+    {
+        var stateKey = BuildDeliveryAggregateStateKey(profileKey, dateFrom, dateTo);
+
+        if (_deliveryAggregateStates.TryGetValue(stateKey, out var existing))
+        {
+            if (DateTime.UtcNow - existing.AsOfUtc <= _deliveryAggregateRefreshInterval)
+                return existing;
+        }
+
+        var cacheLock = _deliveryAggregateLocks.GetOrAdd(stateKey, _ => new SemaphoreSlim(1, 1));
+        cacheLock.Wait();
+        try
+        {
+            if (_deliveryAggregateStates.TryGetValue(stateKey, out existing))
+            {
+                if (DateTime.UtcNow - existing.AsOfUtc <= _deliveryAggregateRefreshInterval)
+                    return existing;
+            }
+
+            var refreshed = RefreshDeliveryAggregateSnapshot(profileKey, dateFrom, dateTo);
+            _deliveryAggregateStates[stateKey] = refreshed;
+            return refreshed;
+        }
+        finally
+        {
+            cacheLock.Release();
+        }
+    }
+
     private SnapshotState RefreshSnapshot(string profileKey, bool includeZero, bool onlyLiquiMoly)
     {
         if (!_profiles.Profiles.TryGetValue(profileKey, out var profile))
             throw new InvalidOperationException($"Profile '{profileKey}' not configured.");
 
-        var cacheMeta = _cacheDb.CacheLiquiMolyProducts
-            .AsNoTracking()
-            .Where(x => x.IsActive)
-            .Select(x => new CacheMeta
-            {
-                ArticleNumber = x.ArticleNumber,
-                Name = x.Name,
-                PrimaryBarcode = x.PrimaryBarcode
-            })
-            .ToList()
-            .ToDictionary(x => x.ArticleNumber, StringComparer.OrdinalIgnoreCase);
+        var cacheMeta = LoadActiveCacheMetaMap();
 
         var rows = new List<InventoryStockRow>();
         Exception? threadException = null;
@@ -545,21 +634,16 @@ ORDER BY w.ItemCode, w.WhsCode");
 
                         cacheMeta.TryGetValue(itemCode, out var meta);
 
-                        rows.Add(new InventoryStockRow
-                        {
-                            Key = $"{itemCode}|{warehouseCode}",
-                            ItemCode = itemCode,
-                            ItemName = itemName,
-                            ArticleNumber = meta?.ArticleNumber ?? itemCode,
-                            PrimaryBarcode = meta?.PrimaryBarcode,
-                            WarehouseCode = warehouseCode,
-                            WarehouseName = warehouseName,
-                            OnHand = onHand,
-                            Committed = committed,
-                            Ordered = ordered,
-                            Available = onHand - committed + ordered,
-                            IsDeleted = false
-                        });
+                        rows.Add(CreateStockRow(
+                            itemCode,
+                            itemName,
+                            warehouseCode,
+                            warehouseName,
+                            onHand,
+                            committed,
+                            ordered,
+                            meta,
+                            isDeleted: false));
 
                         rs.MoveNext();
                     }
@@ -605,6 +689,150 @@ ORDER BY w.ItemCode, w.WhsCode");
             AsOfUtc = now,
             Rows = rows,
             History = history
+        };
+    }
+
+    private DeliveryAggregateSnapshotState RefreshDeliveryAggregateSnapshot(
+        string profileKey,
+        DateOnly dateFrom,
+        DateOnly dateTo)
+    {
+        if (!_profiles.Profiles.TryGetValue(profileKey, out var profile))
+            throw new InvalidOperationException($"Profile '{profileKey}' not configured.");
+
+        var cacheMeta = LoadActiveCacheMetaMap();
+        var rows = new List<InventoryDeliveryAggregateRow>();
+        Exception? threadException = null;
+
+        var thread = new Thread(() =>
+        {
+            SapDiApiCriticalSection.Run(() =>
+            {
+                Company? company = null;
+                Recordset? rs = null;
+                try
+                {
+                    company = CreateAndConnect(profile.Sap);
+                    rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
+
+                    var fromSql = FormatSqlDate(dateFrom);
+                    var toSql = FormatSqlDate(dateTo);
+
+                    rs.DoQuery($@"
+WITH Agg AS
+(
+    SELECT
+        l.ItemCode AS ItemCode,
+        l.WhsCode AS WarehouseCode,
+        CONVERT(DECIMAL(19, 6), SUM(ISNULL(l.Quantity, 0))) AS DeliveredQty,
+        COUNT(DISTINCT h.DocEntry) AS DeliveryCount
+    FROM ODLN h
+    INNER JOIN DLN1 l ON h.DocEntry = l.DocEntry
+    WHERE ISNULL(h.CANCELED, 'N') <> 'Y'
+      AND h.DocDate >= '{fromSql}'
+      AND h.DocDate <= '{toSql}'
+    GROUP BY l.ItemCode, l.WhsCode
+)
+SELECT
+    a.ItemCode AS ItemCode,
+    COALESCE(NULLIF(i.ItemName, ''), a.ItemCode) AS ItemName,
+    a.WarehouseCode AS WarehouseCode,
+    a.DeliveredQty AS DeliveredQty,
+    a.DeliveryCount AS DeliveryCount,
+    lastDoc.DocEntry AS LastDeliveryDocEntry,
+    CAST(lastDoc.DocNum AS NVARCHAR(50)) AS LastDeliveryDocNum,
+    lastDoc.DocDate AS LastDeliveredAt,
+    lastDoc.CardCode AS CustomerCode,
+    lastDoc.CardName AS CustomerName
+FROM Agg a
+OUTER APPLY
+(
+    SELECT TOP 1
+        h.DocEntry AS DocEntry,
+        h.DocNum AS DocNum,
+        h.DocDate AS DocDate,
+        h.CardCode AS CardCode,
+        h.CardName AS CardName
+    FROM ODLN h
+    INNER JOIN DLN1 l ON h.DocEntry = l.DocEntry
+    WHERE ISNULL(h.CANCELED, 'N') <> 'Y'
+      AND h.DocDate >= '{fromSql}'
+      AND h.DocDate <= '{toSql}'
+      AND l.ItemCode = a.ItemCode
+      AND l.WhsCode = a.WarehouseCode
+    ORDER BY h.DocDate DESC, h.DocEntry DESC
+) lastDoc
+LEFT JOIN OITM i ON i.ItemCode = a.ItemCode
+ORDER BY lastDoc.DocDate DESC, lastDoc.DocEntry DESC, a.ItemCode, a.WarehouseCode");
+
+                    while (!rs.EoF)
+                    {
+                        var itemCode = ReadString(rs, "ItemCode") ?? string.Empty;
+                        if (string.IsNullOrWhiteSpace(itemCode))
+                        {
+                            rs.MoveNext();
+                            continue;
+                        }
+
+                        cacheMeta.TryGetValue(itemCode, out var meta);
+
+                        rows.Add(new InventoryDeliveryAggregateRow
+                        {
+                            ItemCode = itemCode,
+                            ArticleNumber = meta?.ArticleNumber ?? itemCode,
+                            PrimaryBarcode = meta?.PrimaryBarcode,
+                            ItemName = ReadString(rs, "ItemName") ?? meta?.Name ?? itemCode,
+                            Warehouse = ReadString(rs, "WarehouseCode") ?? string.Empty,
+                            DeliveredQty = ReadDecimal(rs, "DeliveredQty"),
+                            DeliveryCount = ReadInt(rs, "DeliveryCount"),
+                            LastDeliveryDocEntry = ReadNullableInt(rs, "LastDeliveryDocEntry"),
+                            LastDeliveryDocNum = ReadString(rs, "LastDeliveryDocNum"),
+                            LastDeliveredAt = ReadDate(rs, "LastDeliveredAt"),
+                            CustomerCode = ReadString(rs, "CustomerCode"),
+                            CustomerName = ReadString(rs, "CustomerName")
+                        });
+
+                        rs.MoveNext();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    threadException = ex;
+                }
+                finally
+                {
+                    if (rs != null) Marshal.ReleaseComObject(rs);
+                    DisconnectAndRelease(company);
+                }
+            });
+        });
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+
+        if (threadException != null)
+            throw threadException;
+
+        var now = DateTime.UtcNow;
+        var version = Interlocked.Increment(ref _versionCounter);
+        foreach (var row in rows)
+        {
+            row.AsOfUtc = now;
+            row.Version = version;
+        }
+
+        _logger.LogInformation(
+            "SapLiquiMolyInventoryReader: delivery aggregates refreshed | Profile={Profile} | DateFrom={DateFrom} | DateTo={DateTo} | Rows={Rows} | Version={Version}",
+            profileKey, dateFrom, dateTo, rows.Count, version);
+
+        return new DeliveryAggregateSnapshotState
+        {
+            DateFrom = dateFrom,
+            DateTo = dateTo,
+            AsOfUtc = now,
+            Version = version,
+            Rows = rows
         };
     }
 
@@ -656,6 +884,9 @@ ORDER BY w.ItemCode, w.WhsCode");
                 Committed = 0,
                 Ordered = 0,
                 Available = 0,
+                StockStatus = ResolveStockStatus(0, 0),
+                LowStockThreshold = DefaultLowStockThreshold,
+                OutOfStockThreshold = DefaultOutOfStockThreshold,
                 IsDeleted = true
             });
         }
@@ -688,8 +919,210 @@ ORDER BY w.ItemCode, w.WhsCode");
         return query;
     }
 
+    private static IEnumerable<InventoryDeliveryAggregateRow> ApplyDeliveryFilters(
+        IEnumerable<InventoryDeliveryAggregateRow> rows,
+        string? search,
+        string? warehouseCode)
+    {
+        var query = rows;
+
+        if (!string.IsNullOrWhiteSpace(warehouseCode))
+            query = query.Where(x => x.Warehouse.Equals(warehouseCode, StringComparison.OrdinalIgnoreCase));
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var needle = search.Trim();
+            query = query.Where(x =>
+                x.ItemCode.Contains(needle, StringComparison.OrdinalIgnoreCase)
+                || x.ArticleNumber.Contains(needle, StringComparison.OrdinalIgnoreCase)
+                || (!string.IsNullOrWhiteSpace(x.PrimaryBarcode)
+                    && x.PrimaryBarcode.Contains(needle, StringComparison.OrdinalIgnoreCase))
+                || (!string.IsNullOrWhiteSpace(x.ItemName)
+                    && x.ItemName.Contains(needle, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        return query;
+    }
+
     private static string BuildStateKey(string profileKey, bool includeZero, bool onlyLiquiMoly) =>
         $"{profileKey}|{includeZero}|{onlyLiquiMoly}";
+
+    private static string BuildDeliveryAggregateStateKey(
+        string profileKey,
+        DateOnly dateFrom,
+        DateOnly dateTo) =>
+        $"{profileKey}|DLV|{dateFrom:yyyyMMdd}|{dateTo:yyyyMMdd}";
+
+    private Dictionary<string, CacheMeta> LoadActiveCacheMetaMap() =>
+        _cacheDb.CacheLiquiMolyProducts
+            .AsNoTracking()
+            .Where(x => x.IsActive)
+            .Select(x => new CacheMeta
+            {
+                ArticleNumber = x.ArticleNumber,
+                Name = x.Name,
+                PrimaryBarcode = x.PrimaryBarcode
+            })
+            .ToList()
+            .ToDictionary(x => x.ArticleNumber, StringComparer.OrdinalIgnoreCase);
+
+    private static InventoryStockRow CreateStockRow(
+        string itemCode,
+        string itemName,
+        string warehouseCode,
+        string? warehouseName,
+        decimal onHand,
+        decimal committed,
+        decimal ordered,
+        CacheMeta? meta,
+        bool isDeleted)
+    {
+        var available = onHand - committed + ordered;
+        return new InventoryStockRow
+        {
+            Key = $"{itemCode}|{warehouseCode}",
+            ItemCode = itemCode,
+            ItemName = itemName,
+            ArticleNumber = meta?.ArticleNumber ?? itemCode,
+            PrimaryBarcode = meta?.PrimaryBarcode,
+            WarehouseCode = warehouseCode,
+            WarehouseName = warehouseName,
+            OnHand = onHand,
+            Committed = committed,
+            Ordered = ordered,
+            Available = available,
+            StockStatus = ResolveStockStatus(onHand, available),
+            LowStockThreshold = DefaultLowStockThreshold,
+            OutOfStockThreshold = DefaultOutOfStockThreshold,
+            IsDeleted = isDeleted
+        };
+    }
+
+    private static string ResolveStockStatus(decimal onHand, decimal available)
+    {
+        if (onHand <= DefaultOutOfStockThreshold || available <= DefaultOutOfStockThreshold)
+            return "OUT_OF_STOCK";
+
+        if (onHand <= DefaultLowStockThreshold || available <= DefaultLowStockThreshold)
+            return "LOW_STOCK";
+
+        return "IN_STOCK";
+    }
+
+    private static RequiredDateRange ResolveRequiredDateRange(
+        DateOnly? dateFrom,
+        DateOnly? dateTo,
+        bool defaultToBusinessToday)
+    {
+        if (!dateFrom.HasValue && !dateTo.HasValue)
+        {
+            if (!defaultToBusinessToday)
+                throw new ArgumentException("dateFrom or dateTo is required.");
+
+            var today = GetDarEsSalaamBusinessDate();
+            return new RequiredDateRange(today, today);
+        }
+
+        var from = dateFrom ?? dateTo!.Value;
+        var to = dateTo ?? dateFrom!.Value;
+
+        if (from > to)
+            throw new ArgumentException("dateFrom must be less than or equal to dateTo.");
+
+        return new RequiredDateRange(from, to);
+    }
+
+    private static OptionalDateRange ResolveOptionalDateRange(DateOnly? dateFrom, DateOnly? dateTo)
+    {
+        if (!dateFrom.HasValue && !dateTo.HasValue)
+            return new OptionalDateRange(null, null);
+
+        var from = dateFrom ?? dateTo!.Value;
+        var to = dateTo ?? dateFrom!.Value;
+
+        if (from > to)
+            throw new ArgumentException("dateFrom must be less than or equal to dateTo.");
+
+        return new OptionalDateRange(from, to);
+    }
+
+    private static string BuildOptionalDateClause(string fieldName, OptionalDateRange range)
+    {
+        var clauses = new List<string>();
+        if (range.From.HasValue)
+            clauses.Add($"AND {fieldName} >= '{FormatSqlDate(range.From.Value)}'");
+        if (range.To.HasValue)
+            clauses.Add($"AND {fieldName} <= '{FormatSqlDate(range.To.Value)}'");
+
+        return clauses.Count == 0
+            ? string.Empty
+            : " " + string.Join(" ", clauses);
+    }
+
+    private static string BuildMovementTypeClause(HashSet<string>? movementTypes)
+    {
+        if (movementTypes == null || movementTypes.Count == 0)
+            return string.Empty;
+
+        var values = string.Join(", ", movementTypes
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .Select(x => $"'{x}'"));
+
+        return $" AND SourceType IN ({values})";
+    }
+
+    private static HashSet<string>? NormalizeMovementTypes(string? movementTypes)
+    {
+        if (string.IsNullOrWhiteSpace(movementTypes))
+            return null;
+
+        var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "SO", "DLV", "TRQ", "TRF", "GR", "GI"
+        };
+
+        var values = movementTypes
+            .Split([',', ';', '|', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(x => x.Trim().ToUpperInvariant())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var invalid = values.Where(x => !allowed.Contains(x)).ToList();
+        if (invalid.Count > 0)
+            throw new ArgumentException($"Unsupported movementTypes: {string.Join(", ", invalid)}.");
+
+        return values.ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static DateOnly GetDarEsSalaamBusinessDate()
+    {
+        var utcNow = DateTimeOffset.UtcNow;
+        var tz = GetDarEsSalaamTimeZone();
+        var localNow = TimeZoneInfo.ConvertTime(utcNow, tz);
+        return DateOnly.FromDateTime(localNow.DateTime);
+    }
+
+    private static TimeZoneInfo GetDarEsSalaamTimeZone()
+    {
+        foreach (var id in new[] { "Africa/Dar_es_Salaam", "E. Africa Standard Time" })
+        {
+            try
+            {
+                return TimeZoneInfo.FindSystemTimeZoneById(id);
+            }
+            catch (TimeZoneNotFoundException)
+            {
+            }
+            catch (InvalidTimeZoneException)
+            {
+            }
+        }
+
+        return TimeZoneInfo.Utc;
+    }
+
+    private static string FormatSqlDate(DateOnly date) =>
+        date.ToString("yyyyMMdd");
 
     private static Company CreateAndConnect(SapSettings sap)
     {
@@ -741,6 +1174,15 @@ ORDER BY w.ItemCode, w.WhsCode");
     private static int ReadInt(Recordset rs, string fieldName) =>
         Convert.ToInt32(rs.Fields.Item(fieldName).Value);
 
+    private static int? ReadNullableInt(Recordset rs, string fieldName)
+    {
+        var value = rs.Fields.Item(fieldName).Value;
+        if (value == null || value is DBNull)
+            return null;
+
+        return Convert.ToInt32(value);
+    }
+
     private static decimal ReadDecimal(Recordset rs, string fieldName) =>
         Convert.ToDecimal(rs.Fields.Item(fieldName).Value ?? 0m);
 
@@ -773,7 +1215,18 @@ ORDER BY w.ItemCode, w.WhsCode");
         public List<ChangeBatch> History { get; init; } = new();
     }
 
+    private sealed class DeliveryAggregateSnapshotState
+    {
+        public DateOnly DateFrom { get; init; }
+        public DateOnly DateTo { get; init; }
+        public long Version { get; init; }
+        public DateTime AsOfUtc { get; init; }
+        public List<InventoryDeliveryAggregateRow> Rows { get; init; } = new();
+    }
+
     private sealed record ChangeBatch(long Version, DateTime AsOfUtc, List<InventoryStockRow> Rows);
+    private sealed record RequiredDateRange(DateOnly From, DateOnly To);
+    private sealed record OptionalDateRange(DateOnly? From, DateOnly? To);
 }
 
 public class InventoryStockSnapshotResponse
@@ -819,6 +1272,9 @@ public class InventoryStockRow
     public decimal Committed { get; init; }
     public decimal Ordered { get; init; }
     public decimal Available { get; init; }
+    public string StockStatus { get; init; } = "UNKNOWN";
+    public decimal LowStockThreshold { get; init; }
+    public decimal OutOfStockThreshold { get; init; }
     public bool IsDeleted { get; init; }
 }
 
@@ -826,7 +1282,11 @@ public class InventoryMovementResponse
 {
     public string ItemCode { get; init; } = string.Empty;
     public string? WarehouseCode { get; init; }
+    public DateOnly? DateFrom { get; init; }
+    public DateOnly? DateTo { get; init; }
+    public List<string>? MovementTypes { get; init; }
     public DateTime AsOfUtc { get; init; }
+    public int Total { get; init; }
     public List<InventoryMovementRow> Rows { get; init; } = new();
 }
 
@@ -854,4 +1314,32 @@ public class InventoryMovementRow
     public string? CustomerName { get; init; }
     public string? VendorCode { get; init; }
     public string? VendorName { get; init; }
+}
+
+public class InventoryDeliveryAggregateResponse
+{
+    public DateOnly DateFrom { get; init; }
+    public DateOnly DateTo { get; init; }
+    public DateTime AsOfUtc { get; init; }
+    public long Version { get; init; }
+    public int Total { get; init; }
+    public List<InventoryDeliveryAggregateRow> Rows { get; init; } = new();
+}
+
+public class InventoryDeliveryAggregateRow
+{
+    public string ItemCode { get; init; } = string.Empty;
+    public string ArticleNumber { get; init; } = string.Empty;
+    public string? PrimaryBarcode { get; init; }
+    public string ItemName { get; init; } = string.Empty;
+    public string Warehouse { get; init; } = string.Empty;
+    public decimal DeliveredQty { get; init; }
+    public int DeliveryCount { get; init; }
+    public int? LastDeliveryDocEntry { get; init; }
+    public string? LastDeliveryDocNum { get; init; }
+    public DateTime? LastDeliveredAt { get; init; }
+    public string? CustomerCode { get; init; }
+    public string? CustomerName { get; init; }
+    public DateTime AsOfUtc { get; set; }
+    public long Version { get; set; }
 }
