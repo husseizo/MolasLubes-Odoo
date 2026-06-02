@@ -1,6 +1,8 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+using System.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
+using MolasLubes.Infrastructure.Scheduling;
 using MolasLubes.Infrastructure.Services.Caching;
 using Quartz;
 
@@ -20,45 +22,60 @@ public class DeliveryDeltaSyncJob : IJob
 
     public async Task Execute(IJobExecutionContext context)
     {
-        _logger.LogInformation("🚚 Delivery Sync started");
+        var sw = Stopwatch.StartNew();
+        _logger.LogInformation("Delivery Sync started");
 
-        using var scope = _scopeFactory.CreateScope();
-
-        var reader = scope.ServiceProvider.GetRequiredService<SapDeliveryReader>();
-        var cache = scope.ServiceProvider.GetRequiredService<DeliveryCacheService>();
-        var orderStatus = scope.ServiceProvider.GetRequiredService<SalesOrderStatusService>();
-
-        var watermark = await cache.GetLastSapUpdateDateAsync();
-
-        // Force a full sync if headers exist but the lines table is empty.
-        // This self-heals the one-time case where CacheDeliveryLines was added
-        // after headers were already cached — the watermark would otherwise skip
-        // all existing records and lines would never be populated.
-        var linesExist = await cache.HasAnyDeliveryLineAsync();
-        if (watermark != null && !linesExist)
+        try
         {
-            _logger.LogWarning(
-                "⚠️ CacheDeliveries has data but CacheDeliveryLines is empty — forcing full sync to backfill lines");
-            watermark = null;
+            using var scope = _scopeFactory.CreateScope();
+
+            var reader = scope.ServiceProvider.GetRequiredService<SapDeliveryReader>();
+            var cache = scope.ServiceProvider.GetRequiredService<DeliveryCacheService>();
+            var orderStatus = scope.ServiceProvider.GetRequiredService<SalesOrderStatusService>();
+
+            var watermark = await cache.GetLastSapUpdateDateAsync();
+
+            // Force a full sync if headers exist but the lines table is empty.
+            // This self-heals the one-time case where CacheDeliveryLines was added
+            // after headers were already cached - the watermark would otherwise skip
+            // all existing records and lines would never be populated.
+            var linesExist = await cache.HasAnyDeliveryLineAsync();
+            if (watermark != null && !linesExist)
+            {
+                _logger.LogWarning(
+                    "CacheDeliveries has data but CacheDeliveryLines is empty - forcing full sync to backfill lines");
+                watermark = null;
+            }
+
+            var deliveries = watermark == null
+                ? reader.ReadAllDeliveries().ToList()
+                : reader.ReadRecentDeliveries(watermark.Value.AddMinutes(-2)).ToList();
+
+            _logger.LogInformation("Deliveries read from SAP | Count={Count}", deliveries.Count);
+
+            if (deliveries.Count == 0)
+            {
+                sw.Stop();
+                _logger.LogInformation("Delivery Sync completed | DurationMs={Ms}", sw.ElapsedMilliseconds);
+                return;
+            }
+
+            await cache.RegisterDeliveriesAsync(deliveries);
+
+            foreach (var delivery in deliveries)
+            {
+                if (delivery.BaseOrderEntry > 0)
+                    await orderStatus.MarkOrderDeliveredAsync(delivery.BaseOrderEntry, delivery.OdooParentSalesOrderId);
+            }
+
+            sw.Stop();
+            _logger.LogInformation("Delivery Sync completed | DurationMs={Ms}", sw.ElapsedMilliseconds);
         }
-
-        var deliveries = watermark == null
-            ? reader.ReadAllDeliveries().ToList()
-            : reader.ReadRecentDeliveries(watermark.Value.AddMinutes(-2)).ToList();
-
-        _logger.LogInformation("🚚 Deliveries read from SAP | Count={Count}", deliveries.Count);
-
-        if (deliveries.Count == 0)
-            return;
-
-        await cache.RegisterDeliveriesAsync(deliveries);
-
-        foreach (var d in deliveries)
+        catch (Exception ex)
         {
-            if (d.BaseOrderEntry > 0)
-                await orderStatus.MarkOrderDeliveredAsync(d.BaseOrderEntry, d.OdooParentSalesOrderId);
+            sw.Stop();
+            _logger.LogError(ex, "Delivery Sync failed | DurationMs={Ms}", sw.ElapsedMilliseconds);
+            await QuartzRetryHelper.HandleRetryAsync(context, ex);
         }
-
-        _logger.LogInformation("✅ Delivery Sync completed");
     }
 }
