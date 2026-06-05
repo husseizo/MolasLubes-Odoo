@@ -6,6 +6,8 @@ public class RegisterDeviceTokenRequest
     public string DeviceToken { get; set; } = string.Empty;
     public string SapUserCode { get; set; } = string.Empty;
     public string BundleId { get; set; } = string.Empty;
+    public string? AppBuild { get; set; }
+    public string? AppVersion { get; set; }
 }
 
 public class RemoveDeviceTokenRequest

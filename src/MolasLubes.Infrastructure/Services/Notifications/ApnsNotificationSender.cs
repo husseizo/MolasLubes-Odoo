@@ -1,3 +1,4 @@
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -8,6 +9,8 @@ namespace MolasLubes.Infrastructure.Services.Notifications;
 
 public sealed class ApnsNotificationSender
 {
+    private const int MaxAttempts = 3;
+    private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(500);
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
@@ -48,39 +51,98 @@ public sealed class ApnsNotificationSender
             : "https://api.development.push.apple.com";
         var uri = $"{endpoint}/3/device/{deviceToken}";
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, uri)
+        Exception? lastException = null;
+
+        for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
-            Content = new StringContent(
-                JsonSerializer.Serialize(payload, JsonOptions),
-                Encoding.UTF8,
-                "application/json")
-        };
+            using var request = new HttpRequestMessage(HttpMethod.Post, uri)
+            {
+                Content = new StringContent(
+                    JsonSerializer.Serialize(payload, JsonOptions),
+                    Encoding.UTF8,
+                    "application/json"),
+                Version = HttpVersion.Version20,
+                VersionPolicy = HttpVersionPolicy.RequestVersionExact
+            };
 
-        request.Headers.TryAddWithoutValidation("authorization", $"bearer {authJwt}");
-        request.Headers.TryAddWithoutValidation("apns-topic", _options.BundleId);
-        request.Headers.TryAddWithoutValidation("apns-push-type", "alert");
-        request.Headers.TryAddWithoutValidation("apns-priority", "10");
+            request.Headers.TryAddWithoutValidation("authorization", $"bearer {authJwt}");
+            request.Headers.TryAddWithoutValidation("apns-topic", _options.BundleId);
+            request.Headers.TryAddWithoutValidation("apns-push-type", "alert");
+            request.Headers.TryAddWithoutValidation("apns-priority", "10");
 
-        try
-        {
-            using var response = await _httpClient.SendAsync(request, ct);
-            var body = await response.Content.ReadAsStringAsync(ct);
+            try
+            {
+                using var response = await _httpClient.SendAsync(request, ct);
+                var body = await response.Content.ReadAsStringAsync(ct);
 
-            if (response.IsSuccessStatusCode)
-                return ApnsSendResult.Success();
+                if (response.IsSuccessStatusCode)
+                    return ApnsSendResult.Success();
 
-            var reason = ParseReason(body);
-            _logger.LogWarning(
-                "APNS send failed | StatusCode={Code} | Reason={Reason}",
-                (int)response.StatusCode, reason ?? "-");
+                var reason = ParseReason(body);
+                if (attempt < MaxAttempts && IsTransientStatusCode(response.StatusCode))
+                {
+                    _logger.LogWarning(
+                        "APNS send failed transiently, will retry | Attempt={Attempt}/{MaxAttempts} | StatusCode={Code} | Reason={Reason} | Env={Env} | Topic={Topic} | Endpoint={Endpoint} | TokenSuffix={Suffix}",
+                        attempt, MaxAttempts, (int)response.StatusCode, reason ?? "-", CurrentEnvironment, _options.BundleId, endpoint, SafeSuffix(deviceToken));
+                    await Task.Delay(RetryDelay, ct);
+                    continue;
+                }
 
-            return ApnsSendResult.Failed((int)response.StatusCode, reason ?? "APNS send failed.");
+                if (IsConfigurationFailure(reason))
+                {
+                    _logger.LogWarning(
+                        "APNS configuration mismatch suspected | StatusCode={Code} | Reason={Reason} | Env={Env} | Topic={Topic} | Endpoint={Endpoint} | TeamId={TeamId} | KeyId={KeyId} | TokenSuffix={Suffix}",
+                        (int)response.StatusCode,
+                        reason ?? "-",
+                        CurrentEnvironment,
+                        _options.BundleId,
+                        endpoint,
+                        _options.TeamId,
+                        _options.KeyId,
+                        SafeSuffix(deviceToken));
+                }
+
+                _logger.LogWarning(
+                    "APNS send failed | StatusCode={Code} | Reason={Reason} | Env={Env} | Topic={Topic} | Endpoint={Endpoint} | TokenSuffix={Suffix}",
+                    (int)response.StatusCode, reason ?? "-", CurrentEnvironment, _options.BundleId, endpoint, SafeSuffix(deviceToken));
+
+                return ApnsSendResult.Failed((int)response.StatusCode, reason ?? "APNS send failed.");
+            }
+            catch (Exception ex) when (IsTransientException(ex, ct) && attempt < MaxAttempts)
+            {
+                lastException = ex;
+                _logger.LogWarning(
+                    ex,
+                    "APNS send transient failure, will retry | Attempt={Attempt}/{MaxAttempts} | Env={Env} | Topic={Topic} | Endpoint={Endpoint} | TokenSuffix={Suffix}",
+                    attempt,
+                    MaxAttempts,
+                    CurrentEnvironment,
+                    _options.BundleId,
+                    endpoint,
+                    SafeSuffix(deviceToken));
+                await Task.Delay(RetryDelay, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(
+                    ex,
+                    "APNS send threw | Env={Env} | Topic={Topic} | Endpoint={Endpoint} | TokenSuffix={Suffix}",
+                    CurrentEnvironment,
+                    _options.BundleId,
+                    endpoint,
+                    SafeSuffix(deviceToken));
+                return ApnsSendResult.Failed(0, ex.Message);
+            }
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "APNS send threw for token ending with {Suffix}", SafeSuffix(deviceToken));
-            return ApnsSendResult.Failed(0, ex.Message);
-        }
+
+        _logger.LogError(
+            lastException,
+            "APNS send exhausted retries | Env={Env} | Topic={Topic} | Endpoint={Endpoint} | TokenSuffix={Suffix}",
+            CurrentEnvironment,
+            _options.BundleId,
+            endpoint,
+            SafeSuffix(deviceToken));
+        return ApnsSendResult.Failed(0, lastException?.Message ?? "APNS send failed after retries.");
     }
 
     private string GetOrCreateAuthJwt()
@@ -130,6 +192,31 @@ public sealed class ApnsNotificationSender
             .TrimEnd('=')
             .Replace('+', '-')
             .Replace('/', '_');
+
+    private static bool IsTransientStatusCode(HttpStatusCode statusCode) =>
+        statusCode == HttpStatusCode.TooManyRequests ||
+        (int)statusCode >= 500;
+
+    private static bool IsTransientException(Exception ex, CancellationToken ct)
+    {
+        if (ex is OperationCanceledException)
+            return !ct.IsCancellationRequested;
+
+        return ex is HttpRequestException ||
+               ex.InnerException is TimeoutException ||
+               ex.InnerException is HttpRequestException;
+    }
+
+    private static bool IsConfigurationFailure(string? reason) =>
+        !string.IsNullOrWhiteSpace(reason) &&
+        (reason.Contains("BadEnvironmentKeyInToken", StringComparison.OrdinalIgnoreCase) ||
+         reason.Contains("BadEnvironmentKeyIdInToken", StringComparison.OrdinalIgnoreCase) ||
+         reason.Contains("InvalidProviderToken", StringComparison.OrdinalIgnoreCase) ||
+         reason.Contains("DeviceTokenNotForTopic", StringComparison.OrdinalIgnoreCase) ||
+         reason.Contains("TopicDisallowed", StringComparison.OrdinalIgnoreCase));
+
+    private string CurrentEnvironment =>
+        _options.IsProduction ? "production" : "development";
 
     private static string? ParseReason(string? responseBody)
     {

@@ -53,6 +53,8 @@ public class LiquiMolyPushNotificationService
         var token = request.DeviceToken.Trim();
         var bundleId = ResolveBundleId(request.BundleId);
         var userCode = authenticatedSapUserCode.Trim();
+        var appBuild = request.AppBuild?.Trim();
+        var appVersion = request.AppVersion?.Trim();
 
         var existing = await _db.CacheNotificationDeviceTokens
             .FirstOrDefaultAsync(x =>
@@ -87,6 +89,16 @@ public class LiquiMolyPushNotificationService
         }
 
         await _db.SaveChangesAsync(ct);
+
+        _logger.LogInformation(
+            "Device token registered | User={User} | Platform={Platform} | BundleId={BundleId} | TokenSuffix={TokenSuffix} | AppBuild={AppBuild} | AppVersion={AppVersion} | ApnsEnv={ApnsEnv}",
+            userCode,
+            "ios",
+            bundleId,
+            SafeSuffix(token),
+            string.IsNullOrWhiteSpace(appBuild) ? "-" : appBuild,
+            string.IsNullOrWhiteSpace(appVersion) ? "-" : appVersion,
+            _apnsOptions.Env);
 
         return new DeviceTokenMutationResponse
         {
@@ -135,6 +147,14 @@ public class LiquiMolyPushNotificationService
         }
 
         await _db.SaveChangesAsync(ct);
+
+        _logger.LogInformation(
+            "Device token(s) deactivated | User={User} | Platform={Platform} | BundleId={BundleId} | RequestedTokenSuffix={TokenSuffix} | Affected={Affected}",
+            sapUserCode,
+            platform ?? "-",
+            string.IsNullOrWhiteSpace(bundleId) ? "-" : bundleId,
+            SafeSuffix(token),
+            rows.Count);
 
         return new DeviceTokenMutationResponse
         {
@@ -298,10 +318,19 @@ public class LiquiMolyPushNotificationService
         }
 
         await _db.SaveChangesAsync(ct);
+        var failedCount = tokens.Count - successCount;
+
+        if (successCount == 0)
+        {
+            _logger.LogWarning(
+                "Push completed with no deliveries | Ref={Ref} | Status={Status} | Targets={Targets} | Success={Success} | Failed={Failed}",
+                request.RequestRef, status, tokens.Count, successCount, failedCount);
+            return;
+        }
 
         _logger.LogInformation(
-            "Push sent | Ref={Ref} | Status={Status} | Targets={Targets} | Success={Success}",
-            request.RequestRef, status, tokens.Count, successCount);
+            "Push completed | Ref={Ref} | Status={Status} | Targets={Targets} | Success={Success} | Failed={Failed}",
+            request.RequestRef, status, tokens.Count, successCount, failedCount);
     }
 
     private IReadOnlyCollection<string> ExecutionRecipients(CacheLiquiMolyReplenishmentRequest request) =>
@@ -347,4 +376,13 @@ public class LiquiMolyPushNotificationService
     private static bool IsMolasWarehouseTransfer(CacheLiquiMolyReplenishmentRequest request) =>
         string.Equals(request.SourceProfile, "MolasLubes", StringComparison.OrdinalIgnoreCase) &&
         string.Equals(request.TargetProfile, "MolasLubes", StringComparison.OrdinalIgnoreCase);
+
+    private static string SafeSuffix(string? token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return "-";
+
+        var trimmed = token.Trim();
+        return trimmed.Length <= 8 ? trimmed : trimmed[^8..];
+    }
 }

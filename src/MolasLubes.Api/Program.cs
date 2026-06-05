@@ -329,6 +329,13 @@ builder.Services.AddScoped<LiquiMolyPushNotificationService>();
 builder.Services.AddHttpClient<ApnsNotificationSender>(client =>
 {
     client.Timeout = TimeSpan.FromSeconds(15);
+})
+.ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+{
+    EnableMultipleHttp2Connections = true,
+    PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+    KeepAlivePingDelay = TimeSpan.FromMinutes(1),
+    KeepAlivePingTimeout = TimeSpan.FromSeconds(30)
 });
 
 // Inter-company SO → PO → GR writers (Step 3, 4, 5)
