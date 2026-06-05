@@ -199,7 +199,9 @@ ORDER BY d.DocEntry, l.LineNum";
             }
         }
 
-        throw lastDeadlock ?? new InvalidOperationException("Delivery query retry failed without a captured deadlock exception.");
+        throw lastDeadlock is not null
+            ? lastDeadlock
+            : new InvalidOperationException("Delivery query retry failed without a captured deadlock exception.");
     }
 
     private static bool IsDeadlockVictim(COMException ex) =>
