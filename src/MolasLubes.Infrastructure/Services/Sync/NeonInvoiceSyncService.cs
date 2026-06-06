@@ -5,11 +5,14 @@ using MolasLubes.Domain.Entities.Neon;
 using MolasLubes.Infrastructure.Common;
 using MolasLubes.Infrastructure.Persistence;
 using Npgsql;
+using System.Net.Sockets;
 
 namespace MolasLubes.Infrastructure.Services.Sync;
 
 public class NeonInvoiceSyncService
 {
+    private static readonly TimeSpan WatermarkRetryDelay = TimeSpan.FromSeconds(5);
+
     private readonly MolasCacheDbContext _cacheDb;
     private readonly NeonDbContext _neonDb;
     private readonly ILogger<NeonInvoiceSyncService> _logger;
@@ -191,7 +194,7 @@ public class NeonInvoiceSyncService
                 {
                     await TryRollbackAsync(tx, "Neon INVOICE DELTA sync");
 
-                    if (IsTransientNeonStreamReadFailure(ex))
+                    if (IsTransientNeonFailure(ex))
                     {
                         await ResetNeonConnectionAsync(
                             ex,
@@ -212,7 +215,7 @@ public class NeonInvoiceSyncService
                 await SyncOrphanedLinesAsync();
             }
         }
-        catch (Exception ex) when (IsTransientNeonStreamReadFailure(ex))
+        catch (Exception ex) when (IsTransientNeonFailure(ex))
         {
             await ResetNeonConnectionAsync(
                 ex,
@@ -372,7 +375,7 @@ public class NeonInvoiceSyncService
                 {
                     await TryRollbackAsync(tx, "Neon INVOICE FULL sync");
 
-                    if (IsTransientNeonStreamReadFailure(ex))
+                    if (IsTransientNeonFailure(ex))
                     {
                         await ResetNeonConnectionAsync(
                             ex,
@@ -388,7 +391,7 @@ public class NeonInvoiceSyncService
                 }
             });
         }
-        catch (Exception ex) when (IsTransientNeonStreamReadFailure(ex))
+        catch (Exception ex) when (IsTransientNeonFailure(ex))
         {
             await ResetNeonConnectionAsync(
                 ex,
@@ -482,7 +485,7 @@ public class NeonInvoiceSyncService
                     orphanLines.Count);
             });
         }
-        catch (Exception ex) when (IsTransientNeonStreamReadFailure(ex))
+        catch (Exception ex) when (IsTransientNeonFailure(ex))
         {
             await ResetNeonConnectionAsync(
                 ex,
@@ -493,7 +496,7 @@ public class NeonInvoiceSyncService
 
     private async Task<DateTime?> TryGetLastInvoiceSyncUtcAsync()
     {
-        const int maxAttempts = 2;
+        const int maxAttempts = 3;
 
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
@@ -512,14 +515,16 @@ public class NeonInvoiceSyncService
 
                 return lastSync.AsUtc();
             }
-            catch (Exception ex) when (IsTransientNeonStreamReadFailure(ex) && attempt < maxAttempts)
+            catch (Exception ex) when (IsTransientNeonFailure(ex) && attempt < maxAttempts)
             {
                 await ResetNeonConnectionAsync(
                     ex,
                     "Neon INVOICE watermark read",
                     "Clearing the Neon pool and retrying the watermark query on a fresh connection.");
+
+                await Task.Delay(WatermarkRetryDelay);
             }
-            catch (Exception ex) when (IsTransientNeonStreamReadFailure(ex))
+            catch (Exception ex) when (IsTransientNeonFailure(ex))
             {
                 await ResetNeonConnectionAsync(
                     ex,
@@ -550,6 +555,10 @@ public class NeonInvoiceSyncService
             {
                 NpgsqlConnection.ClearPool(npgsqlConnection);
             }
+            else
+            {
+                NpgsqlConnection.ClearAllPools();
+            }
         }
         catch (Exception resetEx)
         {
@@ -559,23 +568,31 @@ public class NeonInvoiceSyncService
         }
     }
 
-    private static bool IsTransientNeonStreamReadFailure(Exception ex)
+    private static bool IsTransientNeonFailure(Exception ex)
     {
-        if (ex is EndOfStreamException or IOException)
+        if (ex is EndOfStreamException or IOException or TimeoutException or SocketException)
         {
             return true;
         }
 
-        if (ex is NpgsqlException npgsqlException &&
-            npgsqlException.Message.Contains(
-                "Exception while reading from stream",
-                StringComparison.OrdinalIgnoreCase))
+        if (ex is NpgsqlException npgsqlException)
         {
-            return true;
+            if (npgsqlException.Message.Contains(
+                    "Exception while reading from stream",
+                    StringComparison.OrdinalIgnoreCase) ||
+                npgsqlException.Message.Contains(
+                    "Failed to connect to",
+                    StringComparison.OrdinalIgnoreCase) ||
+                npgsqlException.Message.Contains(
+                    "Timeout during connection attempt",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
         }
 
         return ex.InnerException is not null &&
-               IsTransientNeonStreamReadFailure(ex.InnerException);
+               IsTransientNeonFailure(ex.InnerException);
     }
 
     private async Task TryRollbackAsync(IDbContextTransaction tx, string operationName)
@@ -596,7 +613,7 @@ public class NeonInvoiceSyncService
                 "{Operation}: rollback skipped due to invalid transaction state (safe to ignore).",
                 operationName);
         }
-        catch (Exception ex) when (IsTransientNeonStreamReadFailure(ex))
+        catch (Exception ex) when (IsTransientNeonFailure(ex))
         {
             _logger.LogDebug(ex,
                 "{Operation}: transient Neon failure occurred during rollback (safe to ignore).",
