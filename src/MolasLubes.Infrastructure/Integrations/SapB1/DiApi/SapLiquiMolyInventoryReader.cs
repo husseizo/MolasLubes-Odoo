@@ -158,17 +158,25 @@ public class SapLiquiMolyInventoryReader
         if (!string.IsNullOrWhiteSpace(warehouseCode))
             rows = rows.Where(x => x.WarehouseCode.Equals(warehouseCode, StringComparison.OrdinalIgnoreCase));
 
+        var materializedRows = rows.ToList();
+        var totalOnHand = materializedRows.Sum(x => x.OnHand);
+        var totalCommitted = materializedRows.Sum(x => x.Committed);
+        var totalOrdered = materializedRows.Sum(x => x.Ordered);
+        var totalNetAvailable = materializedRows.Sum(x => x.Available);
+
         return new InventoryStockSummaryResponse
         {
             AsOfUtc = state.AsOfUtc,
             Version = state.Version,
-            ItemWarehouseCount = rows.Count(),
-            ItemCount = rows.Select(x => x.ItemCode).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
-            WarehouseCount = rows.Select(x => x.WarehouseCode).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
-            TotalOnHand = rows.Sum(x => x.OnHand),
-            TotalCommitted = rows.Sum(x => x.Committed),
-            TotalOrdered = rows.Sum(x => x.Ordered),
-            TotalAvailable = rows.Sum(x => x.Available)
+            ItemWarehouseCount = materializedRows.Count,
+            ItemCount = materializedRows.Select(x => x.ItemCode).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+            WarehouseCount = materializedRows.Select(x => x.WarehouseCode).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+            TotalOnHand = totalOnHand,
+            TotalCommitted = totalCommitted,
+            TotalOrdered = totalOrdered,
+            // Keep TotalAvailable aligned with the frontend's "current stock" card expectation.
+            TotalAvailable = totalOnHand,
+            TotalNetAvailable = totalNetAvailable
         };
     }
 
@@ -1257,6 +1265,7 @@ public class InventoryStockSummaryResponse
     public decimal TotalCommitted { get; init; }
     public decimal TotalOrdered { get; init; }
     public decimal TotalAvailable { get; init; }
+    public decimal TotalNetAvailable { get; init; }
 }
 
 public class InventoryStockRow
