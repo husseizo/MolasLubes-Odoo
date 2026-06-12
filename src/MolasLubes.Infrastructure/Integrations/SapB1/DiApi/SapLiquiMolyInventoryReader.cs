@@ -582,7 +582,7 @@ ORDER BY M.MovementDate DESC, M.DocEntry DESC, M.LineNum DESC";
         if (!_profiles.Profiles.TryGetValue(profileKey, out var profile))
             throw new InvalidOperationException($"Profile '{profileKey}' not configured.");
 
-        var cacheMeta = LoadActiveCacheMetaMap();
+        var cacheMeta = LoadCacheMetaMap();
 
         var rows = new List<InventoryStockRow>();
         Exception? threadException = null;
@@ -708,7 +708,7 @@ ORDER BY w.ItemCode, w.WhsCode");
         if (!_profiles.Profiles.TryGetValue(profileKey, out var profile))
             throw new InvalidOperationException($"Profile '{profileKey}' not configured.");
 
-        var cacheMeta = LoadActiveCacheMetaMap();
+        var cacheMeta = LoadCacheMetaMap();
         var rows = new List<InventoryDeliveryAggregateRow>();
         Exception? threadException = null;
 
@@ -961,17 +961,23 @@ ORDER BY lastDoc.DocDate DESC, lastDoc.DocEntry DESC, a.ItemCode, a.WarehouseCod
         DateOnly dateTo) =>
         $"{profileKey}|DLV|{dateFrom:yyyyMMdd}|{dateTo:yyyyMMdd}";
 
-    private Dictionary<string, CacheMeta> LoadActiveCacheMetaMap() =>
+    private Dictionary<string, CacheMeta> LoadCacheMetaMap() =>
         _cacheDb.CacheLiquiMolyProducts
             .AsNoTracking()
-            .Where(x => x.IsActive)
             .Select(x => new CacheMeta
             {
                 ArticleNumber = x.ArticleNumber,
                 Name = x.Name,
-                PrimaryBarcode = x.PrimaryBarcode
+                PrimaryBarcode = x.PrimaryBarcode,
+                IsActive = x.IsActive
             })
             .ToList()
+            .GroupBy(x => x.ArticleNumber, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g
+                .OrderByDescending(x => x.IsActive)
+                .ThenByDescending(x => !string.IsNullOrWhiteSpace(x.PrimaryBarcode))
+                .ThenByDescending(x => !string.IsNullOrWhiteSpace(x.Name))
+                .First())
             .ToDictionary(x => x.ArticleNumber, StringComparer.OrdinalIgnoreCase);
 
     private static InventoryStockRow CreateStockRow(
@@ -1213,6 +1219,7 @@ ORDER BY lastDoc.DocDate DESC, lastDoc.DocEntry DESC, a.ItemCode, a.WarehouseCod
         public string ArticleNumber { get; init; } = string.Empty;
         public string Name { get; init; } = string.Empty;
         public string? PrimaryBarcode { get; init; }
+        public bool IsActive { get; init; }
     }
 
     private sealed class SnapshotState
