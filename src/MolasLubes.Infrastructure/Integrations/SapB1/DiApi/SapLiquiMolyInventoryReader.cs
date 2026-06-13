@@ -285,7 +285,11 @@ FROM
         h.CardCode AS CustomerCode,
         h.CardName AS CustomerName,
         CAST(NULL AS NVARCHAR(50)) AS VendorCode,
-        CAST(NULL AS NVARCHAR(100)) AS VendorName
+        CAST(NULL AS NVARCHAR(100)) AS VendorName,
+        CAST(NULL AS NVARCHAR(10)) AS LinkedDocType,
+        CAST(NULL AS INT) AS LinkedDocEntry,
+        CAST(NULL AS NVARCHAR(50)) AS LinkedDocNum,
+        CAST(NULL AS INT) AS LinkedLineNum
     FROM ORDR h
     INNER JOIN RDR1 l ON h.DocEntry = l.DocEntry
     LEFT JOIN OITM i ON i.ItemCode = l.ItemCode
@@ -316,7 +320,11 @@ FROM
         h.CardCode AS CustomerCode,
         h.CardName AS CustomerName,
         CAST(NULL AS NVARCHAR(50)) AS VendorCode,
-        CAST(NULL AS NVARCHAR(100)) AS VendorName
+        CAST(NULL AS NVARCHAR(100)) AS VendorName,
+        CAST(NULL AS NVARCHAR(10)) AS LinkedDocType,
+        CAST(NULL AS INT) AS LinkedDocEntry,
+        CAST(NULL AS NVARCHAR(50)) AS LinkedDocNum,
+        CAST(NULL AS INT) AS LinkedLineNum
     FROM ODLN h
     INNER JOIN DLN1 l ON h.DocEntry = l.DocEntry
     LEFT JOIN OITM i ON i.ItemCode = l.ItemCode
@@ -347,7 +355,11 @@ FROM
         CAST(NULL AS NVARCHAR(50)) AS CustomerCode,
         CAST(NULL AS NVARCHAR(100)) AS CustomerName,
         CAST(NULL AS NVARCHAR(50)) AS VendorCode,
-        CAST(NULL AS NVARCHAR(100)) AS VendorName
+        CAST(NULL AS NVARCHAR(100)) AS VendorName,
+        CAST(NULL AS NVARCHAR(10)) AS LinkedDocType,
+        CAST(NULL AS INT) AS LinkedDocEntry,
+        CAST(NULL AS NVARCHAR(50)) AS LinkedDocNum,
+        CAST(NULL AS INT) AS LinkedLineNum
     FROM OWTQ h
     INNER JOIN WTQ1 l ON h.DocEntry = l.DocEntry
     LEFT JOIN OITM i ON i.ItemCode = l.ItemCode
@@ -378,7 +390,11 @@ FROM
         CAST(NULL AS NVARCHAR(50)) AS CustomerCode,
         CAST(NULL AS NVARCHAR(100)) AS CustomerName,
         CAST(NULL AS NVARCHAR(50)) AS VendorCode,
-        CAST(NULL AS NVARCHAR(100)) AS VendorName
+        CAST(NULL AS NVARCHAR(100)) AS VendorName,
+        CAST(NULL AS NVARCHAR(10)) AS LinkedDocType,
+        CAST(NULL AS INT) AS LinkedDocEntry,
+        CAST(NULL AS NVARCHAR(50)) AS LinkedDocNum,
+        CAST(NULL AS INT) AS LinkedLineNum
     FROM OWTR h
     INNER JOIN WTR1 l ON h.DocEntry = l.DocEntry
     LEFT JOIN OITM i ON i.ItemCode = l.ItemCode
@@ -408,7 +424,11 @@ FROM
         CAST(NULL AS NVARCHAR(50)) AS CustomerCode,
         CAST(NULL AS NVARCHAR(100)) AS CustomerName,
         CAST(NULL AS NVARCHAR(50)) AS VendorCode,
-        CAST(NULL AS NVARCHAR(100)) AS VendorName
+        CAST(NULL AS NVARCHAR(100)) AS VendorName,
+        CAST(NULL AS NVARCHAR(10)) AS LinkedDocType,
+        CAST(NULL AS INT) AS LinkedDocEntry,
+        CAST(NULL AS NVARCHAR(50)) AS LinkedDocNum,
+        CAST(NULL AS INT) AS LinkedLineNum
     FROM OIGN h
     INNER JOIN IGN1 l ON h.DocEntry = l.DocEntry
     LEFT JOIN OITM i ON i.ItemCode = l.ItemCode
@@ -438,10 +458,94 @@ FROM
         CAST(NULL AS NVARCHAR(50)) AS CustomerCode,
         CAST(NULL AS NVARCHAR(100)) AS CustomerName,
         CAST(NULL AS NVARCHAR(50)) AS VendorCode,
-        CAST(NULL AS NVARCHAR(100)) AS VendorName
+        CAST(NULL AS NVARCHAR(100)) AS VendorName,
+        CAST(NULL AS NVARCHAR(10)) AS LinkedDocType,
+        CAST(NULL AS INT) AS LinkedDocEntry,
+        CAST(NULL AS NVARCHAR(50)) AS LinkedDocNum,
+        CAST(NULL AS INT) AS LinkedLineNum
     FROM OIGE h
     INNER JOIN IGE1 l ON h.DocEntry = l.DocEntry
     LEFT JOIN OITM i ON i.ItemCode = l.ItemCode
+    WHERE l.ItemCode = '{safeItem}'
+
+    UNION ALL
+
+    SELECT
+        'INC' AS SourceType,
+        h.DocEntry AS DocEntry,
+        CAST(h.DocNum AS NVARCHAR(50)) AS DocNum,
+        COALESCE(l.CountDate, h.CountDate, h.PostDate, h.CreateDate) AS MovementDate,
+        l.LineNum AS LineNum,
+        l.ItemCode AS ItemCode,
+        COALESCE(NULLIF(l.ItemDesc, ''), i.ItemName) AS ItemName,
+        l.WhsCode AS MovementWarehouse,
+        CAST(NULL AS NVARCHAR(8)) AS SourceWarehouse,
+        CAST(NULL AS NVARCHAR(8)) AS TargetWarehouse,
+        CONVERT(DECIMAL(19, 6), ISNULL(l.CountQty, 0)) AS Quantity,
+        CASE
+            WHEN ISNULL(l.Difference, 0) > 0 THEN 'IN'
+            WHEN ISNULL(l.Difference, 0) < 0 THEN 'OUT'
+            ELSE 'COUNT'
+        END AS Direction,
+        CASE
+            WHEN h.Status = 'C' THEN 'CLOSED'
+            WHEN h.Status = 'O' THEN 'OPEN'
+            ELSE ISNULL(NULLIF(h.Status, ''), 'POSTED')
+        END AS DocumentStatus,
+        CAST(NULL AS NVARCHAR(50)) AS PartnerCode,
+        CAST(NULL AS NVARCHAR(100)) AS PartnerName,
+        CAST(NULL AS NVARCHAR(50)) AS CustomerCode,
+        CAST(NULL AS NVARCHAR(100)) AS CustomerName,
+        CAST(NULL AS NVARCHAR(50)) AS VendorCode,
+        CAST(NULL AS NVARCHAR(100)) AS VendorName,
+        CASE WHEN l.TargetType = 10000071 AND l.TargetEntr IS NOT NULL THEN 'IP' ELSE NULL END AS LinkedDocType,
+        TRY_CONVERT(INT, l.TargetEntr) AS LinkedDocEntry,
+        CAST(post.DocNum AS NVARCHAR(50)) AS LinkedDocNum,
+        TRY_CONVERT(INT, l.TargetLine) AS LinkedLineNum
+    FROM OINC h
+    INNER JOIN INC1 l ON h.DocEntry = l.DocEntry
+    LEFT JOIN OITM i ON i.ItemCode = l.ItemCode
+    LEFT JOIN OIQR post ON post.DocEntry = l.TargetEntr
+    WHERE l.ItemCode = '{safeItem}'
+
+    UNION ALL
+
+    SELECT
+        'IP' AS SourceType,
+        h.DocEntry AS DocEntry,
+        CAST(h.DocNum AS NVARCHAR(50)) AS DocNum,
+        COALESCE(h.DocDate, h.CountDate, h.CreateDate) AS MovementDate,
+        l.DocLineNum AS LineNum,
+        l.ItemCode AS ItemCode,
+        COALESCE(NULLIF(l.ItemName, ''), i.ItemName) AS ItemName,
+        l.WhsCode AS MovementWarehouse,
+        CASE WHEN ISNULL(l.Quantity, 0) < 0 THEN l.WhsCode ELSE CAST(NULL AS NVARCHAR(8)) END AS SourceWarehouse,
+        CASE WHEN ISNULL(l.Quantity, 0) > 0 THEN l.WhsCode ELSE CAST(NULL AS NVARCHAR(8)) END AS TargetWarehouse,
+        CONVERT(DECIMAL(19, 6), ABS(ISNULL(l.Quantity, 0))) AS Quantity,
+        CASE
+            WHEN ISNULL(l.Quantity, 0) > 0 THEN 'IN'
+            WHEN ISNULL(l.Quantity, 0) < 0 THEN 'OUT'
+            ELSE 'COUNT'
+        END AS Direction,
+        CASE
+            WHEN h.Status = 'C' THEN 'CLOSED'
+            WHEN h.Status = 'O' THEN 'OPEN'
+            ELSE ISNULL(NULLIF(h.Status, ''), 'POSTED')
+        END AS DocumentStatus,
+        CAST(NULL AS NVARCHAR(50)) AS PartnerCode,
+        CAST(NULL AS NVARCHAR(100)) AS PartnerName,
+        CAST(NULL AS NVARCHAR(50)) AS CustomerCode,
+        CAST(NULL AS NVARCHAR(100)) AS CustomerName,
+        CAST(NULL AS NVARCHAR(50)) AS VendorCode,
+        CAST(NULL AS NVARCHAR(100)) AS VendorName,
+        CASE WHEN l.BaseType = 1470000065 AND l.BaseEntry IS NOT NULL THEN 'INC' ELSE NULL END AS LinkedDocType,
+        TRY_CONVERT(INT, l.BaseEntry) AS LinkedDocEntry,
+        CAST(countDoc.DocNum AS NVARCHAR(50)) AS LinkedDocNum,
+        TRY_CONVERT(INT, l.BaseLine) AS LinkedLineNum
+    FROM OIQR h
+    INNER JOIN IQR1 l ON h.DocEntry = l.DocEntry
+    LEFT JOIN OITM i ON i.ItemCode = l.ItemCode
+    LEFT JOIN OINC countDoc ON countDoc.DocEntry = l.BaseEntry
     WHERE l.ItemCode = '{safeItem}'
 ) M
 WHERE 1=1 {whClause} {dateClause} {movementTypeClause}
@@ -472,7 +576,11 @@ ORDER BY M.MovementDate DESC, M.DocEntry DESC, M.LineNum DESC";
                             CustomerCode = ReadString(rs, "CustomerCode"),
                             CustomerName = ReadString(rs, "CustomerName"),
                             VendorCode = ReadString(rs, "VendorCode"),
-                            VendorName = ReadString(rs, "VendorName")
+                            VendorName = ReadString(rs, "VendorName"),
+                            LinkedDocType = ReadString(rs, "LinkedDocType"),
+                            LinkedDocEntry = ReadNullableInt(rs, "LinkedDocEntry"),
+                            LinkedDocNum = ReadString(rs, "LinkedDocNum"),
+                            LinkedLineNum = ReadNullableInt(rs, "LinkedLineNum")
                         });
                         rs.MoveNext();
                     }
@@ -1092,7 +1200,7 @@ ORDER BY lastDoc.DocDate DESC, lastDoc.DocEntry DESC, a.ItemCode, a.WarehouseCod
 
         var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "SO", "DLV", "TRQ", "TRF", "GR", "GI"
+            "SO", "DLV", "TRQ", "TRF", "GR", "GI", "INC", "IP"
         };
 
         var values = movementTypes
@@ -1308,7 +1416,7 @@ public class InventoryMovementResponse
 
 public class InventoryMovementRow
 {
-    public string SourceType { get; init; } = string.Empty; // SO, DLV, TRQ, TRF, GR, GI
+    public string SourceType { get; init; } = string.Empty; // SO, DLV, TRQ, TRF, GR, GI, INC, IP
     public string DocType { get; init; } = string.Empty; // Alias for frontend drilldown routing.
     public int DocEntry { get; init; }
     public string DocNum { get; init; } = string.Empty;
@@ -1322,7 +1430,7 @@ public class InventoryMovementRow
     public string? FromWarehouse => SourceWarehouse;
     public string? ToWarehouse => TargetWarehouse;
     public decimal Quantity { get; init; }
-    public string Direction { get; init; } = string.Empty; // IN, OUT
+    public string Direction { get; init; } = string.Empty; // IN, OUT, COUNT
     public string? DocumentStatus { get; init; }
     public string? PartnerCode { get; init; }
     public string? PartnerName { get; init; }
@@ -1330,6 +1438,10 @@ public class InventoryMovementRow
     public string? CustomerName { get; init; }
     public string? VendorCode { get; init; }
     public string? VendorName { get; init; }
+    public string? LinkedDocType { get; init; }
+    public int? LinkedDocEntry { get; init; }
+    public string? LinkedDocNum { get; init; }
+    public int? LinkedLineNum { get; init; }
 }
 
 public class InventoryDeliveryAggregateResponse

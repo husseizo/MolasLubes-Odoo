@@ -164,11 +164,13 @@ public class SapLiquiMolyDocumentReader
             "DLV" or "ODLN" or
             "TRQ" or "OWTQ" or
             "TRF" or "OWTR" or
+            "INC" or "OINC" or
+            "IP" or "OIQR" or
             "GR" or "OIGN" or "OPDN" or
             "GI" or "OIGE" or
             "PO" or "OPOR" => normalized,
             _ => throw new ArgumentException(
-                $"Unsupported docType '{docType}'. Supported values: SO/ORDR, DLV/ODLN, TRQ/OWTQ, TRF/OWTR, GR/OIGN, GI/OIGE, PO/OPOR.",
+                $"Unsupported docType '{docType}'. Supported values: SO/ORDR, DLV/ODLN, TRQ/OWTQ, TRF/OWTR, INC/OINC, IP/OIQR, GR/OIGN, GI/OIGE, PO/OPOR.",
                 nameof(docType))
         };
     }
@@ -190,6 +192,14 @@ public class SapLiquiMolyDocumentReader
         "TRF" or "OWTR" => new[]
         {
             new DocumentCandidate("TRF", "MolasLubes", "OWTR", "WTR1", true, false, PartnerRole.None)
+        },
+        "INC" or "OINC" => new[]
+        {
+            new DocumentCandidate("INC", "MolasLubes", "OINC", "INC1", false, false, PartnerRole.None)
+        },
+        "IP" or "OIQR" => new[]
+        {
+            new DocumentCandidate("IP", "MolasLubes", "OIQR", "IQR1", false, false, PartnerRole.None)
         },
         "PO" or "OPOR" => new[]
         {
@@ -217,6 +227,73 @@ public class SapLiquiMolyDocumentReader
 
     private static string BuildHeaderSql(DocumentCandidate candidate, int docEntry)
     {
+        if (candidate.HeaderTable == "OINC")
+        {
+            return $@"
+SELECT TOP 1
+    CAST(h.DocNum AS NVARCHAR(50)) AS DocNum,
+    COALESCE(h.CountDate, h.PostDate, h.CreateDate) AS DocDate,
+    CAST(NULL AS DATETIME) AS DueDate,
+    CASE
+        WHEN h.Status = 'C' THEN 'CLOSED'
+        WHEN h.Status = 'O' THEN 'OPEN'
+        ELSE ISNULL(NULLIF(h.Status, ''), 'POSTED')
+    END AS DocumentStatus,
+    CONVERT(DECIMAL(19, 6), 0) AS Total,
+    CAST(NULL AS NVARCHAR(50)) AS CardCode,
+    CAST(NULL AS NVARCHAR(200)) AS CardName,
+    CAST(NULL AS NVARCHAR(50)) AS PartnerCode,
+    CAST(NULL AS NVARCHAR(200)) AS PartnerName,
+    CAST(NULL AS NVARCHAR(50)) AS CustomerCode,
+    CAST(NULL AS NVARCHAR(200)) AS CustomerName,
+    CAST(NULL AS NVARCHAR(50)) AS VendorCode,
+    CAST(NULL AS NVARCHAR(200)) AS VendorName,
+    CAST(NULL AS NVARCHAR(8)) AS FromWarehouse,
+    (
+        SELECT TOP 1 NULLIF(x.WhsCode, '')
+        FROM {candidate.LineTable} x
+        WHERE x.DocEntry = h.DocEntry
+        ORDER BY x.LineNum
+    ) AS ToWarehouse,
+    u.USER_CODE AS CreatedBy,
+    h.UpdateDate AS LastModifiedDate,
+    h.Remarks AS Comments
+FROM {candidate.HeaderTable} h
+LEFT JOIN OUSR u ON u.USERID = h.UserSign
+WHERE h.DocEntry = {docEntry}";
+        }
+
+        if (candidate.HeaderTable == "OIQR")
+        {
+            return $@"
+SELECT TOP 1
+    CAST(h.DocNum AS NVARCHAR(50)) AS DocNum,
+    COALESCE(h.DocDate, h.CountDate, h.CreateDate) AS DocDate,
+    h.DocDueDate AS DueDate,
+    CASE
+        WHEN h.Status = 'C' THEN 'CLOSED'
+        WHEN h.Status = 'O' THEN 'OPEN'
+        ELSE ISNULL(NULLIF(h.Status, ''), 'POSTED')
+    END AS DocumentStatus,
+    CONVERT(DECIMAL(19, 6), ISNULL(h.DocTotal, 0)) AS Total,
+    CAST(NULL AS NVARCHAR(50)) AS CardCode,
+    CAST(NULL AS NVARCHAR(200)) AS CardName,
+    CAST(NULL AS NVARCHAR(50)) AS PartnerCode,
+    CAST(NULL AS NVARCHAR(200)) AS PartnerName,
+    CAST(NULL AS NVARCHAR(50)) AS CustomerCode,
+    CAST(NULL AS NVARCHAR(200)) AS CustomerName,
+    CAST(NULL AS NVARCHAR(50)) AS VendorCode,
+    CAST(NULL AS NVARCHAR(200)) AS VendorName,
+    CAST(NULL AS NVARCHAR(8)) AS FromWarehouse,
+    CAST(NULL AS NVARCHAR(8)) AS ToWarehouse,
+    u.USER_CODE AS CreatedBy,
+    h.UpdateDate AS LastModifiedDate,
+    h.Comments AS Comments
+FROM {candidate.HeaderTable} h
+LEFT JOIN OUSR u ON u.USERID = h.UserSign
+WHERE h.DocEntry = {docEntry}";
+        }
+
         var partnerSql = BuildHeaderPartnerSql(candidate);
         var warehouseSql = BuildHeaderWarehouseSql(candidate);
         var totalSql = candidate.HasPricing
@@ -268,6 +345,60 @@ WHERE h.DocEntry = {docEntry}";
 
     private static string BuildLineSql(DocumentCandidate candidate, int docEntry)
     {
+        if (candidate.HeaderTable == "OINC")
+        {
+            return $@"
+SELECT
+    l.LineNum AS LineNum,
+    l.ItemCode AS ItemCode,
+    COALESCE(NULLIF(l.ItemDesc, ''), i.ItemName) AS ItemName,
+    NULLIF(i.ItemCode, '') AS ArticleNumber,
+    CONVERT(DECIMAL(19, 6), ISNULL(l.CountQty, 0)) AS Quantity,
+    NULLIF(l.UomCode, '') AS UnitOfMeasure,
+    CAST(NULL AS DECIMAL(19, 6)) AS UnitPrice,
+    CAST(NULL AS DECIMAL(19, 6)) AS LineTotal,
+    NULLIF(l.WhsCode, '') AS Warehouse,
+    CAST(NULL AS NVARCHAR(8)) AS FromWarehouse,
+    NULLIF(l.WhsCode, '') AS ToWarehouse,
+    CASE
+        WHEN h.Status = 'C' OR l.LineStatus = 'C' THEN 'CLOSED'
+        WHEN h.Status = 'O' OR l.LineStatus = 'O' THEN 'OPEN'
+        ELSE ISNULL(NULLIF(l.LineStatus, ''), ISNULL(NULLIF(h.Status, ''), 'POSTED'))
+    END AS LineStatus
+FROM {candidate.LineTable} l
+INNER JOIN {candidate.HeaderTable} h ON h.DocEntry = l.DocEntry
+LEFT JOIN OITM i ON i.ItemCode = l.ItemCode
+WHERE l.DocEntry = {docEntry}
+ORDER BY l.LineNum";
+        }
+
+        if (candidate.HeaderTable == "OIQR")
+        {
+            return $@"
+SELECT
+    l.DocLineNum AS LineNum,
+    l.ItemCode AS ItemCode,
+    COALESCE(NULLIF(l.ItemName, ''), i.ItemName) AS ItemName,
+    NULLIF(i.ItemCode, '') AS ArticleNumber,
+    CONVERT(DECIMAL(19, 6), ABS(ISNULL(l.Quantity, 0))) AS Quantity,
+    NULLIF(l.UomCode, '') AS UnitOfMeasure,
+    CONVERT(DECIMAL(19, 6), ISNULL(l.Price, 0)) AS UnitPrice,
+    CONVERT(DECIMAL(19, 6), ISNULL(l.DocTotal, 0)) AS LineTotal,
+    NULLIF(l.WhsCode, '') AS Warehouse,
+    CASE WHEN ISNULL(l.Quantity, 0) < 0 THEN NULLIF(l.WhsCode, '') ELSE CAST(NULL AS NVARCHAR(8)) END AS FromWarehouse,
+    CASE WHEN ISNULL(l.Quantity, 0) > 0 THEN NULLIF(l.WhsCode, '') ELSE CAST(NULL AS NVARCHAR(8)) END AS ToWarehouse,
+    CASE
+        WHEN h.Status = 'C' THEN 'CLOSED'
+        WHEN h.Status = 'O' THEN 'OPEN'
+        ELSE ISNULL(NULLIF(h.Status, ''), 'POSTED')
+    END AS LineStatus
+FROM {candidate.LineTable} l
+INNER JOIN {candidate.HeaderTable} h ON h.DocEntry = l.DocEntry
+LEFT JOIN OITM i ON i.ItemCode = l.ItemCode
+WHERE l.DocEntry = {docEntry}
+ORDER BY l.DocLineNum";
+        }
+
         var unitPriceSql = candidate.HasPricing
             ? "CONVERT(DECIMAL(19, 6), ISNULL(l.Price, 0))"
             : "CAST(NULL AS DECIMAL(19, 6))";
