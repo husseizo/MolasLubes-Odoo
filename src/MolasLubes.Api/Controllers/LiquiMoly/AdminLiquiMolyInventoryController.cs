@@ -27,6 +27,7 @@ public class AdminLiquiMolyInventoryController : ControllerBase
     public IActionResult GetStock(
         [FromQuery] string actorSapUserCode = "",
         [FromQuery] string profile = DefaultProfile,
+        [FromQuery] string? brand = null,
         [FromQuery] string? search = null,
         [FromQuery] string? warehouseCode = null,
         [FromQuery] int skip = 0,
@@ -42,7 +43,7 @@ public class AdminLiquiMolyInventoryController : ControllerBase
 
         try
         {
-            var data = _reader.GetStock(profile, search, warehouseCode, skip, take, includeZero, onlyLiquiMoly);
+            var data = _reader.GetStock(profile, brand, search, warehouseCode, skip, take, includeZero, onlyLiquiMoly);
             return Ok(new
             {
                 data.AsOfUtc,
@@ -65,6 +66,7 @@ public class AdminLiquiMolyInventoryController : ControllerBase
         string itemCode,
         [FromQuery] string actorSapUserCode = "",
         [FromQuery] string profile = DefaultProfile,
+        [FromQuery] string? brand = null,
         [FromQuery] string? warehouseCode = null)
     {
         var auth = AuthorizeViewer(actorSapUserCode);
@@ -75,7 +77,7 @@ public class AdminLiquiMolyInventoryController : ControllerBase
 
         try
         {
-            var data = _reader.GetStockForItem(profile, itemCode.Trim(), warehouseCode);
+            var data = _reader.GetStockForItem(profile, brand, itemCode.Trim(), warehouseCode);
             return Ok(data);
         }
         catch (Exception ex)
@@ -89,6 +91,7 @@ public class AdminLiquiMolyInventoryController : ControllerBase
         string itemCode,
         [FromQuery] string actorSapUserCode = "",
         [FromQuery] string profile = DefaultProfile,
+        [FromQuery] string? brand = null,
         [FromQuery] DateOnly? dateFrom = null,
         [FromQuery] DateOnly? dateTo = null,
         [FromQuery] string? warehouse = null,
@@ -114,6 +117,7 @@ public class AdminLiquiMolyInventoryController : ControllerBase
 
             var data = _reader.GetMovements(
                 profile,
+                brand,
                 itemCode.Trim(),
                 dateFrom,
                 dateTo,
@@ -137,6 +141,7 @@ public class AdminLiquiMolyInventoryController : ControllerBase
     public IActionResult GetDeliveries(
         [FromQuery] string actorSapUserCode = "",
         [FromQuery] string profile = DefaultProfile,
+        [FromQuery] string? brand = null,
         [FromQuery] DateOnly? dateFrom = null,
         [FromQuery] DateOnly? dateTo = null,
         [FromQuery] string? warehouse = null,
@@ -154,6 +159,7 @@ public class AdminLiquiMolyInventoryController : ControllerBase
         {
             var data = _reader.GetDeliveryAggregates(
                 profile,
+                brand,
                 dateFrom,
                 dateTo,
                 warehouse,
@@ -188,6 +194,7 @@ public class AdminLiquiMolyInventoryController : ControllerBase
     public IActionResult GetStockChanges(
         [FromQuery] string actorSapUserCode = "",
         [FromQuery] string profile = DefaultProfile,
+        [FromQuery] string? brand = null,
         [FromQuery] long sinceVersion = 0,
         [FromQuery] string? search = null,
         [FromQuery] string? warehouseCode = null,
@@ -202,7 +209,7 @@ public class AdminLiquiMolyInventoryController : ControllerBase
 
         try
         {
-            var data = _reader.GetChanges(profile, sinceVersion, search, warehouseCode, includeZero, onlyLiquiMoly);
+            var data = _reader.GetChanges(profile, brand, sinceVersion, search, warehouseCode, includeZero, onlyLiquiMoly);
             return Ok(data);
         }
         catch (Exception ex)
@@ -215,6 +222,7 @@ public class AdminLiquiMolyInventoryController : ControllerBase
     public IActionResult GetStockSummary(
         [FromQuery] string actorSapUserCode = "",
         [FromQuery] string profile = DefaultProfile,
+        [FromQuery] string? brand = null,
         [FromQuery] string? warehouseCode = null,
         [FromQuery] bool includeZero = false,
         [FromQuery] bool onlyLiquiMoly = true)
@@ -224,7 +232,7 @@ public class AdminLiquiMolyInventoryController : ControllerBase
 
         try
         {
-            var data = _reader.GetSummary(profile, warehouseCode, includeZero, onlyLiquiMoly);
+            var data = _reader.GetSummary(profile, brand, warehouseCode, includeZero, onlyLiquiMoly);
             return Ok(data);
         }
         catch (Exception ex)

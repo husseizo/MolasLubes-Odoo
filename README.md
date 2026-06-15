@@ -1,185 +1,414 @@
-# MolasLubes
+# MolasLubes Monorepo
 
-A C# / ASP.NET Core API that bridges SAP B1 → local SQL Server cache → Neon PostgreSQL → Odoo.
+This repository is the working system around Molas LUBES operations across SAP Business One, SQL Server cache, Neon PostgreSQL, Odoo, Liqui Moly catalog flows, AutoHub/Germax enrichment, admin web, and supervisor mobile.
 
----
+The center of gravity is the ASP.NET Core backend in `src/`, but the repo also contains the companion frontend and integration apps that talk to it.
 
-## Table of Contents
+## What Is In This Repo
 
-1. [Architecture Overview](#architecture-overview)
-2. [Data Flow](#data-flow)
-3. [Liqui-Moly Product Cache Enrichment](#liqui-moly-product-cache-enrichment)
-   - [How it works](#how-it-works)
-   - [Configuration](#configuration)
-   - [Running the enrichment job](#running-the-enrichment-job)
-   - [API endpoints](#api-endpoints)
-4. [Admin Endpoints](#admin-endpoints)
-5. [Development Setup](#development-setup)
-6. [Security & Configuration](#security--configuration)
+### Core backend
 
----
+- `src/MolasLubes.Api`
+  ASP.NET Core API used by admin tools, mobile flows, sync triggers, auth, notifications, Liqui Moly stock, transfers, and replenishment.
+- `src/MolasLubes.Application`
+  DTOs and application contracts used by the API and infrastructure services.
+- `src/MolasLubes.Domain`
+  Domain entities for cache, Neon, orders, invoices, and related models.
+- `src/MolasLubes.Infrastructure`
+  SAP B1 DI API readers/writers, EF Core persistence, sync services, Quartz jobs, scrapers, notifications, and security services.
 
-## Architecture Overview
+### Companion apps
 
-```
-SAP B1 (DiApi)
-    │
-    ▼
-MolasCacheDb (SQL Server)   ←── Liqui-Moly scraper enrichment
-    │
-    ▼
-NeonDb (PostgreSQL)          ←── Liqui-Moly scraper enrichment
-    │
-    ▼
-Odoo
-```
+- `molas-admin-web`
+  Next.js admin frontend.
+- `molas_supervisor_mobile`
+  Flutter supervisor mobile app for alerts, approvals, and Liqui Moly replenishment workflows.
+- `MolasLubesOdoo.Api`
+  Smaller ASP.NET Core service focused on cache and Neon invoice-style flows.
+- `odoo_addon/molas_sap_integration`
+  Odoo addon that exposes REST endpoints for delivery, invoice, and payment ingestion.
+- `sap-odoo-bridge`
+  Node.js bridge for SAP Service Layer style real-time webhook forwarding to Odoo.
 
----
+### Supporting material
 
-## Data Flow
+- `tests/MolasLubes.Tests`
+  Unit tests without the Windows-only SAP COM dependency.
+- `docs`, `QUICK_START.md`, `ARCHITECTURE_*.md`, `*_SUMMARY.md`
+  Project notes, roadmaps, and operational documents.
 
-| Layer | Source | Destination | Services |
-|-------|--------|-------------|----------|
-| 1 | SAP B1 | Cache DB (SQL Server) | `SapProductReader` → `ProductCacheService` |
-| 2 | Cache DB | Neon DB (PostgreSQL) | `ProductNeonSyncService` |
-| 3 | Neon DB | Odoo | `OdooDeliveryPushService` etc. |
-| ∞ | liqui-moly.com | Cache + Neon | `LiquiMolyProductScrapeJob` |
+## High-Level Architecture
 
----
-
-## Liqui-Moly Product Cache Enrichment
-
-### How it works
-
-The `LiquiMolyProductScrapeJob` Quartz job runs the full enrichment pipeline:
-
-1. **Reads** all distinct active `ItemCode` values from `CacheProducts` (SQL Server).  
-   Each `ItemCode` is treated as a Liqui-Moly article number (e.g. `"20001"`).
-
-2. **Splits** the article numbers into configurable batches (`BatchSize`, default 50).
-
-3. For each batch, calls **`LiquiMolyProductScraperService.ScrapeByArticleNumbersAsync`**:
-   - *Phase 1* — per-article Magento 2 catalog search (`/en/catalogsearch/result/?q=<sku>`)
-     to find the product URL without hitting bot-protected category listing pages.
-   - *Phase 2* — detail-page enrichment: visits the product URL, extracts name,
-     description, spec grade, packaging sizes, images, approvals, specs table, and
-     PDF download links.
-
-4. **Upserts** the scraped data into:
-   - `CacheLiquiMolyProducts` (SQL Server) via `LiquiMolyCacheSyncService`
-   - `NeonLiquiMolyProducts` (PostgreSQL) via `LiquiMolyNeonSyncService`
-
-5. After all batches complete, **marks stale products inactive** in both stores
-   (products whose article number was not returned by the scraper in this run).
-
-Batches are saved incrementally so partial progress is not lost if the job is
-cancelled or fails midway.
-
-### Configuration
-
-Add or update the `LiquiMolyScraper` section in `appsettings.json`
-(or `appsettings.Development.json` for local development):
-
-```json
-"LiquiMolyScraper": {
-  "BaseUrl": "https://www.liqui-moly.com",
-  "DelayBetweenRequestsMs": 1500,
-  "DelayBetweenCategoriesMs": 3000,
-  "RequestTimeoutSeconds": 30,
-  "BatchSize": 50,
-  "MaxConcurrency": 1,
-  "OwwApiPrefix": ""
-}
+```text
+SAP Business One
+  |
+  |  DI API readers/writers
+  v
+SQL Server cache databases
+  - MolasCacheDb
+  - Live2021CacheDb
+  |
+  |  EF Core + sync services
+  v
+Neon PostgreSQL databases
+  - MolasLUBES
+  - Parts_Catalog / AutoHub
+  |
+  |  outbound sync / API reads
+  v
+Odoo, Admin Web, Supervisor Mobile
 ```
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `BaseUrl` | `https://www.liqui-moly.com` | Root URL for Liqui-Moly website (no trailing slash). |
-| `DelayBetweenRequestsMs` | `1500` | Milliseconds between page requests (polite crawling). |
-| `DelayBetweenCategoriesMs` | `3000` | Milliseconds between category-level pauses. |
-| `RequestTimeoutSeconds` | `30` | HTTP request timeout in seconds. |
-| `BatchSize` | `50` | Article numbers to scrape per batch before saving. Smaller values reduce peak memory and allow incremental saves. |
-| `MaxConcurrency` | `1` | Max parallel HTTP requests during detail-page enrichment. Keep at `1` (sequential) to avoid bot detection. |
-| `OwwApiPrefix` | `""` | Optional hard-coded OWW API prefix for the oil-guide fallback. Leave empty to auto-detect. |
+There are really two main operating modes:
 
-### Running the enrichment job
+- `MolasLubes`
+  The primary profile for Molas LUBES SAP, cache, Neon, Liqui Moly stock, deliveries, transfers, and replenishment.
+- `AutoHub`
+  A second profile used for AutoHub and Germax related inventory/catalog flows.
 
-**Scheduled:** The job runs automatically once daily at **02:00 UTC** (configured in `Program.cs`).
+## How The Main Backend Works
 
-**Manual trigger via HTTP:**
+The main app starts in [`src/MolasLubes.Api/Program.cs`](src/MolasLubes.Api/Program.cs).
 
-```bash
-# Requires the API key header
-curl -X POST https://<host>/api/admin/liquimoly/scrape \
-     -H "X-API-KEY: <your-api-key>"
+On startup it does four big things:
+
+1. Configures logging, auth, Swagger/OpenAPI, and JSON camelCase output.
+2. Registers EF Core contexts for SQL Server and PostgreSQL.
+3. Registers SAP DI API readers/writers, cache services, Neon sync services, Odoo push services, Liqui Moly services, notification services, and scrapers.
+4. Registers Quartz jobs that keep the data moving in the background.
+
+## Main Data Pipelines
+
+### 1. SAP -> Cache
+
+This is the first layer. SAP B1 is read through DI API services such as:
+
+- `SapProductReader`
+- `SapCustomerReader`
+- `SapSalesOrderReader`
+- `SapDeliveryReader`
+- `SapInvoiceReader`
+- `SapPaymentReader`
+
+Those feeds are stored into SQL Server cache tables by services such as:
+
+- `ProductCacheService`
+- `CustomerCacheService`
+- `DeliveryCacheService`
+- `SalesOrderCacheService`
+- `InvoiceCacheService`
+- `PaymentCacheService`
+
+This gives the system a local operational read model instead of hitting SAP for every request.
+
+### 2. Cache -> Neon
+
+The cache layer is then replicated into Neon PostgreSQL by services such as:
+
+- `NeonCustomerSyncService`
+- `NeonDeliverySyncService`
+- `NeonInvoiceSyncService`
+- `NeonPaymentSyncService`
+- `NeonSalesOrderSyncService`
+- `NeonSalesOrderLineSyncService`
+- `ProductNeonSyncService`
+- `PriceListNeonSyncService`
+
+This is the second layer and acts as the cleaner integration/read layer for downstream systems.
+
+### 3. Neon -> Odoo
+
+Odoo-facing pushes are handled by:
+
+- `OdooDeliveryPushService`
+- `OdooInvoicePushService`
+- `OdooPaymentPushService`
+
+These are the final outbound bridge to Odoo.
+
+## Liqui Moly Features
+
+Liqui Moly is one of the most feature-rich parts of this repo.
+
+### Catalog enrichment
+
+Liqui Moly product metadata is scraped from the public catalog by:
+
+- `LiquiMolyProductScraperService`
+- `LiquiMolyCacheSyncService`
+- `LiquiMolyNeonSyncService`
+- `LiquiMolyProductScrapeJob`
+
+This enriches article numbers with names, descriptions, barcodes, content sections, files, and overview metadata.
+
+### Inventory and movement timeline
+
+The Liqui Moly inventory APIs are driven mainly by:
+
+- [`AdminLiquiMolyInventoryController`](src/MolasLubes.Api/Controllers/LiquiMoly/AdminLiquiMolyInventoryController.cs)
+- [`SapLiquiMolyInventoryReader`](src/MolasLubes.Infrastructure/Integrations/SapB1/DiApi/SapLiquiMolyInventoryReader.cs)
+- [`SapLiquiMolyDocumentReader`](src/MolasLubes.Infrastructure/Integrations/SapB1/DiApi/SapLiquiMolyDocumentReader.cs)
+
+These power:
+
+- stock list
+- stock summary
+- stock change polling
+- movement timeline
+- delivery aggregates
+- document drilldown
+
+The movement timeline currently supports major SAP document families including:
+
+- `SO / ORDR`
+- `DLV / ODLN`
+- `TRQ / OWTQ`
+- `TRF / OWTR`
+- `GR / OIGN`
+- `GI / OIGE`
+- `INC / OINC`
+- `IP / OIQR`
+
+### Transfers and replenishment
+
+Liqui Moly transfer and replenishment flows are handled by:
+
+- `LiquiMolyTransferService`
+- `LiquiMolyReplenishmentService`
+- `LiquiMolyReplenishmentExecutionService`
+- `SapInventoryTransferRequestWriter`
+- `SapInterCompanySalesOrderWriter`
+- `SapPurchaseOrderWriter`
+- `SapGoodsReceiptWriter`
+- `SapGoodsIssueWriter`
+
+This area includes:
+
+- demand analysis
+- source mapping
+- inter-company document creation
+- transfer request creation
+- warehouse document drilldown
+- APNS push notifications for approval flows
+
+## AutoHub and Germax
+
+The second profile adds a separate catalog flow for AutoHub and Germax:
+
+- `SapAutoHubSeedReader`
+- `GermaxCacheSyncService`
+- `GermaxAutoHubSyncService`
+- `GermaxProductScraperService`
+- `AutoHubSapSeedSyncJob`
+- `GermaxProductEnrichmentJob`
+- `GermaxRetryFailedJob`
+
+These use:
+
+- `Live2021CacheDbContext`
+- `AutoHubDbContext`
+
+## Security and Auth
+
+The main backend uses two protection styles:
+
+- API key security for protected admin/integration routes
+- JWT auth for user/session-based flows
+
+Relevant pieces:
+
+- `ApiKeyAttribute`
+- `ApiKeyOptions`
+- `JwtService`
+- `RefreshTokenStore`
+- `SapUserAuthService`
+- `LiquiMolyRoleService`
+
+Push notifications use APNS via:
+
+- `ApnsNotificationSender`
+- `LiquiMolyPushNotificationService`
+
+## Major Controllers
+
+### General backend
+
+- `AuthController`
+- `AuthAltController`
+- `CustomersController`
+- `ProductsController`
+- `SalesOrdersController`
+- `InvoicesController`
+- `StockController`
+- `PaymentsCommandController`
+- `NotificationsController`
+- `AdminSyncController`
+- `AdminItemsController`
+
+### Liqui Moly
+
+- `LiquiMolyProductsController`
+- `LiquiMolyReplenishmentController`
+- `AdminLiquiMolyInventoryController`
+- `AdminLiquiMolyDocumentsController`
+- `AdminLiquiMolyTransfersController`
+- `AdminLiquiMolyReplenishmentController`
+
+### AutoHub / Neon
+
+- `AutoHubAdminController`
+- `AutoHubGermaxProductsController`
+- `AdminNeonSyncController`
+- `NeonProductsController`
+- `NeonPriceListsController`
+
+## Major Quartz Jobs
+
+These jobs keep the system alive in the background.
+
+### SAP -> Cache
+
+- `ProductFullSyncJob`
+- `CustomerDeltaSyncJob`
+- `SalesOrderSyncJob`
+- `SapOpenOrdersSyncJob`
+- `DeliveryDeltaSyncJob`
+- `InvoiceSyncJob`
+- `PaymentSyncJob`
+
+### Cache -> Neon
+
+- `NeonCustomerSyncJob`
+- `NeonDeliverySyncJob`
+- `NeonInvoiceSyncJob`
+- `NeonPaymentSyncJob`
+- `NeonProductDeltaSyncJob`
+- `NeonSalesOrderSyncJob`
+- `NeonSalesOrderLineSyncJob`
+- `NeonPriceListSyncJob`
+
+### Neon -> Odoo
+
+- `OdooDeliveryPushJob`
+- `OdooInvoicePushJob`
+- `OdooPaymentPushJob`
+
+### Catalog / enrichment / profile B
+
+- `LiquiMolyProductScrapeJob`
+- `AutoHubSapSeedSyncJob`
+- `GermaxProductEnrichmentJob`
+- `GermaxRetryFailedJob`
+
+### Background service
+
+- `NeonKeepAliveService`
+
+## Request Flow Examples
+
+### Standard sync flow
+
+```text
+SAP document
+  -> SAP reader
+  -> cache service writes SQL Server cache
+  -> Neon sync service copies to PostgreSQL
+  -> Odoo push service sends to Odoo
 ```
 
-The response is immediate (`202 Accepted`-style); the job runs asynchronously in the
-Quartz scheduler background thread.
+### Liqui Moly stock screen
 
-### API endpoints
+```text
+Supervisor mobile / admin web
+  -> /api/admin/liquimoly/inventory/*
+  -> SapLiquiMolyInventoryReader
+  -> SAP stock + movement documents
+  -> optional cache metadata merge from CacheLiquiMolyProducts
+```
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET`  | `/api/liquimoly/products` | List scraped products (supports `?search=`, `?category=`, `?activeOnly=`, `?take=`). |
-| `GET`  | `/api/liquimoly/products/{articleNumber}` | Get full detail for one product including all JSON fields deserialised. |
-| `GET`  | `/api/liquimoly/products/categories` | List distinct active categories. |
-| `POST` | `/api/admin/liquimoly/scrape` | Manually trigger the scrape job (protected by API key). |
+### Liqui Moly replenishment approval flow
 
----
+```text
+mobile approval
+  -> replenishment service
+  -> SAP document creation
+  -> transfer / request / SO / PO / GR / GI chain as needed
+  -> APNS notification + timeline drilldown
+```
 
-## Admin Endpoints
+## Databases
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/admin/sync/products/full` | Full SAP → Cache product sync. |
-| `POST` | `/api/admin/neon-sync/products` | Cache → Neon product delta sync. |
-| `POST` | `/api/admin/liquimoly/scrape` | Trigger Liqui-Moly scrape job. |
+### SQL Server
 
----
+- `MolasCacheDb`
+  Primary cache/read model for Molas LUBES.
+- `Live2021CacheDb`
+  AutoHub-side cache database.
 
-## Development Setup
+### PostgreSQL / Neon
+
+- `NeonDbContext`
+  Main Neon database for Molas flows.
+- `AutoHubDbContext`
+  AutoHub / Germax Neon database.
+
+### SAP
+
+SAP is accessed through the SAP Business One DI API and remains the system of record for core ERP documents.
+
+## Running The Main API
 
 ### Prerequisites
 
+- Windows
 - .NET 10 SDK
-- SQL Server (local or Docker) — connection string: `MolasCacheDb`
-- PostgreSQL / Neon — connection string: `NeonDb`
-- **Windows only** for the SAP B1 DiApi COM reference (SAPbobsCOM)
+- SQL Server access
+- PostgreSQL / Neon access
+- SAP Business One DI API installed
 
-### Running locally
+### Start the main API
 
-```bash
-cd src/MolasLubes.Api
-dotnet run
+```powershell
+dotnet run --project src/MolasLubes.Api/MolasLubes.Api.csproj
 ```
 
-Database migrations run automatically on startup (EF Core `Database.Migrate()`).
+### Run tests
 
-### Running tests
-
-```bash
+```powershell
 dotnet test tests/MolasLubes.Tests/MolasLubes.Tests.csproj
 ```
 
-> **Note:** The test project only references `MolasLubes.Domain` to avoid the
-> Windows-only COM dependency in `MolasLubes.Infrastructure`.  Unit tests cover
-> entity defaults, JSON field round-trips, mapping logic, and batch-split arithmetic.
+## Important Operational Notes
 
----
+- `src/MolasLubes.Api/Program.cs` is the single best entry point for understanding what the app does.
+- Most business movement in this system is asynchronous and job-driven, not request-driven.
+- Liqui Moly stock screens mix live SAP reads with cache metadata.
+- SAP access is Windows-only because of COM-based DI API usage.
+- Some areas are profile-specific. `MolasLubes` and `AutoHub` do not use the same DB pair.
 
-## Security & Configuration
+## Security Note
 
-> **⚠️ Credentials previously committed to this repository must be rotated immediately.**  
-> See [docs/configuration.md](docs/configuration.md) for the full list and rotation instructions.
+This repository should be treated as sensitive operational code.
 
-The `appsettings.json` and `appsettings.Development.json` files in this repository
-contain only placeholder values (`CHANGE_ME_USE_USER_SECRETS_OR_ENV_VAR`).
-**Never** replace these placeholders with real secrets and commit the result.
+- Do not commit new secrets, tokens, private keys, or production connection strings.
+- If any real secret has been committed at any point, rotate it.
+- Prefer environment variables, user secrets, or secret managers for deployments.
 
-Refer to [docs/configuration.md](docs/configuration.md) for:
+## Where To Start If You Are New
 
-- All required configuration keys and their descriptions
-- How to supply secrets via **.NET User Secrets** (recommended for local dev)
-- How to supply secrets via **environment variables** (CI/CD and production)
-- How to use a git-ignored **local override file** as an alternative
+If you want to understand the system fast, read in this order:
+
+1. [`src/MolasLubes.Api/Program.cs`](src/MolasLubes.Api/Program.cs)
+2. [`src/MolasLubes.Infrastructure/Persistence/MolasCacheDbContext.cs`](src/MolasLubes.Infrastructure/Persistence/MolasCacheDbContext.cs)
+3. [`src/MolasLubes.Infrastructure/Persistence/NeonDbContext.cs`](src/MolasLubes.Infrastructure/Persistence/NeonDbContext.cs)
+4. One controller from the area you care about
+5. The matching service or SAP reader/writer
+6. The matching Quartz job if the feature is sync-driven
+
+Good first files by topic:
+
+- inventory: [`SapLiquiMolyInventoryReader`](src/MolasLubes.Infrastructure/Integrations/SapB1/DiApi/SapLiquiMolyInventoryReader.cs)
+- replenishment: [`LiquiMolyReplenishmentService`](src/MolasLubes.Infrastructure/Services/LiquiMolyReplenishment/LiquiMolyReplenishmentService.cs)
+- stock sync: [`DeliveryDeltaSyncJob`](src/MolasLubes.Infrastructure/Scheduling/Jobs/DeliveryDeltaSyncJob.cs)
+- Odoo push: [`OdooDeliveryPushService`](src/MolasLubes.Infrastructure/Services/Sync/OdooDeliveryPushService.cs)
+- product scrape: [`LiquiMolyProductScraperService`](src/MolasLubes.Infrastructure/Integrations/LiquiMoly/LiquiMolyProductScraperService.cs)

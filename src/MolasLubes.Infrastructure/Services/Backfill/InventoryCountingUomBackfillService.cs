@@ -58,13 +58,20 @@ public class InventoryCountingUomBackfillService
         foreach (var code in itemCodes)
         {
             var result = _writer.Preflight(code, targetUomEntry.Value);
+            var diagnostics = result.Outcome == ItemUomOutcome.FAIL_BROKEN_UOM_BINDINGS
+                ? _writer.ReadDiagnostics(code)
+                : null;
+            var preflightMessage = result.Outcome == ItemUomOutcome.FAIL_BROKEN_UOM_BINDINGS
+                ? "SAP item has broken UoM entry bindings (IUoMEntry/SUoMEntry/PUoMEntry/INUoMEntry <= 0). DI API counting-UoM update is unsafe; SAP master-data repair is required."
+                : null;
 
             preflightRows.Add(new UomBackfillRow
             {
                 ItemCode    = code,
                 Outcome     = result.Outcome.ToString(),
                 SapErrorCode    = null,
-                SapErrorMessage = null
+                SapErrorMessage = preflightMessage,
+                Diagnostics = diagnostics
             });
 
             _logger.LogDebug(

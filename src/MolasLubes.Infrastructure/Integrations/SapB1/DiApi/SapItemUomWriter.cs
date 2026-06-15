@@ -113,6 +113,11 @@ WHERE UomCode = '{safe}' OR UomName = '{safe}'
                 return new ItemUomPreflightResult(itemCode, ItemUomOutcome.FAIL_TARGET_UOM_MISSING,
                     currentUomEntry, groupEntry);
 
+            var bindingSnapshot = ReadBindingSnapshot(company, itemCode);
+            if (HasBrokenHistoricalBindings(bindingSnapshot))
+                return new ItemUomPreflightResult(itemCode, ItemUomOutcome.FAIL_BROKEN_UOM_BINDINGS,
+                    currentUomEntry, groupEntry);
+
             return new ItemUomPreflightResult(itemCode, ItemUomOutcome.OK_TO_UPDATE,
                 currentUomEntry, groupEntry);
         }
@@ -133,37 +138,25 @@ WHERE UomCode = '{safe}' OR UomName = '{safe}'
     public ItemUomApplyResult Apply(string itemCode, int targetUomEntry)
     {
         var company = _connection.GetConnectedCompany();
-        Items? items = null;
+        var targetUom = ReadUomIdentity(company, targetUomEntry);
+        var bindingSnapshot = ReadBindingSnapshot(company, itemCode);
 
-        try
+        var directAttempt = TryApply(itemCode, targetUomEntry);
+        if (directAttempt.Outcome == ItemUomOutcome.UPDATED)
+            return directAttempt;
+
+        if (!ShouldRetryWithNonInventoryRepair(directAttempt, bindingSnapshot))
+            return directAttempt;
+
+        _logger.LogInformation(
+            "SapItemUomWriter: retrying counting UoM update with non-inventory binding repair | ItemCode={Code} | TargetUomEntry={Entry}",
+            itemCode,
+            targetUomEntry);
+
+        return TryApply(itemCode, targetUomEntry, items =>
         {
-            items = (Items)company.GetBusinessObject(BoObjectTypes.oItems);
-
-            if (!items.GetByKey(itemCode))
-                return new ItemUomApplyResult(itemCode, ItemUomOutcome.NOT_FOUND, null, null);
-
-            items.DefaultCountingUoMEntry = targetUomEntry;
-
-            int rc = items.Update();
-            if (rc != 0)
-            {
-                company.GetLastError(out int code, out string msg);
-                _logger.LogWarning(
-                    "SapItemUomWriter: Update failed | ItemCode={Code} | SapCode={SapCode} | SapMsg={SapMsg}",
-                    itemCode, code, msg);
-                return new ItemUomApplyResult(itemCode, ItemUomOutcome.FAIL_SAP_ERROR, code, msg);
-            }
-
-            _logger.LogInformation(
-                "SapItemUomWriter: DefaultCountingUoMEntry set | ItemCode={Code} | UomEntry={Entry}",
-                itemCode, targetUomEntry);
-
-            return new ItemUomApplyResult(itemCode, ItemUomOutcome.UPDATED, null, null);
-        }
-        finally
-        {
-            if (items != null) Marshal.ReleaseComObject(items);
-        }
+            RepairMatchingNonInventoryUomEntries(items, bindingSnapshot, targetUomEntry, targetUom);
+        });
     }
 
     /// <summary>
@@ -188,6 +181,10 @@ SELECT TOP 1
     InvntryUom,
     SalUnitMsr,
     BuyUnitMsr,
+    IUoMEntry,
+    SUoMEntry,
+    PUoMEntry,
+    INUoMEntry,
     UgpEntry,
     EvalSystem,
     ManBtchNum,
@@ -204,6 +201,10 @@ WHERE ItemCode = '{safe}'
                 InventoryUom: rs.Fields.Item("InvntryUom").Value?.ToString(),
                 SalesUom: rs.Fields.Item("SalUnitMsr").Value?.ToString(),
                 PurchaseUom: rs.Fields.Item("BuyUnitMsr").Value?.ToString(),
+                InventoryUomEntry: TryGetInt(rs.Fields.Item("IUoMEntry").Value),
+                SalesUomEntry: TryGetInt(rs.Fields.Item("SUoMEntry").Value),
+                PurchaseUomEntry: TryGetInt(rs.Fields.Item("PUoMEntry").Value),
+                CountingUomEntry: TryGetInt(rs.Fields.Item("INUoMEntry").Value),
                 UomGroupEntry: TryGetInt(rs.Fields.Item("UgpEntry").Value),
                 ValMethod: rs.Fields.Item("EvalSystem").Value?.ToString(),
                 ManageBatchNumbers: IsYes(rs.Fields.Item("ManBtchNum").Value),
@@ -241,6 +242,193 @@ WHERE UgpEntry = {groupEntry}
         }
     }
 
+    private ItemUomApplyResult TryApply(
+        string itemCode,
+        int targetUomEntry,
+        Action<Items>? beforeUpdate = null)
+    {
+        var company = _connection.GetConnectedCompany();
+        Items? items = null;
+
+        try
+        {
+            items = (Items)company.GetBusinessObject(BoObjectTypes.oItems);
+
+            if (!items.GetByKey(itemCode))
+                return new ItemUomApplyResult(itemCode, ItemUomOutcome.NOT_FOUND, null, null);
+
+            beforeUpdate?.Invoke(items);
+            items.DefaultCountingUoMEntry = targetUomEntry;
+
+            int rc = items.Update();
+            if (rc != 0)
+            {
+                company.GetLastError(out int code, out string msg);
+                _logger.LogWarning(
+                    "SapItemUomWriter: Update failed | ItemCode={Code} | SapCode={SapCode} | SapMsg={SapMsg}",
+                    itemCode, code, msg);
+                return new ItemUomApplyResult(itemCode, ItemUomOutcome.FAIL_SAP_ERROR, code, msg);
+            }
+
+            _logger.LogInformation(
+                "SapItemUomWriter: DefaultCountingUoMEntry set | ItemCode={Code} | UomEntry={Entry}",
+                itemCode, targetUomEntry);
+
+            return new ItemUomApplyResult(itemCode, ItemUomOutcome.UPDATED, null, null);
+        }
+        finally
+        {
+            if (items != null) Marshal.ReleaseComObject(items);
+        }
+    }
+
+    private void RepairMatchingNonInventoryUomEntries(
+        Items items,
+        ItemUomBindingSnapshot? snapshot,
+        int targetUomEntry,
+        UomIdentity? targetUom)
+    {
+        if (snapshot == null || targetUom == null)
+            return;
+
+        if (ShouldRepair(snapshot.SalesUom, snapshot.SalesUomEntry, targetUom))
+        {
+            items.DefaultSalesUoMEntry = targetUomEntry;
+            _logger.LogInformation(
+                "SapItemUomWriter: repaired DefaultSalesUoMEntry before counting UoM update | ItemCode={Code} | UomEntry={Entry}",
+                snapshot.ItemCode,
+                targetUomEntry);
+        }
+
+        if (ShouldRepair(snapshot.PurchaseUom, snapshot.PurchaseUomEntry, targetUom))
+        {
+            items.DefaultPurchasingUoMEntry = targetUomEntry;
+            _logger.LogInformation(
+                "SapItemUomWriter: repaired DefaultPurchasingUoMEntry before counting UoM update | ItemCode={Code} | UomEntry={Entry}",
+                snapshot.ItemCode,
+                targetUomEntry);
+        }
+    }
+
+    private static bool ShouldRetryWithNonInventoryRepair(
+        ItemUomApplyResult attempt,
+        ItemUomBindingSnapshot? snapshot)
+    {
+        if (attempt.Outcome != ItemUomOutcome.FAIL_SAP_ERROR || snapshot == null)
+            return false;
+
+        if (attempt.SapErrorCode == -1029 &&
+            attempt.SapErrorMessage?.Contains("cannot change inventory UoM", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            return false;
+        }
+
+        return snapshot.SalesUomEntry.GetValueOrDefault() <= 0 ||
+               snapshot.PurchaseUomEntry.GetValueOrDefault() <= 0;
+    }
+
+    private static bool ShouldRepair(string? uomText, int? entry, UomIdentity targetUom)
+    {
+        if (entry.HasValue && entry.Value > 0)
+            return false;
+
+        if (string.IsNullOrWhiteSpace(uomText))
+            return false;
+
+        return string.Equals(uomText.Trim(), targetUom.UomCode, StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(uomText.Trim(), targetUom.UomName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static UomIdentity? ReadUomIdentity(Company company, int uomEntry)
+    {
+        Recordset? rs = null;
+
+        try
+        {
+            rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
+            rs.DoQuery($@"
+SELECT TOP 1 UomEntry, UomCode, UomName
+FROM OUOM
+WHERE UomEntry = {uomEntry}
+");
+
+            if (rs.EoF)
+                return null;
+
+            return new UomIdentity(
+                TryGetInt(rs.Fields.Item("UomEntry").Value) ?? uomEntry,
+                rs.Fields.Item("UomCode").Value?.ToString(),
+                rs.Fields.Item("UomName").Value?.ToString());
+        }
+        finally
+        {
+            if (rs != null) Marshal.ReleaseComObject(rs);
+        }
+    }
+
+    private static ItemUomBindingSnapshot? ReadBindingSnapshot(Company company, string itemCode)
+    {
+        Recordset? rs = null;
+
+        try
+        {
+            rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
+            var safe = itemCode.Trim().Replace("'", "''");
+
+            rs.DoQuery($@"
+SELECT TOP 1
+    ItemCode,
+    InvntryUom,
+    SalUnitMsr,
+    BuyUnitMsr,
+    CntUnitMsr,
+    IUoMEntry,
+    SUoMEntry,
+    PUoMEntry,
+    INUoMEntry
+FROM OITM
+WHERE ItemCode = '{safe}'
+");
+
+            if (rs.EoF)
+                return null;
+
+            return new ItemUomBindingSnapshot(
+                ItemCode: rs.Fields.Item("ItemCode").Value?.ToString() ?? itemCode,
+                InventoryUom: rs.Fields.Item("InvntryUom").Value?.ToString(),
+                SalesUom: rs.Fields.Item("SalUnitMsr").Value?.ToString(),
+                PurchaseUom: rs.Fields.Item("BuyUnitMsr").Value?.ToString(),
+                CountingUom: rs.Fields.Item("CntUnitMsr").Value?.ToString(),
+                InventoryUomEntry: TryGetInt(rs.Fields.Item("IUoMEntry").Value),
+                SalesUomEntry: TryGetInt(rs.Fields.Item("SUoMEntry").Value),
+                PurchaseUomEntry: TryGetInt(rs.Fields.Item("PUoMEntry").Value),
+                CountingUomEntry: TryGetInt(rs.Fields.Item("INUoMEntry").Value));
+        }
+        finally
+        {
+            if (rs != null) Marshal.ReleaseComObject(rs);
+        }
+    }
+
+    private static bool HasBrokenHistoricalBindings(ItemUomBindingSnapshot? snapshot)
+    {
+        if (snapshot == null)
+            return false;
+
+        return HasBrokenBinding(snapshot.InventoryUom, snapshot.InventoryUomEntry) ||
+               HasBrokenBinding(snapshot.SalesUom, snapshot.SalesUomEntry) ||
+               HasBrokenBinding(snapshot.PurchaseUom, snapshot.PurchaseUomEntry) ||
+               HasBrokenBinding(snapshot.CountingUom, snapshot.CountingUomEntry);
+    }
+
+    private static bool HasBrokenBinding(string? uomText, int? uomEntry)
+    {
+        if (string.IsNullOrWhiteSpace(uomText))
+            return false;
+
+        return uomEntry.GetValueOrDefault() <= 0;
+    }
+
     private static int? TryGetInt(object? value)
     {
         if (value == null) return null;
@@ -264,6 +452,7 @@ public enum ItemUomOutcome
     NOT_FOUND,
     FAIL_INVALID_UOM_GROUP,
     FAIL_TARGET_UOM_MISSING,
+    FAIL_BROKEN_UOM_BINDINGS,
     UPDATED,
     FAIL_SAP_ERROR
 }
@@ -285,7 +474,27 @@ public record SapItemUomDiagnostics(
     string? InventoryUom,
     string? SalesUom,
     string? PurchaseUom,
+    int? InventoryUomEntry,
+    int? SalesUomEntry,
+    int? PurchaseUomEntry,
+    int? CountingUomEntry,
     int? UomGroupEntry,
     string? ValMethod,
     bool? ManageBatchNumbers,
     bool? ManageSerialNumbers);
+
+internal record UomIdentity(
+    int UomEntry,
+    string? UomCode,
+    string? UomName);
+
+internal record ItemUomBindingSnapshot(
+    string ItemCode,
+    string? InventoryUom,
+    string? SalesUom,
+    string? PurchaseUom,
+    string? CountingUom,
+    int? InventoryUomEntry,
+    int? SalesUomEntry,
+    int? PurchaseUomEntry,
+    int? CountingUomEntry);

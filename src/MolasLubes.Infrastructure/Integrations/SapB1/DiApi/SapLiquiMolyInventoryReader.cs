@@ -48,6 +48,7 @@ public class SapLiquiMolyInventoryReader
 
     public InventoryStockSnapshotResponse GetStock(
         string profileKey,
+        string? brand,
         string? search,
         string? warehouseCode,
         int skip,
@@ -55,7 +56,8 @@ public class SapLiquiMolyInventoryReader
         bool includeZero,
         bool onlyLiquiMoly)
     {
-        var state = EnsureSnapshot(profileKey, includeZero, onlyLiquiMoly);
+        var scope = ResolveScope(profileKey, brand, onlyLiquiMoly);
+        var state = EnsureSnapshot(scope, includeZero);
 
         IEnumerable<InventoryStockRow> query = state.Rows;
         query = ApplyFilters(query, search, warehouseCode);
@@ -79,10 +81,12 @@ public class SapLiquiMolyInventoryReader
 
     public InventoryStockSnapshotResponse GetStockForItem(
         string profileKey,
+        string? brand,
         string itemCode,
         string? warehouseCode)
     {
-        var state = EnsureSnapshot(profileKey, includeZero: true, onlyLiquiMoly: false);
+        var scope = ResolveScope(profileKey, brand, onlyLiquiMoly: true);
+        var state = EnsureSnapshot(scope, includeZero: true);
 
         IEnumerable<InventoryStockRow> query = state.Rows
             .Where(x => x.ItemCode.Equals(itemCode, StringComparison.OrdinalIgnoreCase));
@@ -105,13 +109,15 @@ public class SapLiquiMolyInventoryReader
 
     public InventoryStockChangesResponse GetChanges(
         string profileKey,
+        string? brand,
         long sinceVersion,
         string? search,
         string? warehouseCode,
         bool includeZero,
         bool onlyLiquiMoly)
     {
-        var state = EnsureSnapshot(profileKey, includeZero, onlyLiquiMoly);
+        var scope = ResolveScope(profileKey, brand, onlyLiquiMoly);
+        var state = EnsureSnapshot(scope, includeZero);
 
         var oldestVersion = state.History.Count == 0
             ? state.Version
@@ -148,11 +154,13 @@ public class SapLiquiMolyInventoryReader
 
     public InventoryStockSummaryResponse GetSummary(
         string profileKey,
+        string? brand,
         string? warehouseCode,
         bool includeZero,
         bool onlyLiquiMoly)
     {
-        var state = EnsureSnapshot(profileKey, includeZero, onlyLiquiMoly);
+        var scope = ResolveScope(profileKey, brand, onlyLiquiMoly);
+        var state = EnsureSnapshot(scope, includeZero);
 
         var rows = state.Rows.AsEnumerable();
         if (!string.IsNullOrWhiteSpace(warehouseCode))
@@ -182,6 +190,7 @@ public class SapLiquiMolyInventoryReader
 
     public InventoryDeliveryAggregateResponse GetDeliveryAggregates(
         string profileKey,
+        string? brand,
         DateOnly? dateFrom,
         DateOnly? dateTo,
         string? warehouseCode,
@@ -189,8 +198,9 @@ public class SapLiquiMolyInventoryReader
         int skip,
         int take)
     {
+        var scope = ResolveScope(profileKey, brand, onlyLiquiMoly: true);
         var range = ResolveRequiredDateRange(dateFrom, dateTo, defaultToBusinessToday: true);
-        var state = EnsureDeliveryAggregateSnapshot(profileKey, range.From, range.To);
+        var state = EnsureDeliveryAggregateSnapshot(scope, range.From, range.To);
 
         IEnumerable<InventoryDeliveryAggregateRow> query = state.Rows;
         query = ApplyDeliveryFilters(query, search, warehouseCode);
@@ -218,6 +228,7 @@ public class SapLiquiMolyInventoryReader
 
     public InventoryMovementResponse GetMovements(
         string profileKey,
+        string? brand,
         string itemCode,
         DateOnly? dateFrom,
         DateOnly? dateTo,
@@ -226,7 +237,9 @@ public class SapLiquiMolyInventoryReader
         int skip,
         int take)
     {
-        if (!_profiles.Profiles.TryGetValue(profileKey, out var profile))
+        var scope = ResolveScope(profileKey, brand, onlyLiquiMoly: true);
+
+        if (!_profiles.Profiles.TryGetValue(scope.ProfileKey, out var profile))
             throw new InvalidOperationException($"Profile '{profileKey}' not configured.");
 
         skip = Math.Max(0, skip);
@@ -604,6 +617,11 @@ ORDER BY M.MovementDate DESC, M.DocEntry DESC, M.LineNum DESC";
         if (threadException != null)
             throw threadException;
 
+        var itemMeta = LoadItemMetadata(scope, itemCode);
+        filteredRows = filteredRows
+            .Select(row => EnrichMovementRow(row, itemMeta))
+            .ToList();
+
         var total = filteredRows.Count;
         var rows = filteredRows
             .Skip(skip)
@@ -613,6 +631,15 @@ ORDER BY M.MovementDate DESC, M.DocEntry DESC, M.LineNum DESC";
         return new InventoryMovementResponse
         {
             ItemCode = itemCode,
+            Brand = itemMeta.Brand,
+            ItemBrand = itemMeta.Brand,
+            ItemName = itemMeta.ItemName,
+            ArticleNumber = itemMeta.ArticleNumber,
+            TanNumber = itemMeta.TanNumber,
+            EngineCode = itemMeta.TanNumber,
+            ProductionPartNumber = itemMeta.ProductionPartNumber,
+            PartNumberInProduction = itemMeta.ProductionPartNumber,
+            PrimaryBarcode = itemMeta.PrimaryBarcode,
             WarehouseCode = warehouseCode,
             DateFrom = resolvedRange.From,
             DateTo = resolvedRange.To,
@@ -623,9 +650,9 @@ ORDER BY M.MovementDate DESC, M.DocEntry DESC, M.LineNum DESC";
         };
     }
 
-    private SnapshotState EnsureSnapshot(string profileKey, bool includeZero, bool onlyLiquiMoly)
+    private SnapshotState EnsureSnapshot(InventoryScope scope, bool includeZero)
     {
-        var stateKey = BuildStateKey(profileKey, includeZero, onlyLiquiMoly);
+        var stateKey = BuildStateKey(scope, includeZero);
 
         if (_states.TryGetValue(stateKey, out var existing))
         {
@@ -642,7 +669,7 @@ ORDER BY M.MovementDate DESC, M.DocEntry DESC, M.LineNum DESC";
                     return existing;
             }
 
-            var refreshed = RefreshSnapshot(profileKey, includeZero, onlyLiquiMoly);
+            var refreshed = RefreshSnapshot(scope, includeZero);
             _states[stateKey] = refreshed;
             return refreshed;
         }
@@ -653,11 +680,11 @@ ORDER BY M.MovementDate DESC, M.DocEntry DESC, M.LineNum DESC";
     }
 
     private DeliveryAggregateSnapshotState EnsureDeliveryAggregateSnapshot(
-        string profileKey,
+        InventoryScope scope,
         DateOnly dateFrom,
         DateOnly dateTo)
     {
-        var stateKey = BuildDeliveryAggregateStateKey(profileKey, dateFrom, dateTo);
+        var stateKey = BuildDeliveryAggregateStateKey(scope, dateFrom, dateTo);
 
         if (_deliveryAggregateStates.TryGetValue(stateKey, out var existing))
         {
@@ -675,7 +702,7 @@ ORDER BY M.MovementDate DESC, M.DocEntry DESC, M.LineNum DESC";
                     return existing;
             }
 
-            var refreshed = RefreshDeliveryAggregateSnapshot(profileKey, dateFrom, dateTo);
+            var refreshed = RefreshDeliveryAggregateSnapshot(scope, dateFrom, dateTo);
             _deliveryAggregateStates[stateKey] = refreshed;
             return refreshed;
         }
@@ -685,12 +712,14 @@ ORDER BY M.MovementDate DESC, M.DocEntry DESC, M.LineNum DESC";
         }
     }
 
-    private SnapshotState RefreshSnapshot(string profileKey, bool includeZero, bool onlyLiquiMoly)
+    private SnapshotState RefreshSnapshot(InventoryScope scope, bool includeZero)
     {
-        if (!_profiles.Profiles.TryGetValue(profileKey, out var profile))
-            throw new InvalidOperationException($"Profile '{profileKey}' not configured.");
+        if (!_profiles.Profiles.TryGetValue(scope.ProfileKey, out var profile))
+            throw new InvalidOperationException($"Profile '{scope.ProfileKey}' not configured.");
 
-        var cacheMeta = LoadCacheMetaMap();
+        var liquiMolyMetaMap = scope.MetadataMode == InventoryMetadataMode.LiquiMoly
+            ? LoadLiquiMolyItemMetaMap()
+            : null;
 
         var rows = new List<InventoryStockRow>();
         Exception? threadException = null;
@@ -709,6 +738,7 @@ ORDER BY M.MovementDate DESC, M.DocEntry DESC, M.LineNum DESC";
                     var includeZeroClause = includeZero
                         ? ""
                         : "AND (ISNULL(w.OnHand,0) <> 0 OR ISNULL(w.IsCommited,0) <> 0 OR ISNULL(w.OnOrder,0) <> 0)";
+                    var metadataSelect = BuildStockMetadataSelect(scope, "w.ItemCode");
 
                     rs.DoQuery($@"
 SELECT
@@ -718,7 +748,8 @@ SELECT
     h.WhsName AS WarehouseName,
     CONVERT(DECIMAL(19, 6), ISNULL(w.OnHand, 0)) AS OnHand,
     CONVERT(DECIMAL(19, 6), ISNULL(w.IsCommited, 0)) AS Committed,
-    CONVERT(DECIMAL(19, 6), ISNULL(w.OnOrder, 0)) AS Ordered
+    CONVERT(DECIMAL(19, 6), ISNULL(w.OnOrder, 0)) AS Ordered,
+    {metadataSelect}
 FROM OITW w
 INNER JOIN OITM i ON i.ItemCode = w.ItemCode
 LEFT JOIN OWHS h ON h.WhsCode = w.WhsCode
@@ -742,23 +773,24 @@ ORDER BY w.ItemCode, w.WhsCode");
                             continue;
                         }
 
-                        if (onlyLiquiMoly && !cacheMeta.ContainsKey(itemCode))
+                        if (scope.FilterToLiquiMolyCatalog
+                            && (liquiMolyMetaMap == null || !liquiMolyMetaMap.ContainsKey(itemCode)))
                         {
                             rs.MoveNext();
                             continue;
                         }
 
-                        cacheMeta.TryGetValue(itemCode, out var meta);
+                        liquiMolyMetaMap?.TryGetValue(itemCode, out var liquiMolyMeta);
+                        var itemMeta = ResolveItemMetadata(scope, rs, itemCode, itemName, liquiMolyMeta);
 
                         rows.Add(CreateStockRow(
                             itemCode,
-                            itemName,
                             warehouseCode,
                             warehouseName,
                             onHand,
                             committed,
                             ordered,
-                            meta,
+                            itemMeta,
                             isDeleted: false));
 
                         rs.MoveNext();
@@ -786,7 +818,7 @@ ORDER BY w.ItemCode, w.WhsCode");
         var now = DateTime.UtcNow;
         var version = Interlocked.Increment(ref _versionCounter);
 
-        _states.TryGetValue(BuildStateKey(profileKey, includeZero, onlyLiquiMoly), out var previousState);
+        _states.TryGetValue(BuildStateKey(scope, includeZero), out var previousState);
         var history = previousState?.History ?? new List<ChangeBatch>();
         var changedRows = BuildChanges(previousState?.Rows, rows);
 
@@ -796,8 +828,8 @@ ORDER BY w.ItemCode, w.WhsCode");
             history = history.Skip(history.Count - maxHistory).ToList();
 
         _logger.LogInformation(
-            "SapLiquiMolyInventoryReader: snapshot refreshed | Profile={Profile} | Rows={Rows} | Changed={Changed} | Version={Version}",
-            profileKey, rows.Count, changedRows.Count, version);
+            "SapLiquiMolyInventoryReader: snapshot refreshed | Profile={Profile} | Scope={Scope} | Rows={Rows} | Changed={Changed} | Version={Version}",
+            scope.ProfileKey, scope.ScopeKey, rows.Count, changedRows.Count, version);
 
         return new SnapshotState
         {
@@ -809,14 +841,16 @@ ORDER BY w.ItemCode, w.WhsCode");
     }
 
     private DeliveryAggregateSnapshotState RefreshDeliveryAggregateSnapshot(
-        string profileKey,
+        InventoryScope scope,
         DateOnly dateFrom,
         DateOnly dateTo)
     {
-        if (!_profiles.Profiles.TryGetValue(profileKey, out var profile))
-            throw new InvalidOperationException($"Profile '{profileKey}' not configured.");
+        if (!_profiles.Profiles.TryGetValue(scope.ProfileKey, out var profile))
+            throw new InvalidOperationException($"Profile '{scope.ProfileKey}' not configured.");
 
-        var cacheMeta = LoadCacheMetaMap();
+        var liquiMolyMetaMap = scope.MetadataMode == InventoryMetadataMode.LiquiMoly
+            ? LoadLiquiMolyItemMetaMap()
+            : null;
         var rows = new List<InventoryDeliveryAggregateRow>();
         Exception? threadException = null;
 
@@ -833,6 +867,7 @@ ORDER BY w.ItemCode, w.WhsCode");
 
                     var fromSql = FormatSqlDate(dateFrom);
                     var toSql = FormatSqlDate(dateTo);
+                    var metadataSelect = BuildDeliveryMetadataSelect(scope, "a.ItemCode");
 
                     rs.DoQuery($@"
 WITH Agg AS
@@ -859,7 +894,8 @@ SELECT
     CAST(lastDoc.DocNum AS NVARCHAR(50)) AS LastDeliveryDocNum,
     lastDoc.DocDate AS LastDeliveredAt,
     lastDoc.CardCode AS CustomerCode,
-    lastDoc.CardName AS CustomerName
+    lastDoc.CardName AS CustomerName,
+    {metadataSelect}
 FROM Agg a
 OUTER APPLY
 (
@@ -890,14 +926,33 @@ ORDER BY lastDoc.DocDate DESC, lastDoc.DocEntry DESC, a.ItemCode, a.WarehouseCod
                             continue;
                         }
 
-                        cacheMeta.TryGetValue(itemCode, out var meta);
+                        if (scope.FilterToLiquiMolyCatalog
+                            && (liquiMolyMetaMap == null || !liquiMolyMetaMap.ContainsKey(itemCode)))
+                        {
+                            rs.MoveNext();
+                            continue;
+                        }
+
+                        liquiMolyMetaMap?.TryGetValue(itemCode, out var liquiMolyMeta);
+                        var itemMeta = ResolveItemMetadata(
+                            scope,
+                            rs,
+                            itemCode,
+                            ReadString(rs, "ItemName") ?? itemCode,
+                            liquiMolyMeta);
 
                         rows.Add(new InventoryDeliveryAggregateRow
                         {
                             ItemCode = itemCode,
-                            ArticleNumber = meta?.ArticleNumber ?? itemCode,
-                            PrimaryBarcode = meta?.PrimaryBarcode,
-                            ItemName = ReadString(rs, "ItemName") ?? meta?.Name ?? itemCode,
+                            Brand = itemMeta.Brand,
+                            ItemBrand = itemMeta.Brand,
+                            ArticleNumber = itemMeta.ArticleNumber ?? itemCode,
+                            PrimaryBarcode = itemMeta.PrimaryBarcode,
+                            ItemName = itemMeta.ItemName ?? itemCode,
+                            TanNumber = itemMeta.TanNumber,
+                            EngineCode = itemMeta.TanNumber,
+                            ProductionPartNumber = itemMeta.ProductionPartNumber,
+                            PartNumberInProduction = itemMeta.ProductionPartNumber,
                             Warehouse = ReadString(rs, "WarehouseCode") ?? string.Empty,
                             DeliveredQty = ReadDecimal(rs, "DeliveredQty"),
                             DeliveryCount = ReadInt(rs, "DeliveryCount"),
@@ -939,8 +994,8 @@ ORDER BY lastDoc.DocDate DESC, lastDoc.DocEntry DESC, a.ItemCode, a.WarehouseCod
         }
 
         _logger.LogInformation(
-            "SapLiquiMolyInventoryReader: delivery aggregates refreshed | Profile={Profile} | DateFrom={DateFrom} | DateTo={DateTo} | Rows={Rows} | Version={Version}",
-            profileKey, dateFrom, dateTo, rows.Count, version);
+            "SapLiquiMolyInventoryReader: delivery aggregates refreshed | Profile={Profile} | Scope={Scope} | DateFrom={DateFrom} | DateTo={DateTo} | Rows={Rows} | Version={Version}",
+            scope.ProfileKey, scope.ScopeKey, dateFrom, dateTo, rows.Count, version);
 
         return new DeliveryAggregateSnapshotState
         {
@@ -976,7 +1031,11 @@ ORDER BY lastDoc.DocDate DESC, lastDoc.DocEntry DESC, a.ItemCode, a.WarehouseCod
                 || old.Committed != row.Committed
                 || old.Ordered != row.Ordered
                 || !string.Equals(old.ItemName, row.ItemName, StringComparison.Ordinal)
-                || !string.Equals(old.PrimaryBarcode, row.PrimaryBarcode, StringComparison.Ordinal))
+                || !string.Equals(old.ArticleNumber, row.ArticleNumber, StringComparison.Ordinal)
+                || !string.Equals(old.PrimaryBarcode, row.PrimaryBarcode, StringComparison.Ordinal)
+                || !string.Equals(old.Brand, row.Brand, StringComparison.Ordinal)
+                || !string.Equals(old.TanNumber, row.TanNumber, StringComparison.Ordinal)
+                || !string.Equals(old.ProductionPartNumber, row.ProductionPartNumber, StringComparison.Ordinal))
             {
                 changed.Add(row);
             }
@@ -992,8 +1051,14 @@ ORDER BY lastDoc.DocDate DESC, lastDoc.DocEntry DESC, a.ItemCode, a.WarehouseCod
                 Key = old.Key,
                 ItemCode = old.ItemCode,
                 ItemName = old.ItemName,
+                Brand = old.Brand,
+                ItemBrand = old.ItemBrand,
                 ArticleNumber = old.ArticleNumber,
                 PrimaryBarcode = old.PrimaryBarcode,
+                TanNumber = old.TanNumber,
+                EngineCode = old.EngineCode,
+                ProductionPartNumber = old.ProductionPartNumber,
+                PartNumberInProduction = old.PartNumberInProduction,
                 WarehouseCode = old.WarehouseCode,
                 WarehouseName = old.WarehouseName,
                 OnHand = 0,
@@ -1026,10 +1091,19 @@ ORDER BY lastDoc.DocDate DESC, lastDoc.DocEntry DESC, a.ItemCode, a.WarehouseCod
             query = query.Where(x =>
                 x.ItemCode.Contains(needle, StringComparison.OrdinalIgnoreCase)
                 || x.ArticleNumber.Contains(needle, StringComparison.OrdinalIgnoreCase)
+                || (!string.IsNullOrWhiteSpace(x.Brand)
+                    && x.Brand.Contains(needle, StringComparison.OrdinalIgnoreCase))
+                || (!string.IsNullOrWhiteSpace(x.TanNumber)
+                    && x.TanNumber.Contains(needle, StringComparison.OrdinalIgnoreCase))
+                || (!string.IsNullOrWhiteSpace(x.ProductionPartNumber)
+                    && x.ProductionPartNumber.Contains(needle, StringComparison.OrdinalIgnoreCase))
                 || (!string.IsNullOrWhiteSpace(x.PrimaryBarcode)
                     && x.PrimaryBarcode.Contains(needle, StringComparison.OrdinalIgnoreCase))
                 || (!string.IsNullOrWhiteSpace(x.ItemName)
-                    && x.ItemName.Contains(needle, StringComparison.OrdinalIgnoreCase)));
+                    && x.ItemName.Contains(needle, StringComparison.OrdinalIgnoreCase))
+                || x.WarehouseCode.Contains(needle, StringComparison.OrdinalIgnoreCase)
+                || (!string.IsNullOrWhiteSpace(x.WarehouseName)
+                    && x.WarehouseName.Contains(needle, StringComparison.OrdinalIgnoreCase)));
         }
 
         return query;
@@ -1051,31 +1125,39 @@ ORDER BY lastDoc.DocDate DESC, lastDoc.DocEntry DESC, a.ItemCode, a.WarehouseCod
             query = query.Where(x =>
                 x.ItemCode.Contains(needle, StringComparison.OrdinalIgnoreCase)
                 || x.ArticleNumber.Contains(needle, StringComparison.OrdinalIgnoreCase)
+                || (!string.IsNullOrWhiteSpace(x.Brand)
+                    && x.Brand.Contains(needle, StringComparison.OrdinalIgnoreCase))
+                || (!string.IsNullOrWhiteSpace(x.TanNumber)
+                    && x.TanNumber.Contains(needle, StringComparison.OrdinalIgnoreCase))
+                || (!string.IsNullOrWhiteSpace(x.ProductionPartNumber)
+                    && x.ProductionPartNumber.Contains(needle, StringComparison.OrdinalIgnoreCase))
                 || (!string.IsNullOrWhiteSpace(x.PrimaryBarcode)
                     && x.PrimaryBarcode.Contains(needle, StringComparison.OrdinalIgnoreCase))
                 || (!string.IsNullOrWhiteSpace(x.ItemName)
-                    && x.ItemName.Contains(needle, StringComparison.OrdinalIgnoreCase)));
+                    && x.ItemName.Contains(needle, StringComparison.OrdinalIgnoreCase))
+                || x.Warehouse.Contains(needle, StringComparison.OrdinalIgnoreCase));
         }
 
         return query;
     }
 
-    private static string BuildStateKey(string profileKey, bool includeZero, bool onlyLiquiMoly) =>
-        $"{profileKey}|{includeZero}|{onlyLiquiMoly}";
+    private static string BuildStateKey(InventoryScope scope, bool includeZero) =>
+        $"{scope.ProfileKey}|{scope.ScopeKey}|{includeZero}";
 
     private static string BuildDeliveryAggregateStateKey(
-        string profileKey,
+        InventoryScope scope,
         DateOnly dateFrom,
         DateOnly dateTo) =>
-        $"{profileKey}|DLV|{dateFrom:yyyyMMdd}|{dateTo:yyyyMMdd}";
+        $"{scope.ProfileKey}|{scope.ScopeKey}|DLV|{dateFrom:yyyyMMdd}|{dateTo:yyyyMMdd}";
 
-    private Dictionary<string, CacheMeta> LoadCacheMetaMap() =>
+    private Dictionary<string, ItemMetadata> LoadLiquiMolyItemMetaMap() =>
         _cacheDb.CacheLiquiMolyProducts
             .AsNoTracking()
-            .Select(x => new CacheMeta
+            .Select(x => new ItemMetadata
             {
+                Brand = "Liqui Moly",
                 ArticleNumber = x.ArticleNumber,
-                Name = x.Name,
+                ItemName = x.Name,
                 PrimaryBarcode = x.PrimaryBarcode,
                 IsActive = x.IsActive
             })
@@ -1084,19 +1166,18 @@ ORDER BY lastDoc.DocDate DESC, lastDoc.DocEntry DESC, a.ItemCode, a.WarehouseCod
             .Select(g => g
                 .OrderByDescending(x => x.IsActive)
                 .ThenByDescending(x => !string.IsNullOrWhiteSpace(x.PrimaryBarcode))
-                .ThenByDescending(x => !string.IsNullOrWhiteSpace(x.Name))
+                .ThenByDescending(x => !string.IsNullOrWhiteSpace(x.ItemName))
                 .First())
             .ToDictionary(x => x.ArticleNumber, StringComparer.OrdinalIgnoreCase);
 
     private static InventoryStockRow CreateStockRow(
         string itemCode,
-        string itemName,
         string warehouseCode,
         string? warehouseName,
         decimal onHand,
         decimal committed,
         decimal ordered,
-        CacheMeta? meta,
+        ItemMetadata itemMeta,
         bool isDeleted)
     {
         var available = onHand - committed + ordered;
@@ -1104,9 +1185,15 @@ ORDER BY lastDoc.DocDate DESC, lastDoc.DocEntry DESC, a.ItemCode, a.WarehouseCod
         {
             Key = $"{itemCode}|{warehouseCode}",
             ItemCode = itemCode,
-            ItemName = itemName,
-            ArticleNumber = meta?.ArticleNumber ?? itemCode,
-            PrimaryBarcode = meta?.PrimaryBarcode,
+            Brand = itemMeta.Brand,
+            ItemBrand = itemMeta.Brand,
+            ItemName = itemMeta.ItemName ?? itemCode,
+            ArticleNumber = itemMeta.ArticleNumber ?? itemCode,
+            PrimaryBarcode = itemMeta.PrimaryBarcode,
+            TanNumber = itemMeta.TanNumber,
+            EngineCode = itemMeta.TanNumber,
+            ProductionPartNumber = itemMeta.ProductionPartNumber,
+            PartNumberInProduction = itemMeta.ProductionPartNumber,
             WarehouseCode = warehouseCode,
             WarehouseName = warehouseName,
             OnHand = onHand,
@@ -1243,6 +1330,268 @@ ORDER BY lastDoc.DocDate DESC, lastDoc.DocEntry DESC, a.ItemCode, a.WarehouseCod
         return TimeZoneInfo.Utc;
     }
 
+    private InventoryScope ResolveScope(string profileKey, string? brand, bool onlyLiquiMoly)
+    {
+        var requestedProfile = string.IsNullOrWhiteSpace(profileKey)
+            ? "MolasLubes"
+            : profileKey.Trim();
+        var normalizedBrand = NormalizeScopeBrand(brand);
+
+        if (string.Equals(normalizedBrand, "AUTOHUB", StringComparison.Ordinal))
+        {
+            return new InventoryScope(
+                "AutoHub",
+                "AutoHub",
+                InventoryMetadataMode.AutoHub,
+                filterToLiquiMolyCatalog: false,
+                defaultBrandLabel: "AutoHub");
+        }
+
+        if (string.Equals(requestedProfile, "AutoHub", StringComparison.OrdinalIgnoreCase))
+        {
+            return new InventoryScope(
+                "AutoHub",
+                "AutoHub",
+                InventoryMetadataMode.AutoHub,
+                filterToLiquiMolyCatalog: false,
+                defaultBrandLabel: "AutoHub");
+        }
+
+        if (string.Equals(normalizedBrand, "LIQUIMOLY", StringComparison.Ordinal)
+            || string.Equals(requestedProfile, "MolasLubes", StringComparison.OrdinalIgnoreCase)
+            || onlyLiquiMoly)
+        {
+            return new InventoryScope(
+                "MolasLubes",
+                "LiquiMoly",
+                InventoryMetadataMode.LiquiMoly,
+                filterToLiquiMolyCatalog: true,
+                defaultBrandLabel: "Liqui Moly");
+        }
+
+        return new InventoryScope(
+            requestedProfile,
+            requestedProfile,
+            InventoryMetadataMode.Generic,
+            filterToLiquiMolyCatalog: false,
+            defaultBrandLabel: requestedProfile);
+    }
+
+    private static string? NormalizeScopeBrand(string? brand)
+    {
+        if (string.IsNullOrWhiteSpace(brand))
+            return null;
+
+        return brand.Trim()
+            .Replace(" ", string.Empty, StringComparison.Ordinal)
+            .Replace("-", string.Empty, StringComparison.Ordinal)
+            .ToUpperInvariant();
+    }
+
+    private static string BuildStockMetadataSelect(InventoryScope scope, string itemCodeSql) =>
+        scope.MetadataMode switch
+        {
+            InventoryMetadataMode.AutoHub => $@"
+    NULLIF(i.U_MdlTEST, '') AS ItemBrand,
+    COALESCE(NULLIF(i.U_Item_Name, ''), NULLIF(i.ItemName, ''), {itemCodeSql}) AS MappedItemName,
+    COALESCE(NULLIF(i.U_Article_No, ''), {itemCodeSql}) AS MappedArticleNumber,
+    NULLIF(i.U_Engine_Code, '') AS TanNumber,
+    NULLIF(i.U_PT_No_Inproduction, '') AS ProductionPartNumber,
+    NULLIF(i.CodeBars, '') AS PrimaryBarcode",
+            InventoryMetadataMode.LiquiMoly => $@"
+    CAST('Liqui Moly' AS NVARCHAR(100)) AS ItemBrand,
+    COALESCE(NULLIF(i.ItemName, ''), {itemCodeSql}) AS MappedItemName,
+    {itemCodeSql} AS MappedArticleNumber,
+    CAST(NULL AS NVARCHAR(100)) AS TanNumber,
+    CAST(NULL AS NVARCHAR(100)) AS ProductionPartNumber,
+    NULLIF(i.CodeBars, '') AS PrimaryBarcode",
+            _ => $@"
+    CAST(NULL AS NVARCHAR(100)) AS ItemBrand,
+    COALESCE(NULLIF(i.ItemName, ''), {itemCodeSql}) AS MappedItemName,
+    {itemCodeSql} AS MappedArticleNumber,
+    CAST(NULL AS NVARCHAR(100)) AS TanNumber,
+    CAST(NULL AS NVARCHAR(100)) AS ProductionPartNumber,
+    NULLIF(i.CodeBars, '') AS PrimaryBarcode"
+        };
+
+    private static string BuildDeliveryMetadataSelect(InventoryScope scope, string itemCodeSql) =>
+        scope.MetadataMode switch
+        {
+            InventoryMetadataMode.AutoHub => $@"
+    NULLIF(i.U_MdlTEST, '') AS ItemBrand,
+    COALESCE(NULLIF(i.U_Item_Name, ''), NULLIF(i.ItemName, ''), {itemCodeSql}) AS ItemName,
+    COALESCE(NULLIF(i.U_Article_No, ''), {itemCodeSql}) AS ArticleNumber,
+    NULLIF(i.U_Engine_Code, '') AS TanNumber,
+    NULLIF(i.U_PT_No_Inproduction, '') AS ProductionPartNumber,
+    NULLIF(i.CodeBars, '') AS PrimaryBarcode",
+            InventoryMetadataMode.LiquiMoly => $@"
+    CAST('Liqui Moly' AS NVARCHAR(100)) AS ItemBrand,
+    COALESCE(NULLIF(i.ItemName, ''), {itemCodeSql}) AS ItemName,
+    {itemCodeSql} AS ArticleNumber,
+    CAST(NULL AS NVARCHAR(100)) AS TanNumber,
+    CAST(NULL AS NVARCHAR(100)) AS ProductionPartNumber,
+    NULLIF(i.CodeBars, '') AS PrimaryBarcode",
+            _ => $@"
+    CAST(NULL AS NVARCHAR(100)) AS ItemBrand,
+    COALESCE(NULLIF(i.ItemName, ''), {itemCodeSql}) AS ItemName,
+    {itemCodeSql} AS ArticleNumber,
+    CAST(NULL AS NVARCHAR(100)) AS TanNumber,
+    CAST(NULL AS NVARCHAR(100)) AS ProductionPartNumber,
+    NULLIF(i.CodeBars, '') AS PrimaryBarcode"
+        };
+
+    private static ItemMetadata ResolveItemMetadata(
+        InventoryScope scope,
+        Recordset rs,
+        string itemCode,
+        string fallbackItemName,
+        ItemMetadata? liquiMolyMeta)
+    {
+        var rowMeta = new ItemMetadata
+        {
+            Brand = ReadString(rs, "ItemBrand") ?? scope.DefaultBrandLabel,
+            ItemName = ReadString(rs, "MappedItemName") ?? ReadString(rs, "ItemName") ?? fallbackItemName,
+            ArticleNumber = ReadString(rs, "MappedArticleNumber") ?? ReadString(rs, "ArticleNumber") ?? itemCode,
+            TanNumber = ReadString(rs, "TanNumber"),
+            ProductionPartNumber = ReadString(rs, "ProductionPartNumber"),
+            PrimaryBarcode = ReadString(rs, "PrimaryBarcode")
+        };
+
+        if (scope.MetadataMode != InventoryMetadataMode.LiquiMoly || liquiMolyMeta == null)
+            return NormalizeItemMetadata(itemCode, rowMeta, scope.DefaultBrandLabel);
+
+        return NormalizeItemMetadata(itemCode, new ItemMetadata
+        {
+            Brand = liquiMolyMeta.Brand ?? rowMeta.Brand ?? scope.DefaultBrandLabel,
+            ItemName = liquiMolyMeta.ItemName ?? rowMeta.ItemName ?? fallbackItemName,
+            ArticleNumber = liquiMolyMeta.ArticleNumber ?? rowMeta.ArticleNumber ?? itemCode,
+            PrimaryBarcode = liquiMolyMeta.PrimaryBarcode ?? rowMeta.PrimaryBarcode,
+            TanNumber = rowMeta.TanNumber,
+            ProductionPartNumber = rowMeta.ProductionPartNumber,
+            IsActive = liquiMolyMeta.IsActive
+        }, scope.DefaultBrandLabel);
+    }
+
+    private ItemMetadata LoadItemMetadata(InventoryScope scope, string itemCode)
+    {
+        if (!_profiles.Profiles.TryGetValue(scope.ProfileKey, out var profile))
+            throw new InvalidOperationException($"Profile '{scope.ProfileKey}' not configured.");
+
+        if (scope.MetadataMode == InventoryMetadataMode.LiquiMoly)
+        {
+            var liquiMolyMetaMap = LoadLiquiMolyItemMetaMap();
+            if (liquiMolyMetaMap.TryGetValue(itemCode, out var liquiMolyMeta))
+                return NormalizeItemMetadata(itemCode, liquiMolyMeta, scope.DefaultBrandLabel);
+        }
+
+        ItemMetadata? itemMeta = null;
+        Exception? threadException = null;
+
+        var thread = new Thread(() =>
+        {
+            SapDiApiCriticalSection.Run(() =>
+            {
+                Company? company = null;
+                Recordset? rs = null;
+                try
+                {
+                    company = CreateAndConnect(profile.Sap);
+                    rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
+                    var safeItem = itemCode.Replace("'", "''");
+                    var metadataSelect = BuildStockMetadataSelect(scope, "i.ItemCode");
+
+                    rs.DoQuery($@"
+SELECT TOP 1
+    i.ItemCode AS ItemCode,
+    {metadataSelect}
+FROM OITM i
+WHERE i.ItemCode = '{safeItem}'");
+
+                    if (!rs.EoF)
+                        itemMeta = ResolveItemMetadata(scope, rs, itemCode, itemCode, liquiMolyMeta: null);
+                }
+                catch (Exception ex)
+                {
+                    threadException = ex;
+                }
+                finally
+                {
+                    if (rs != null) Marshal.ReleaseComObject(rs);
+                    DisconnectAndRelease(company);
+                }
+            });
+        });
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+
+        if (threadException != null)
+            throw threadException;
+
+        return itemMeta ?? NormalizeItemMetadata(itemCode, new ItemMetadata
+        {
+            Brand = scope.DefaultBrandLabel,
+            ItemName = itemCode,
+            ArticleNumber = itemCode
+        }, scope.DefaultBrandLabel);
+    }
+
+    private static ItemMetadata NormalizeItemMetadata(
+        string itemCode,
+        ItemMetadata itemMeta,
+        string? defaultBrandLabel)
+    {
+        return new ItemMetadata
+        {
+            Brand = string.IsNullOrWhiteSpace(itemMeta.Brand) ? defaultBrandLabel : itemMeta.Brand,
+            ItemName = string.IsNullOrWhiteSpace(itemMeta.ItemName) ? itemCode : itemMeta.ItemName,
+            ArticleNumber = string.IsNullOrWhiteSpace(itemMeta.ArticleNumber) ? itemCode : itemMeta.ArticleNumber,
+            TanNumber = itemMeta.TanNumber,
+            ProductionPartNumber = itemMeta.ProductionPartNumber,
+            PrimaryBarcode = itemMeta.PrimaryBarcode,
+            IsActive = itemMeta.IsActive
+        };
+    }
+
+    private static InventoryMovementRow EnrichMovementRow(InventoryMovementRow row, ItemMetadata itemMeta) =>
+        new()
+        {
+            SourceType = row.SourceType,
+            DocType = row.DocType,
+            DocEntry = row.DocEntry,
+            DocNum = row.DocNum,
+            MovementDate = row.MovementDate,
+            LineNum = row.LineNum,
+            ItemCode = row.ItemCode,
+            Brand = itemMeta.Brand,
+            ItemBrand = itemMeta.Brand,
+            ItemName = string.IsNullOrWhiteSpace(itemMeta.ItemName) ? row.ItemName : itemMeta.ItemName,
+            ArticleNumber = itemMeta.ArticleNumber,
+            PrimaryBarcode = itemMeta.PrimaryBarcode,
+            Barcode = itemMeta.PrimaryBarcode,
+            TanNumber = itemMeta.TanNumber,
+            EngineCode = itemMeta.TanNumber,
+            ProductionPartNumber = itemMeta.ProductionPartNumber,
+            PartNumberInProduction = itemMeta.ProductionPartNumber,
+            MovementWarehouse = row.MovementWarehouse,
+            SourceWarehouse = row.SourceWarehouse,
+            TargetWarehouse = row.TargetWarehouse,
+            Quantity = row.Quantity,
+            Direction = row.Direction,
+            DocumentStatus = row.DocumentStatus,
+            PartnerCode = row.PartnerCode,
+            PartnerName = row.PartnerName,
+            CustomerCode = row.CustomerCode,
+            CustomerName = row.CustomerName,
+            VendorCode = row.VendorCode,
+            VendorName = row.VendorName,
+            LinkedDocType = row.LinkedDocType,
+            LinkedDocEntry = row.LinkedDocEntry,
+            LinkedDocNum = row.LinkedDocNum,
+            LinkedLineNum = row.LinkedLineNum
+        };
+
     private static string FormatSqlDate(DateOnly date) =>
         date.ToString("yyyyMMdd");
 
@@ -1322,10 +1671,13 @@ ORDER BY lastDoc.DocDate DESC, lastDoc.DocEntry DESC, a.ItemCode, a.WarehouseCod
             : null;
     }
 
-    private sealed class CacheMeta
+    private sealed class ItemMetadata
     {
-        public string ArticleNumber { get; init; } = string.Empty;
-        public string Name { get; init; } = string.Empty;
+        public string? Brand { get; init; }
+        public string? ItemName { get; init; }
+        public string? ArticleNumber { get; init; }
+        public string? TanNumber { get; init; }
+        public string? ProductionPartNumber { get; init; }
         public string? PrimaryBarcode { get; init; }
         public bool IsActive { get; init; }
     }
@@ -1350,6 +1702,18 @@ ORDER BY lastDoc.DocDate DESC, lastDoc.DocEntry DESC, a.ItemCode, a.WarehouseCod
     private sealed record ChangeBatch(long Version, DateTime AsOfUtc, List<InventoryStockRow> Rows);
     private sealed record RequiredDateRange(DateOnly From, DateOnly To);
     private sealed record OptionalDateRange(DateOnly? From, DateOnly? To);
+    private sealed record InventoryScope(
+        string ProfileKey,
+        string ScopeKey,
+        InventoryMetadataMode MetadataMode,
+        bool FilterToLiquiMolyCatalog,
+        string DefaultBrandLabel);
+    private enum InventoryMetadataMode
+    {
+        Generic,
+        LiquiMoly,
+        AutoHub
+    }
 }
 
 public class InventoryStockSnapshotResponse
@@ -1387,9 +1751,16 @@ public class InventoryStockRow
 {
     public string Key { get; init; } = string.Empty;
     public string ItemCode { get; init; } = string.Empty;
+    public string? Brand { get; init; }
+    public string? ItemBrand { get; init; }
     public string ItemName { get; init; } = string.Empty;
     public string ArticleNumber { get; init; } = string.Empty;
     public string? PrimaryBarcode { get; init; }
+    public string? Barcode => PrimaryBarcode;
+    public string? TanNumber { get; init; }
+    public string? EngineCode { get; init; }
+    public string? ProductionPartNumber { get; init; }
+    public string? PartNumberInProduction { get; init; }
     public string WarehouseCode { get; init; } = string.Empty;
     public string? WarehouseName { get; init; }
     public decimal OnHand { get; init; }
@@ -1405,6 +1776,16 @@ public class InventoryStockRow
 public class InventoryMovementResponse
 {
     public string ItemCode { get; init; } = string.Empty;
+    public string? Brand { get; init; }
+    public string? ItemBrand { get; init; }
+    public string? ItemName { get; init; }
+    public string? ArticleNumber { get; init; }
+    public string? PrimaryBarcode { get; init; }
+    public string? Barcode => PrimaryBarcode;
+    public string? TanNumber { get; init; }
+    public string? EngineCode { get; init; }
+    public string? ProductionPartNumber { get; init; }
+    public string? PartNumberInProduction { get; init; }
     public string? WarehouseCode { get; init; }
     public DateOnly? DateFrom { get; init; }
     public DateOnly? DateTo { get; init; }
@@ -1423,7 +1804,16 @@ public class InventoryMovementRow
     public DateTime? MovementDate { get; init; }
     public int LineNum { get; init; }
     public string ItemCode { get; init; } = string.Empty;
+    public string? Brand { get; init; }
+    public string? ItemBrand { get; init; }
     public string? ItemName { get; init; }
+    public string? ArticleNumber { get; init; }
+    public string? PrimaryBarcode { get; init; }
+    public string? Barcode { get; init; }
+    public string? TanNumber { get; init; }
+    public string? EngineCode { get; init; }
+    public string? ProductionPartNumber { get; init; }
+    public string? PartNumberInProduction { get; init; }
     public string? MovementWarehouse { get; init; }
     public string? SourceWarehouse { get; init; }
     public string? TargetWarehouse { get; init; }
@@ -1457,9 +1847,16 @@ public class InventoryDeliveryAggregateResponse
 public class InventoryDeliveryAggregateRow
 {
     public string ItemCode { get; init; } = string.Empty;
+    public string? Brand { get; init; }
+    public string? ItemBrand { get; init; }
     public string ArticleNumber { get; init; } = string.Empty;
     public string? PrimaryBarcode { get; init; }
+    public string? Barcode => PrimaryBarcode;
     public string ItemName { get; init; } = string.Empty;
+    public string? TanNumber { get; init; }
+    public string? EngineCode { get; init; }
+    public string? ProductionPartNumber { get; init; }
+    public string? PartNumberInProduction { get; init; }
     public string Warehouse { get; init; } = string.Empty;
     public decimal DeliveredQty { get; init; }
     public int DeliveryCount { get; init; }
