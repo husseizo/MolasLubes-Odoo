@@ -780,7 +780,8 @@ ORDER BY w.ItemCode, w.WhsCode");
                             continue;
                         }
 
-                        liquiMolyMetaMap?.TryGetValue(itemCode, out var liquiMolyMeta);
+                        ItemMetadata? liquiMolyMeta = null;
+                        liquiMolyMetaMap?.TryGetValue(itemCode, out liquiMolyMeta);
                         var itemMeta = ResolveItemMetadata(scope, rs, itemCode, itemName, liquiMolyMeta);
 
                         rows.Add(CreateStockRow(
@@ -933,7 +934,8 @@ ORDER BY lastDoc.DocDate DESC, lastDoc.DocEntry DESC, a.ItemCode, a.WarehouseCod
                             continue;
                         }
 
-                        liquiMolyMetaMap?.TryGetValue(itemCode, out var liquiMolyMeta);
+                        ItemMetadata? liquiMolyMeta = null;
+                        liquiMolyMetaMap?.TryGetValue(itemCode, out liquiMolyMeta);
                         var itemMeta = ResolveItemMetadata(
                             scope,
                             rs,
@@ -1343,8 +1345,8 @@ ORDER BY lastDoc.DocDate DESC, lastDoc.DocEntry DESC, a.ItemCode, a.WarehouseCod
                 "AutoHub",
                 "AutoHub",
                 InventoryMetadataMode.AutoHub,
-                filterToLiquiMolyCatalog: false,
-                defaultBrandLabel: "AutoHub");
+                FilterToLiquiMolyCatalog: false,
+                DefaultBrandLabel: "AutoHub");
         }
 
         if (string.Equals(requestedProfile, "AutoHub", StringComparison.OrdinalIgnoreCase))
@@ -1353,8 +1355,8 @@ ORDER BY lastDoc.DocDate DESC, lastDoc.DocEntry DESC, a.ItemCode, a.WarehouseCod
                 "AutoHub",
                 "AutoHub",
                 InventoryMetadataMode.AutoHub,
-                filterToLiquiMolyCatalog: false,
-                defaultBrandLabel: "AutoHub");
+                FilterToLiquiMolyCatalog: false,
+                DefaultBrandLabel: "AutoHub");
         }
 
         if (string.Equals(normalizedBrand, "LIQUIMOLY", StringComparison.Ordinal)
@@ -1365,16 +1367,16 @@ ORDER BY lastDoc.DocDate DESC, lastDoc.DocEntry DESC, a.ItemCode, a.WarehouseCod
                 "MolasLubes",
                 "LiquiMoly",
                 InventoryMetadataMode.LiquiMoly,
-                filterToLiquiMolyCatalog: true,
-                defaultBrandLabel: "Liqui Moly");
+                FilterToLiquiMolyCatalog: true,
+                DefaultBrandLabel: "Liqui Moly");
         }
 
         return new InventoryScope(
             requestedProfile,
             requestedProfile,
             InventoryMetadataMode.Generic,
-            filterToLiquiMolyCatalog: false,
-            defaultBrandLabel: requestedProfile);
+            FilterToLiquiMolyCatalog: false,
+            DefaultBrandLabel: requestedProfile);
     }
 
     private static string? NormalizeScopeBrand(string? brand)
@@ -1751,6 +1753,7 @@ public class InventoryStockRow
 {
     public string Key { get; init; } = string.Empty;
     public string ItemCode { get; init; } = string.Empty;
+    public string SapItemCode => ItemCode;
     public string? Brand { get; init; }
     public string? ItemBrand { get; init; }
     public string ItemName { get; init; } = string.Empty;
@@ -1776,6 +1779,7 @@ public class InventoryStockRow
 public class InventoryMovementResponse
 {
     public string ItemCode { get; init; } = string.Empty;
+    public string SapItemCode => ItemCode;
     public string? Brand { get; init; }
     public string? ItemBrand { get; init; }
     public string? ItemName { get; init; }
@@ -1804,6 +1808,7 @@ public class InventoryMovementRow
     public DateTime? MovementDate { get; init; }
     public int LineNum { get; init; }
     public string ItemCode { get; init; } = string.Empty;
+    public string SapItemCode => ItemCode;
     public string? Brand { get; init; }
     public string? ItemBrand { get; init; }
     public string? ItemName { get; init; }
@@ -1847,6 +1852,7 @@ public class InventoryDeliveryAggregateResponse
 public class InventoryDeliveryAggregateRow
 {
     public string ItemCode { get; init; } = string.Empty;
+    public string SapItemCode => ItemCode;
     public string? Brand { get; init; }
     public string? ItemBrand { get; init; }
     public string ArticleNumber { get; init; } = string.Empty;
