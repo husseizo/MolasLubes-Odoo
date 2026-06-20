@@ -445,18 +445,21 @@ public class AdminLiquiMolyReplenishmentController : ControllerBase
 [ServiceFilter(typeof(ApiKeyAttribute))]
 public class AdminLiquiMolyReportsController : ControllerBase
 {
-    private readonly LiquiMolyReplenishmentAnalyzer _analyzer;
-    private readonly LiquiMolyReplenishmentService  _service;
-    private readonly LiquiMolyRoleService           _roleService;
+    private readonly LiquiMolyReplenishmentAnalyzer    _analyzer;
+    private readonly LiquiMolyReplenishmentService     _service;
+    private readonly LiquiMolyRoleService              _roleService;
+    private readonly SapLiquiMolySalesOrderReportReader _soReader;
 
     public AdminLiquiMolyReportsController(
-        LiquiMolyReplenishmentAnalyzer analyzer,
-        LiquiMolyReplenishmentService  service,
-        LiquiMolyRoleService           roleService)
+        LiquiMolyReplenishmentAnalyzer     analyzer,
+        LiquiMolyReplenishmentService      service,
+        LiquiMolyRoleService               roleService,
+        SapLiquiMolySalesOrderReportReader soReader)
     {
         _analyzer    = analyzer;
         _service     = service;
         _roleService = roleService;
+        _soReader    = soReader;
     }
 
     /// <summary>Full recommendation report — all LM items with demand metrics and trend.</summary>
@@ -589,5 +592,72 @@ public class AdminLiquiMolyReportsController : ControllerBase
         {
             return StatusCode(StatusCodes.Status504GatewayTimeout, "Timed out while loading approval history.");
         }
+    }
+
+    [HttpGet("sales-order-lines")]
+    public IActionResult GetSalesOrderLines(
+        [FromQuery] string  actorSapUserCode    = "",
+        [FromQuery] string  profile             = "MolasLubes",
+        [FromQuery] string? brand               = null,
+        [FromQuery] DateOnly? dateFrom          = null,
+        [FromQuery] DateOnly? dateTo            = null,
+        [FromQuery] string  dateField           = "orderDate",
+        [FromQuery] string  lineStatus          = "open",
+        [FromQuery] string  fulfillmentStatus   = "notDelivered",
+        [FromQuery] string? warehouse           = null,
+        [FromQuery] string? customerCode        = null,
+        [FromQuery] string? salesPersonCode     = null,
+        [FromQuery] string? search              = null,
+        [FromQuery] int     skip                = 0,
+        [FromQuery] int     take                = 50,
+        [FromQuery] string  sort                = "orderDate",
+        [FromQuery] string  sortDirection       = "desc")
+    {
+        try { _roleService.Authorize(actorSapUserCode, LiquiMolyRole.Viewer); }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+
+        skip = Math.Max(0, skip);
+        take = Math.Clamp(take, 1, 500);
+
+        try
+        {
+            var result = _soReader.GetSalesOrderLines(
+                profile, brand, dateFrom, dateTo, dateField,
+                lineStatus, fulfillmentStatus,
+                warehouse, customerCode, salesPersonCode, search,
+                skip, take, sort, sortDirection);
+
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex) { return BadRequest(new { message = ex.Message }); }
+        catch (Exception ex)                 { return StatusCode(500, new { message = "Failed to load sales order lines.", detail = ex.Message }); }
+    }
+
+    [HttpGet("sales-order-lines/summary")]
+    public IActionResult GetSalesOrderLinesSummary(
+        [FromQuery] string  actorSapUserCode = "",
+        [FromQuery] string  profile          = "MolasLubes",
+        [FromQuery] string? brand            = null,
+        [FromQuery] DateOnly? dateFrom       = null,
+        [FromQuery] DateOnly? dateTo         = null,
+        [FromQuery] string  dateField        = "orderDate",
+        [FromQuery] string? warehouse        = null,
+        [FromQuery] string? customerCode     = null,
+        [FromQuery] string? salesPersonCode  = null,
+        [FromQuery] string? search           = null)
+    {
+        try { _roleService.Authorize(actorSapUserCode, LiquiMolyRole.Viewer); }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+
+        try
+        {
+            var result = _soReader.GetSalesOrderLinesSummary(
+                profile, brand, dateFrom, dateTo, dateField,
+                warehouse, customerCode, salesPersonCode, search);
+
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex) { return BadRequest(new { message = ex.Message }); }
+        catch (Exception ex)                 { return StatusCode(500, new { message = "Failed to load sales order lines summary.", detail = ex.Message }); }
     }
 }

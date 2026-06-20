@@ -226,6 +226,47 @@ public class SapLiquiMolyInventoryReader
         };
     }
 
+    public InventoryTodayDeliveryResponse GetTodayDeliveries(string profileKey, string? brand)
+    {
+        var scope = ResolveScope(profileKey, brand, onlyLiquiMoly: true);
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        var state = EnsureDeliveryAggregateSnapshot(scope, today, today);
+
+        var byItem = state.Rows
+            .GroupBy(r => r.ItemCode, StringComparer.OrdinalIgnoreCase)
+            .Select(g =>
+            {
+                var first = g.First();
+                return new InventoryTodayDeliveryItem
+                {
+                    ItemCode = g.Key,
+                    ItemName = first.ItemName,
+                    Brand = first.Brand,
+                    ArticleNumber = first.ArticleNumber,
+                    TanNumber = first.TanNumber,
+                    DeliveredQty = g.Sum(r => r.DeliveredQty),
+                    DeliveryCount = g.Sum(r => r.DeliveryCount),
+                    LastDeliveredAt = g.Max(r => r.LastDeliveredAt),
+                    LastDeliveryDocEntry = g.OrderByDescending(r => r.LastDeliveryDocEntry ?? 0).First().LastDeliveryDocEntry,
+                    LastDeliveryDocNum = g.OrderByDescending(r => r.LastDeliveryDocEntry ?? 0).First().LastDeliveryDocNum,
+                    Warehouses = g.Select(r => r.Warehouse).Where(w => !string.IsNullOrWhiteSpace(w)).Distinct(StringComparer.OrdinalIgnoreCase).ToList()
+                };
+            })
+            .OrderByDescending(x => x.LastDeliveredAt ?? DateTime.MinValue)
+            .ThenByDescending(x => x.LastDeliveryDocEntry ?? 0)
+            .ThenBy(x => x.ItemCode, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return new InventoryTodayDeliveryResponse
+        {
+            AsOfUtc = state.AsOfUtc,
+            Version = state.Version,
+            Date = today,
+            Total = byItem.Count,
+            Items = byItem
+        };
+    }
+
     public InventoryMovementResponse GetMovements(
         string profileKey,
         string? brand,
@@ -877,7 +918,8 @@ WITH Agg AS
         l.ItemCode AS ItemCode,
         l.WhsCode AS WarehouseCode,
         CONVERT(DECIMAL(19, 6), SUM(ISNULL(l.Quantity, 0))) AS DeliveredQty,
-        COUNT(DISTINCT h.DocEntry) AS DeliveryCount
+        COUNT(DISTINCT h.DocEntry) AS DeliveryCount,
+        MAX(h.DocEntry) AS LastDocEntry
     FROM ODLN h
     INNER JOIN DLN1 l ON h.DocEntry = l.DocEntry
     WHERE ISNULL(h.CANCELED, 'N') <> 'Y'
@@ -898,25 +940,9 @@ SELECT
     lastDoc.CardName AS CustomerName,
     {metadataSelect}
 FROM Agg a
-OUTER APPLY
-(
-    SELECT TOP 1
-        h.DocEntry AS DocEntry,
-        h.DocNum AS DocNum,
-        h.DocDate AS DocDate,
-        h.CardCode AS CardCode,
-        h.CardName AS CardName
-    FROM ODLN h
-    INNER JOIN DLN1 l ON h.DocEntry = l.DocEntry
-    WHERE ISNULL(h.CANCELED, 'N') <> 'Y'
-      AND h.DocDate >= '{fromSql}'
-      AND h.DocDate <= '{toSql}'
-      AND l.ItemCode = a.ItemCode
-      AND l.WhsCode = a.WarehouseCode
-    ORDER BY h.DocDate DESC, h.DocEntry DESC
-) lastDoc
+LEFT JOIN ODLN lastDoc ON lastDoc.DocEntry = a.LastDocEntry
 LEFT JOIN OITM i ON i.ItemCode = a.ItemCode
-ORDER BY lastDoc.DocDate DESC, lastDoc.DocEntry DESC, a.ItemCode, a.WarehouseCode");
+ORDER BY lastDoc.DocDate DESC, a.LastDocEntry DESC, a.ItemCode, a.WarehouseCode");
 
                     while (!rs.EoF)
                     {
@@ -1847,6 +1873,30 @@ public class InventoryDeliveryAggregateResponse
     public long Version { get; init; }
     public int Total { get; init; }
     public List<InventoryDeliveryAggregateRow> Rows { get; init; } = new();
+}
+
+public class InventoryTodayDeliveryResponse
+{
+    public DateOnly Date { get; init; }
+    public DateTime AsOfUtc { get; init; }
+    public long Version { get; init; }
+    public int Total { get; init; }
+    public List<InventoryTodayDeliveryItem> Items { get; init; } = new();
+}
+
+public class InventoryTodayDeliveryItem
+{
+    public string ItemCode { get; init; } = string.Empty;
+    public string? ItemName { get; init; }
+    public string? Brand { get; init; }
+    public string? ArticleNumber { get; init; }
+    public string? TanNumber { get; init; }
+    public decimal DeliveredQty { get; init; }
+    public int DeliveryCount { get; init; }
+    public DateTime? LastDeliveredAt { get; init; }
+    public int? LastDeliveryDocEntry { get; init; }
+    public string? LastDeliveryDocNum { get; init; }
+    public List<string> Warehouses { get; init; } = new();
 }
 
 public class InventoryDeliveryAggregateRow

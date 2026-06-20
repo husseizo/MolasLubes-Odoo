@@ -21,13 +21,13 @@ public class SapLiquiMolyDocumentReader
         _logger = logger;
     }
 
-    public LiquiMolyDocumentDetails? GetDocument(string docType, int docEntry)
+    public LiquiMolyDocumentDetails? GetDocument(string docType, int docEntry, string? profileOverride = null)
     {
         if (docEntry <= 0)
             throw new ArgumentOutOfRangeException(nameof(docEntry), "docEntry must be greater than zero.");
 
         var normalized = NormalizeDocType(docType);
-        var candidates = GetCandidates(normalized);
+        var candidates = GetCandidates(normalized, profileOverride);
 
         foreach (var candidate in candidates)
         {
@@ -37,6 +37,17 @@ public class SapLiquiMolyDocumentReader
         }
 
         return null;
+    }
+
+    public LiquiMolyDocumentLine? GetLine(string docType, int docEntry, int lineNum, string? profileOverride = null)
+    {
+        if (docEntry <= 0)
+            throw new ArgumentOutOfRangeException(nameof(docEntry), "docEntry must be greater than zero.");
+        if (lineNum < 0)
+            throw new ArgumentOutOfRangeException(nameof(lineNum), "lineNum must be >= 0.");
+
+        var document = GetDocument(docType, docEntry, profileOverride);
+        return document?.Lines.FirstOrDefault(l => l.LineNum == lineNum);
     }
 
     private LiquiMolyDocumentDetails? TryReadCandidate(DocumentCandidate candidate, int docEntry)
@@ -87,7 +98,9 @@ public class SapLiquiMolyDocumentReader
                         ToWarehouse = ReadString(headerRs, "ToWarehouse"),
                         CreatedBy = ReadString(headerRs, "CreatedBy"),
                         LastModifiedDate = ReadDate(headerRs, "LastModifiedDate"),
-                        Remarks = ReadString(headerRs, "Comments")
+                        Remarks = ReadString(headerRs, "Comments"),
+                        SalesPersonCode = ReadString(headerRs, "SalesPersonCode"),
+                        SalesPersonName = ReadString(headerRs, "SalesPersonName")
                     };
 
                     lineRs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
@@ -110,6 +123,10 @@ public class SapLiquiMolyDocumentReader
                             FromWarehouse = ReadString(lineRs, "FromWarehouse"),
                             ToWarehouse = ReadString(lineRs, "ToWarehouse"),
                             LineStatus = ReadString(lineRs, "LineStatus"),
+                            Brand = ReadString(lineRs, "Brand"),
+                            TanNumber = ReadString(lineRs, "TanNumber"),
+                            ProductionPartNumber = ReadString(lineRs, "ProductionPartNumber"),
+                            OpenQty = ReadNullableDecimal(lineRs, "OpenQty"),
                             Batch = null,
                             SerialNumber = null
                         });
@@ -175,58 +192,60 @@ public class SapLiquiMolyDocumentReader
         };
     }
 
-    private static IReadOnlyList<DocumentCandidate> GetCandidates(string docType) => docType switch
+    private static IReadOnlyList<DocumentCandidate> GetCandidates(string docType, string? profileOverride = null) => docType switch
     {
         "SO" or "ORDR" => new[]
         {
-            new DocumentCandidate("SO", "MolasLubes", "ORDR", "RDR1", true, true, PartnerRole.Customer)
+            new DocumentCandidate("SO", profileOverride ?? "MolasLubes", "ORDR", "RDR1", true, true, PartnerRole.Customer)
         },
         "DLV" or "ODLN" => new[]
         {
-            new DocumentCandidate("DLV", "MolasLubes", "ODLN", "DLN1", true, true, PartnerRole.Customer)
+            new DocumentCandidate("DLV", profileOverride ?? "MolasLubes", "ODLN", "DLN1", true, true, PartnerRole.Customer)
         },
         "TRQ" or "OWTQ" => new[]
         {
-            new DocumentCandidate("TRQ", "MolasLubes", "OWTQ", "WTQ1", true, false, PartnerRole.None)
+            new DocumentCandidate("TRQ", profileOverride ?? "MolasLubes", "OWTQ", "WTQ1", true, false, PartnerRole.None)
         },
         "TRF" or "OWTR" => new[]
         {
-            new DocumentCandidate("TRF", "MolasLubes", "OWTR", "WTR1", true, false, PartnerRole.None)
+            new DocumentCandidate("TRF", profileOverride ?? "MolasLubes", "OWTR", "WTR1", true, false, PartnerRole.None)
         },
         "INC" or "OINC" => new[]
         {
-            new DocumentCandidate("INC", "MolasLubes", "OINC", "INC1", false, false, PartnerRole.None)
+            new DocumentCandidate("INC", profileOverride ?? "MolasLubes", "OINC", "INC1", false, false, PartnerRole.None)
         },
         "IP" or "OIQR" => new[]
         {
-            new DocumentCandidate("IP", "MolasLubes", "OIQR", "IQR1", false, false, PartnerRole.None)
+            new DocumentCandidate("IP", profileOverride ?? "MolasLubes", "OIQR", "IQR1", false, false, PartnerRole.None)
         },
         "PO" or "OPOR" => new[]
         {
-            new DocumentCandidate("PO", "AutoHub", "OPOR", "POR1", true, true, PartnerRole.Vendor)
+            new DocumentCandidate("PO", profileOverride ?? "AutoHub", "OPOR", "POR1", true, true, PartnerRole.Vendor)
         },
         "GI" or "OIGE" => new[]
         {
-            new DocumentCandidate("GI", "MolasLubes", "OIGE", "IGE1", false, false, PartnerRole.None)
+            new DocumentCandidate("GI", profileOverride ?? "MolasLubes", "OIGE", "IGE1", false, false, PartnerRole.None)
         },
         "GR" => new[]
         {
-            new DocumentCandidate("GR", "AutoHub", "OPDN", "PDN1", true, true, PartnerRole.Vendor),
-            new DocumentCandidate("GR", "AutoHub", "OIGN", "IGN1", false, false, PartnerRole.None)
+            new DocumentCandidate("GR", profileOverride ?? "AutoHub", "OPDN", "PDN1", true, true, PartnerRole.Vendor),
+            new DocumentCandidate("GR", profileOverride ?? "AutoHub", "OIGN", "IGN1", false, false, PartnerRole.None)
         },
         "OPDN" => new[]
         {
-            new DocumentCandidate("GR", "AutoHub", "OPDN", "PDN1", true, true, PartnerRole.Vendor)
+            new DocumentCandidate("GR", profileOverride ?? "AutoHub", "OPDN", "PDN1", true, true, PartnerRole.Vendor)
         },
         "OIGN" => new[]
         {
-            new DocumentCandidate("GR", "AutoHub", "OIGN", "IGN1", false, false, PartnerRole.None)
+            new DocumentCandidate("GR", profileOverride ?? "AutoHub", "OIGN", "IGN1", false, false, PartnerRole.None)
         },
         _ => Array.Empty<DocumentCandidate>()
     };
 
     private static string BuildHeaderSql(DocumentCandidate candidate, int docEntry)
     {
+        var (salesPersonSelect, salesPersonJoin) = BuildHeaderSalesPersonSql(candidate);
+
         if (candidate.HeaderTable == "OINC")
         {
             return $@"
@@ -257,7 +276,9 @@ SELECT TOP 1
     ) AS ToWarehouse,
     u.USER_CODE AS CreatedBy,
     h.UpdateDate AS LastModifiedDate,
-    h.Remarks AS Comments
+    h.Remarks AS Comments,
+    CAST(NULL AS NVARCHAR(10)) AS SalesPersonCode,
+    CAST(NULL AS NVARCHAR(100)) AS SalesPersonName
 FROM {candidate.HeaderTable} h
 LEFT JOIN OUSR u ON u.USERID = h.UserSign
 WHERE h.DocEntry = {docEntry}";
@@ -288,7 +309,9 @@ SELECT TOP 1
     CAST(NULL AS NVARCHAR(8)) AS ToWarehouse,
     u.USER_CODE AS CreatedBy,
     h.UpdateDate AS LastModifiedDate,
-    h.Comments AS Comments
+    h.Comments AS Comments,
+    CAST(NULL AS NVARCHAR(10)) AS SalesPersonCode,
+    CAST(NULL AS NVARCHAR(100)) AS SalesPersonName
 FROM {candidate.HeaderTable} h
 LEFT JOIN OUSR u ON u.USERID = h.UserSign
 WHERE h.DocEntry = {docEntry}";
@@ -317,9 +340,11 @@ SELECT TOP 1
     {warehouseSql},
     u.USER_CODE AS CreatedBy,
     h.UpdateDate AS LastModifiedDate,
-    h.Comments AS Comments
+    h.Comments AS Comments,
+    {salesPersonSelect}
 FROM {candidate.HeaderTable} h
 LEFT JOIN OUSR u ON u.USERID = h.UserSign
+{salesPersonJoin}
 WHERE h.DocEntry = {docEntry}";
         }
 
@@ -337,22 +362,32 @@ SELECT TOP 1
     {warehouseSql},
     u.USER_CODE AS CreatedBy,
     h.UpdateDate AS LastModifiedDate,
-    h.Comments AS Comments
+    h.Comments AS Comments,
+    {salesPersonSelect}
 FROM {candidate.HeaderTable} h
 LEFT JOIN OUSR u ON u.USERID = h.UserSign
+{salesPersonJoin}
 WHERE h.DocEntry = {docEntry}";
     }
 
     private static string BuildLineSql(DocumentCandidate candidate, int docEntry)
     {
+        var metaSql = BuildLineMetadataSql(candidate);
+        var lineDescriptionSql = BuildLineItemNameSql(candidate, "l.Dscription", "i.ItemName");
+        var countLineDescriptionSql = BuildLineItemNameSql(candidate, "l.ItemDesc", "i.ItemName");
+        var postingLineDescriptionSql = BuildLineItemNameSql(candidate, "l.ItemName", "i.ItemName");
+        var openQtySql = candidate.HeaderTable == "ORDR"
+            ? "CONVERT(DECIMAL(19, 6), ISNULL(l.OpenQty, 0))"
+            : "CAST(NULL AS DECIMAL(19, 6))";
+
         if (candidate.HeaderTable == "OINC")
         {
             return $@"
 SELECT
     l.LineNum AS LineNum,
     l.ItemCode AS ItemCode,
-    COALESCE(NULLIF(l.ItemDesc, ''), i.ItemName) AS ItemName,
-    NULLIF(i.ItemCode, '') AS ArticleNumber,
+    {countLineDescriptionSql} AS ItemName,
+    {metaSql},
     CONVERT(DECIMAL(19, 6), ISNULL(l.CountQty, 0)) AS Quantity,
     NULLIF(l.UomCode, '') AS UnitOfMeasure,
     CAST(NULL AS DECIMAL(19, 6)) AS UnitPrice,
@@ -364,7 +399,8 @@ SELECT
         WHEN h.Status = 'C' OR l.LineStatus = 'C' THEN 'CLOSED'
         WHEN h.Status = 'O' OR l.LineStatus = 'O' THEN 'OPEN'
         ELSE ISNULL(NULLIF(l.LineStatus, ''), ISNULL(NULLIF(h.Status, ''), 'POSTED'))
-    END AS LineStatus
+    END AS LineStatus,
+    CAST(NULL AS DECIMAL(19, 6)) AS OpenQty
 FROM {candidate.LineTable} l
 INNER JOIN {candidate.HeaderTable} h ON h.DocEntry = l.DocEntry
 LEFT JOIN OITM i ON i.ItemCode = l.ItemCode
@@ -378,8 +414,8 @@ ORDER BY l.LineNum";
 SELECT
     l.DocLineNum AS LineNum,
     l.ItemCode AS ItemCode,
-    COALESCE(NULLIF(l.ItemName, ''), i.ItemName) AS ItemName,
-    NULLIF(i.ItemCode, '') AS ArticleNumber,
+    {postingLineDescriptionSql} AS ItemName,
+    {metaSql},
     CONVERT(DECIMAL(19, 6), ABS(ISNULL(l.Quantity, 0))) AS Quantity,
     NULLIF(l.UomCode, '') AS UnitOfMeasure,
     CONVERT(DECIMAL(19, 6), ISNULL(l.Price, 0)) AS UnitPrice,
@@ -391,7 +427,8 @@ SELECT
         WHEN h.Status = 'C' THEN 'CLOSED'
         WHEN h.Status = 'O' THEN 'OPEN'
         ELSE ISNULL(NULLIF(h.Status, ''), 'POSTED')
-    END AS LineStatus
+    END AS LineStatus,
+    CAST(NULL AS DECIMAL(19, 6)) AS OpenQty
 FROM {candidate.LineTable} l
 INNER JOIN {candidate.HeaderTable} h ON h.DocEntry = l.DocEntry
 LEFT JOIN OITM i ON i.ItemCode = l.ItemCode
@@ -430,8 +467,8 @@ ORDER BY l.DocLineNum";
 SELECT
     l.LineNum AS LineNum,
     l.ItemCode AS ItemCode,
-    COALESCE(NULLIF(l.Dscription, ''), i.ItemName) AS ItemName,
-    NULLIF(i.ItemCode, '') AS ArticleNumber,
+    {lineDescriptionSql} AS ItemName,
+    {metaSql},
     CONVERT(DECIMAL(19, 6), ISNULL(l.Quantity, 0)) AS Quantity,
     NULLIF(l.unitMsr, '') AS UnitOfMeasure,
     {unitPriceSql} AS UnitPrice,
@@ -439,7 +476,8 @@ SELECT
     NULLIF(l.WhsCode, '') AS Warehouse,
     {fromWarehouseSql} AS FromWarehouse,
     {toWarehouseSql} AS ToWarehouse,
-    {lineStatusSql} AS LineStatus
+    {lineStatusSql} AS LineStatus,
+    {openQtySql} AS OpenQty
 FROM {candidate.LineTable} l
 INNER JOIN {candidate.HeaderTable} h ON h.DocEntry = l.DocEntry
 LEFT JOIN OITM i ON i.ItemCode = l.ItemCode
@@ -513,6 +551,38 @@ ORDER BY l.LineNum";
     CAST(NULL AS NVARCHAR(8)) AS FromWarehouse,
     CAST(NULL AS NVARCHAR(8)) AS ToWarehouse"
     };
+
+    private static (string SelectSql, string JoinSql) BuildHeaderSalesPersonSql(DocumentCandidate candidate)
+    {
+        if (candidate.PartnerRole == PartnerRole.None)
+            return (
+                @"CAST(NULL AS NVARCHAR(10)) AS SalesPersonCode,
+    CAST(NULL AS NVARCHAR(100)) AS SalesPersonName",
+                ""
+            );
+
+        return (
+            @"CASE WHEN ISNULL(h.SlpCode, -1) = -1 THEN NULL ELSE CAST(h.SlpCode AS NVARCHAR(10)) END AS SalesPersonCode,
+    COALESCE(NULLIF(sl.SlpName, ''), NULL) AS SalesPersonName",
+            "LEFT JOIN OSLP sl ON sl.SlpCode = h.SlpCode"
+        );
+    }
+
+    private static string BuildLineMetadataSql(DocumentCandidate candidate) =>
+        candidate.ProfileKey == "AutoHub"
+            ? @"COALESCE(NULLIF(i.U_Article_No, ''), NULLIF(l.ItemCode, '')) AS ArticleNumber,
+    COALESCE(NULLIF(i.U_MdlTEST, ''), NULL) AS Brand,
+    NULLIF(i.U_Engine_Code, '') AS TanNumber,
+    NULLIF(i.U_PT_No_Inproduction, '') AS ProductionPartNumber"
+            : @"NULLIF(l.ItemCode, '') AS ArticleNumber,
+    CAST('Liqui Moly' AS NVARCHAR(100)) AS Brand,
+    CAST(NULL AS NVARCHAR(100)) AS TanNumber,
+    CAST(NULL AS NVARCHAR(100)) AS ProductionPartNumber";
+
+    private static string BuildLineItemNameSql(DocumentCandidate candidate, string sourceExpression, string fallbackExpression) =>
+        candidate.ProfileKey == "AutoHub"
+            ? $"COALESCE(NULLIF(i.U_Item_Name, ''), NULLIF({sourceExpression}, ''), {fallbackExpression})"
+            : $"COALESCE(NULLIF({sourceExpression}, ''), {fallbackExpression})";
 
     private static Company CreateAndConnect(SapSettings sap)
     {
@@ -638,12 +708,15 @@ public class LiquiMolyDocumentHeader
     public DateTime? LastModifiedDate { get; init; }
     public string? Remarks { get; init; }
     public string? Comments => Remarks;
+    public string? SalesPersonCode { get; init; }
+    public string? SalesPersonName { get; init; }
 }
 
 public class LiquiMolyDocumentLine
 {
     public int LineNum { get; init; }
     public string ItemCode { get; init; } = string.Empty;
+    public string SapItemCode => ItemCode;
     public string? ItemName { get; init; }
     public string? ArticleNumber { get; init; }
     public decimal Quantity { get; init; }
@@ -655,6 +728,12 @@ public class LiquiMolyDocumentLine
     public string? FromWarehouse { get; init; }
     public string? ToWarehouse { get; init; }
     public string? LineStatus { get; init; }
+    public string? Brand { get; init; }
+    public string? TanNumber { get; init; }
+    public string? EngineCode => TanNumber;
+    public string? ProductionPartNumber { get; init; }
+    public string? PartNumberInProduction => ProductionPartNumber;
+    public decimal? OpenQty { get; init; }
     public string? Batch { get; init; }
     public string? SerialNumber { get; init; }
 }

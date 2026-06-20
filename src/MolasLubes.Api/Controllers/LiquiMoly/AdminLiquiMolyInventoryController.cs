@@ -67,6 +67,7 @@ public class AdminLiquiMolyInventoryController : ControllerBase
         [FromQuery] string actorSapUserCode = "",
         [FromQuery] string profile = DefaultProfile,
         [FromQuery] string? brand = null,
+        [FromQuery] string? warehouse = null,
         [FromQuery] string? warehouseCode = null)
     {
         var auth = AuthorizeViewer(actorSapUserCode);
@@ -77,8 +78,42 @@ public class AdminLiquiMolyInventoryController : ControllerBase
 
         try
         {
-            var data = _reader.GetStockForItem(profile, brand, itemCode.Trim(), warehouseCode);
-            return Ok(data);
+            var resolvedWarehouse = !string.IsNullOrWhiteSpace(warehouse)
+                ? warehouse
+                : warehouseCode;
+
+            var snapshot = _reader.GetStockForItem(profile, brand, itemCode.Trim(), resolvedWarehouse);
+            var first = snapshot.Rows.FirstOrDefault();
+
+            return Ok(new
+            {
+                snapshot.AsOfUtc,
+                snapshot.Version,
+                itemCode = itemCode.Trim(),
+                sapItemCode = itemCode.Trim(),
+                itemName = first?.ItemName,
+                brand = first?.Brand,
+                articleNumber = first?.ArticleNumber,
+                tanNumber = first?.TanNumber,
+                engineCode = first?.EngineCode,
+                productionPartNumber = first?.ProductionPartNumber,
+                partNumberInProduction = first?.PartNumberInProduction,
+                primaryBarcode = first?.PrimaryBarcode,
+                totalOnHandQty = snapshot.Rows.Sum(r => r.OnHand),
+                totalCommittedQty = snapshot.Rows.Sum(r => r.Committed),
+                totalOrderedQty = snapshot.Rows.Sum(r => r.Ordered),
+                totalAvailableQty = snapshot.Rows.Sum(r => r.Available),
+                warehouses = snapshot.Rows.Select(r => new
+                {
+                    warehouse = r.WarehouseCode,
+                    warehouseName = r.WarehouseName,
+                    onHandQty = r.OnHand,
+                    committedQty = r.Committed,
+                    orderedQty = r.Ordered,
+                    availableQty = r.Available,
+                    stockStatus = r.StockStatus
+                }).ToList()
+            });
         }
         catch (Exception ex)
         {
@@ -187,6 +222,26 @@ public class AdminLiquiMolyInventoryController : ControllerBase
         catch (Exception ex)
         {
             return StatusCode(500, new { message = "Failed to load delivery aggregates.", detail = ex.Message });
+        }
+    }
+
+    [HttpGet("deliveries/today-summary")]
+    public IActionResult GetTodayDeliveries(
+        [FromQuery] string actorSapUserCode = "",
+        [FromQuery] string profile = DefaultProfile,
+        [FromQuery] string? brand = null)
+    {
+        var auth = AuthorizeViewer(actorSapUserCode);
+        if (auth != null) return auth;
+
+        try
+        {
+            var data = _reader.GetTodayDeliveries(profile, brand);
+            return Ok(data);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to load today's deliveries.", detail = ex.Message });
         }
     }
 
