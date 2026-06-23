@@ -5,6 +5,7 @@ using MolasLubes.Domain.Entities.Neon;
 using MolasLubes.Infrastructure.Common;
 using MolasLubes.Infrastructure.Persistence;
 using Npgsql;
+using System.Net.Sockets;
 
 namespace MolasLubes.Infrastructure.Services.Sync;
 
@@ -358,17 +359,25 @@ public class NeonPaymentSyncService
 
     private static bool IsTransientNeonStreamReadFailure(Exception ex)
     {
-        if (ex is EndOfStreamException or IOException)
+        if (ex is EndOfStreamException or IOException or TimeoutException or SocketException)
         {
             return true;
         }
 
-        if (ex is NpgsqlException npgsqlException &&
-            npgsqlException.Message.Contains(
-                "Exception while reading from stream",
-                StringComparison.OrdinalIgnoreCase))
+        if (ex is NpgsqlException npgsqlException)
         {
-            return true;
+            if (npgsqlException.Message.Contains(
+                    "Exception while reading from stream",
+                    StringComparison.OrdinalIgnoreCase) ||
+                npgsqlException.Message.Contains(
+                    "Failed to connect to",
+                    StringComparison.OrdinalIgnoreCase) ||
+                npgsqlException.Message.Contains(
+                    "Timeout during connection attempt",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
         }
 
         return ex.InnerException is not null &&
