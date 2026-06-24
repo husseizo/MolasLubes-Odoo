@@ -381,6 +381,7 @@ public class NeonDbContext : DbContext
             e.Property(x => x.PrimaryBarcodeBaseQtyInGroup).HasColumnType("numeric(19,6)");
             e.Property(x => x.BarcodeResolutionStatus).HasMaxLength(50);
             e.Property(x => x.BarcodeResolutionNote);
+            e.Property(x => x.EanCode).HasMaxLength(20);
             e.Property(x => x.AllBarcodes);                     // JSON array of barcode rows
             e.Property(x => x.SapUomInfo);                      // JSON object snapshot
             e.Property(x => x.Approvals);                       // JSON array of strings

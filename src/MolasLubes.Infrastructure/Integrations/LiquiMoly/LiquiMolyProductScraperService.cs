@@ -470,13 +470,14 @@ public class LiquiMolyProductScraperService
             allPackagingSizes = htmlAll;
         }
 
-        // Try PIM API first for download URLs; fall back to HTML scraping.
-        string? pdf = null, sds = null;
+        // Try PIM API first for download URLs and EAN; fall back to HTML scraping.
+        string? pdf = null, sds = null, ean = null;
         var pimSheets = pimTask.Result;
         if (pimSheets != null)
         {
             pdf = SelectPimProductInfoUrl(pimSheets);
             sds = SelectPimSdsUrl(pimSheets);
+            ean = SelectPimEanCode(pimSheets);
             pimSheets.Dispose();
         }
         if (pdf == null || sds == null)
@@ -485,6 +486,7 @@ public class LiquiMolyProductScraperService
             pdf ??= htmlPdf;
             sds ??= htmlSds;
         }
+        ean ??= ExtractEanFromPage(doc);
 
         // SpecGrade: name first, then description
         var specGrade = ExtractSpecGrade(name ?? "")
@@ -512,6 +514,7 @@ public class LiquiMolyProductScraperService
             SpecGrade             = specGrade,
             ProductInfoPdfUrl     = pdf,
             SafetyDataSheetPdfUrl = sds,
+            EanCode               = ean,
         };
     }
 
@@ -1381,6 +1384,102 @@ public class LiquiMolyProductScraperService
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Extracts the EAN barcode from a PIM sheets JSON document.
+    /// Checks common root-level field names: ean, ean13, gtin.
+    /// Returns null when not present or not a valid 8–14 digit string.
+    /// </summary>
+    private static string? SelectPimEanCode(JsonDocument doc)
+    {
+        foreach (var candidate in new[] { "ean", "ean13", "gtin", "EAN", "EAN13" })
+        {
+            if (doc.RootElement.TryGetProperty(candidate, out var el)
+                && el.ValueKind == JsonValueKind.String)
+            {
+                var val = el.GetString();
+                if (IsValidEan(val))
+                    return val;
+            }
+        }
+
+        // Check nested under "article" object
+        if (doc.RootElement.TryGetProperty("article", out var article)
+            && article.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var candidate in new[] { "ean", "ean13", "gtin" })
+            {
+                if (article.TryGetProperty(candidate, out var el)
+                    && el.ValueKind == JsonValueKind.String)
+                {
+                    var val = el.GetString();
+                    if (IsValidEan(val))
+                        return val;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Extracts the EAN barcode from a product detail page HTML document.
+    /// Looks for table rows where a header/label cell contains "EAN" and the
+    /// next data cell contains an 8–14 digit code.
+    /// </summary>
+    private static string? ExtractEanFromPage(HtmlDocument doc)
+    {
+        // Look for <tr> elements in specification/detail tables
+        var rows = doc.DocumentNode.SelectNodes(
+            "//table//tr[th[contains(translate(normalize-space(text()),'ean','EAN'),'EAN')] or td[contains(translate(normalize-space(text()),'ean','EAN'),'EAN')]]");
+
+        if (rows != null)
+        {
+            foreach (var row in rows)
+            {
+                var cells = row.SelectNodes(".//th | .//td");
+                if (cells == null || cells.Count < 2) continue;
+
+                // First cell should be the label "EAN" or "EAN Code"
+                var label = HtmlEntity.DeEntitize(cells[0].InnerText.Trim());
+                if (!label.Equals("EAN", StringComparison.OrdinalIgnoreCase)
+                    && !label.StartsWith("EAN ", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var value = HtmlEntity.DeEntitize(cells[1].InnerText.Trim());
+                if (IsValidEan(value))
+                    return value;
+            }
+        }
+
+        // Also check definition lists (<dl><dt>EAN</dt><dd>xxxx</dd></dl>)
+        var dts = doc.DocumentNode.SelectNodes("//dl/dt");
+        if (dts != null)
+        {
+            foreach (var dt in dts)
+            {
+                var label = HtmlEntity.DeEntitize(dt.InnerText.Trim());
+                if (!label.Equals("EAN", StringComparison.OrdinalIgnoreCase)) continue;
+
+                var dd = dt.SelectSingleNode("following-sibling::dd[1]");
+                if (dd == null) continue;
+
+                var value = HtmlEntity.DeEntitize(dd.InnerText.Trim());
+                if (IsValidEan(value))
+                    return value;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool IsValidEan(string? value)
+    {
+        return !string.IsNullOrWhiteSpace(value)
+            && value.Length >= 8
+            && value.Length <= 14
+            && value.All(char.IsDigit);
     }
 
     // ======================================================

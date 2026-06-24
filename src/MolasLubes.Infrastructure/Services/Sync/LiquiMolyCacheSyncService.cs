@@ -126,6 +126,7 @@ public class LiquiMolyCacheSyncService
         entity.PrimaryBarcodeUomEntry = dto.PrimaryBarcodeUomEntry;
         entity.PrimaryBarcodeBaseQtyInGroup = dto.PrimaryBarcodeBaseQtyInGroup;
         entity.HasUnitBarcode        = dto.HasUnitBarcode;
+        entity.EanCode               = dto.EanCode;
         entity.BarcodeResolutionStatus = dto.BarcodeResolutionStatus;
         entity.BarcodeResolutionNote = dto.BarcodeResolutionNote;
 

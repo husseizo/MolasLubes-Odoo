@@ -49,6 +49,7 @@ public class LiquiMolyProductScrapeJob : IJob
             var lmScraper      = scope.ServiceProvider.GetRequiredService<LiquiMolyProductScraperService>();
             var meguinScraper  = scope.ServiceProvider.GetRequiredService<MeguinProductScraperService>();
             var barcodeReader  = scope.ServiceProvider.GetRequiredService<SapProductBarcodeReader>();
+            var barcodeWriter  = scope.ServiceProvider.GetRequiredService<SapProductBarcodeWriter>();
             var cacheSync      = scope.ServiceProvider.GetRequiredService<LiquiMolyCacheSyncService>();
             var neonSync       = scope.ServiceProvider.GetRequiredService<LiquiMolyNeonSyncService>();
             var settings       = scope.ServiceProvider.GetRequiredService<IOptions<LiquiMolyScraperSettings>>().Value;
@@ -93,11 +94,11 @@ public class LiquiMolyProductScrapeJob : IJob
             int totalFound = 0;
 
             totalFound += await ScrapeInBatchesAsync(
-                lmSkus, lmScraper, barcodeReader, cacheSync, neonSync, batchSize,
+                lmSkus, lmScraper, barcodeReader, barcodeWriter, cacheSync, neonSync, batchSize,
                 "LiquiMoly", allScrapedNumbers, context.CancellationToken);
 
             totalFound += await ScrapeInBatchesAsync(
-                meguinSkus, meguinScraper, barcodeReader, cacheSync, neonSync, batchSize,
+                meguinSkus, meguinScraper, barcodeReader, barcodeWriter, cacheSync, neonSync, batchSize,
                 "Meguin", allScrapedNumbers, context.CancellationToken);
 
             if (allScrapedNumbers.Count == 0)
@@ -134,6 +135,7 @@ public class LiquiMolyProductScrapeJob : IJob
         List<string> skus,
         LiquiMolyProductScraperService scraper,
         SapProductBarcodeReader barcodeReader,
+        SapProductBarcodeWriter barcodeWriter,
         LiquiMolyCacheSyncService cacheSync,
         LiquiMolyNeonSyncService neonSync,
         int batchSize,
@@ -175,6 +177,17 @@ public class LiquiMolyProductScrapeJob : IJob
             allScrapedNumbers.AddRange(products.Select(p => p.ArticleNumber));
 
             await barcodeReader.EnrichAsync(products, ct);
+
+            try
+            {
+                await barcodeWriter.WriteAsync(products, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "[{Brand}] Batch {Batch}/{Total} — barcode write failed (non-fatal), continuing with sync",
+                    brandLabel, i + 1, batchCount);
+            }
 
             await cacheSync.UpsertAsync(products);
             await neonSync.UpsertAsync(products);

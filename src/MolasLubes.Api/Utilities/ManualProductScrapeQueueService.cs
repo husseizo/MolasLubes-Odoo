@@ -165,6 +165,7 @@ public sealed class ManualProductScrapeQueueService
         var liquiMolyScraper = scope.ServiceProvider.GetRequiredService<LiquiMolyProductScraperService>();
         var meguinScraper = scope.ServiceProvider.GetRequiredService<MeguinProductScraperService>();
         var barcodeReader = scope.ServiceProvider.GetRequiredService<SapProductBarcodeReader>();
+        var barcodeWriter = scope.ServiceProvider.GetRequiredService<SapProductBarcodeWriter>();
         var cacheSyncService = scope.ServiceProvider.GetRequiredService<LiquiMolyCacheSyncService>();
         var neonSyncService = scope.ServiceProvider.GetRequiredService<LiquiMolyNeonSyncService>();
 
@@ -180,6 +181,17 @@ public sealed class ManualProductScrapeQueueService
         {
             _logger.LogWarning(ex,
                 "Manual scrape barcode enrichment failed (non-fatal) | JobId={JobId} | Brand={Brand} | Requested={Requested}",
+                job.JobId, job.Brand, job.ValidArticles.Count);
+        }
+
+        try
+        {
+            await barcodeWriter.WriteAsync(scraped, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Manual scrape barcode write failed (non-fatal) | JobId={JobId} | Brand={Brand} | Requested={Requested}",
                 job.JobId, job.Brand, job.ValidArticles.Count);
         }
 

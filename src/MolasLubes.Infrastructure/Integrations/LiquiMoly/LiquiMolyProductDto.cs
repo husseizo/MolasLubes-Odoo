@@ -52,6 +52,9 @@ public class LiquiMolyProductDto
     /// <summary>True when SAP has a Unit barcode row for this article.</summary>
     public bool HasUnitBarcode { get; set; }
 
+    /// <summary>EAN barcode read from Liqui Moly PIM API or product page HTML.</summary>
+    public string? EanCode { get; set; }
+
     /// <summary>How the primary barcode was resolved from SAP barcode rows.</summary>
     public string? BarcodeResolutionStatus { get; set; }
 

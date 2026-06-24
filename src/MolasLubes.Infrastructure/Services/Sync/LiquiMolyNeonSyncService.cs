@@ -209,6 +209,7 @@ public class LiquiMolyNeonSyncService
         entity.PrimaryBarcodeUomEntry = dto.PrimaryBarcodeUomEntry;
         entity.PrimaryBarcodeBaseQtyInGroup = dto.PrimaryBarcodeBaseQtyInGroup;
         entity.HasUnitBarcode        = dto.HasUnitBarcode;
+        entity.EanCode               = dto.EanCode;
         entity.BarcodeResolutionStatus = dto.BarcodeResolutionStatus;
         entity.BarcodeResolutionNote = dto.BarcodeResolutionNote;
 
@@ -286,6 +287,7 @@ public class LiquiMolyNeonSyncService
         entity.PrimaryBarcodeUomEntry = row.PrimaryBarcodeUomEntry;
         entity.PrimaryBarcodeBaseQtyInGroup = row.PrimaryBarcodeBaseQtyInGroup;
         entity.HasUnitBarcode        = row.HasUnitBarcode;
+        entity.EanCode               = row.EanCode;
         entity.BarcodeResolutionStatus = row.BarcodeResolutionStatus;
         entity.BarcodeResolutionNote = row.BarcodeResolutionNote;
         entity.AllPackagingSizes     = row.AllPackagingSizes;

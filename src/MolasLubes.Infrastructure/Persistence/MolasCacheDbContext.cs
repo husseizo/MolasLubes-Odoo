@@ -398,6 +398,7 @@ public class MolasCacheDbContext : DbContext
             entity.Property(x => x.PrimaryBarcodeBaseQtyInGroup).HasColumnType("decimal(19,6)");
             entity.Property(x => x.BarcodeResolutionStatus).HasMaxLength(50);
             entity.Property(x => x.BarcodeResolutionNote).HasMaxLength(500);
+            entity.Property(x => x.EanCode).HasMaxLength(20);
             entity.Property(x => x.AllBarcodes);                // JSON array of barcode rows
             entity.Property(x => x.SapUomInfo);                 // JSON object snapshot
             entity.Property(x => x.Approvals);                  // JSON array of strings

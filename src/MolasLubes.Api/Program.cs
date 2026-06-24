@@ -254,6 +254,7 @@ builder.Services.AddScoped<SapItemUomWriter>();
 builder.Services.AddScoped<SapItemSelector>();
 builder.Services.AddScoped<SapLiquiMolyItemMapper>();
 builder.Services.AddScoped<SapProductBarcodeReader>();
+builder.Services.AddScoped<SapProductBarcodeWriter>();
 builder.Services.AddScoped<SapLiquiMolyStockReader>();
 builder.Services.AddScoped<SapGoodsIssueWriter>();
 builder.Services.AddScoped<SapGoodsReceiptWriter>();

@@ -46,6 +46,7 @@ public class CacheLiquiMolyProduct
     public int? PrimaryBarcodeUomEntry { get; set; }
     public decimal? PrimaryBarcodeBaseQtyInGroup { get; set; }
     public bool HasUnitBarcode { get; set; }
+    public string? EanCode { get; set; }
     public string? BarcodeResolutionStatus { get; set; }
     public string? BarcodeResolutionNote { get; set; }
     public string? AllBarcodes { get; set; }              // JSON-serialised List<LiquiMolyBarcodeRowDto>
