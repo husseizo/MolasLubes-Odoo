@@ -22,7 +22,7 @@ public class SapProductBarcodeWriter
 
     /// <summary>
     /// For each product that has an EAN code but no Unit barcode in SAP yet,
-    /// writes the EAN to OBCD via the DI API Items business object.
+    /// writes the EAN to OBCD via BarCodesService.
     /// Idempotent: skips items that already have a Unit barcode.
     /// </summary>
     public Task WriteAsync(IList<LiquiMolyProductDto> products, CancellationToken ct = default)
@@ -52,7 +52,8 @@ public class SapProductBarcodeWriter
             {
                 Company? company = null;
                 Recordset? rs = null;
-                Items? items = null;
+                CompanyService? cs = null;
+                BarCodesService? barcodeService = null;
 
                 try
                 {
@@ -73,85 +74,64 @@ public class SapProductBarcodeWriter
                         return;
                     }
 
-                    var unitUomEntry = (int)rs.Fields.Item("UomEntry").Value;
+                    var unitUomEntry = Convert.ToInt32(rs.Fields.Item("UomEntry").Value);
                     ReleaseComSafely(rs, "Recordset (OUOM)");
                     rs = null;
 
-                    items = (Items)company.GetBusinessObject(BoObjectTypes.oItems);
+                    // Get BarCodesService via CompanyService
+                    cs = company.GetCompanyService();
+                    barcodeService = (BarCodesService)cs.GetBusinessService(ServiceTypes.BarCodesService);
+
+                    // Reuse a single Recordset for idempotency checks
+                    rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
 
                     foreach (var product in toWrite)
                     {
                         if (ct.IsCancellationRequested) break;
 
+                        BarCode? barCode = null;
+                        BarCodeParams? retParams = null;
+
                         try
                         {
-                            if (!items.GetByKey(product.ArticleNumber))
-                            {
-                                _logger.LogWarning(
-                                    "SapProductBarcodeWriter: item {ArticleNumber} not found in SAP — skipping",
-                                    product.ArticleNumber);
-                                skipped++;
-                                continue;
-                            }
+                            var safeCode = product.ArticleNumber.Replace("'", "''");
 
-                            // Idempotency: skip if a Unit barcode already exists
-                            var alreadyHasUnit = false;
-                            for (var j = 0; j < items.Barcodes.Count; j++)
+                            // Idempotency: skip if Unit barcode already in OBCD
+                            rs.DoQuery(
+                                $"SELECT COUNT(*) AS Cnt FROM OBCD WHERE ItemCode = '{safeCode}' AND UomEntry = {unitUomEntry}");
+                            if (!rs.EoF)
                             {
-                                items.Barcodes.SetCurrentLine(j);
-                                if (items.Barcodes.UoMEntry == unitUomEntry
-                                    && !string.IsNullOrEmpty(items.Barcodes.BcdCode))
+                                var cnt = Convert.ToInt32(rs.Fields.Item("Cnt").Value);
+                                if (cnt > 0)
                                 {
-                                    alreadyHasUnit = true;
-                                    break;
+                                    _logger.LogDebug(
+                                        "SapProductBarcodeWriter: {ArticleNumber} already has Unit barcode — skipping",
+                                        product.ArticleNumber);
+                                    skipped++;
+                                    continue;
                                 }
                             }
 
-                            if (alreadyHasUnit)
-                            {
-                                _logger.LogDebug(
-                                    "SapProductBarcodeWriter: {ArticleNumber} already has Unit barcode — skipping",
-                                    product.ArticleNumber);
-                                skipped++;
-                                continue;
-                            }
+                            barCode = (BarCode)barcodeService.GetDataInterface(
+                                BarCodesServiceDataInterfaces.bsBarCode);
 
-                            // Position to the correct row: use the blank last row if empty, else add
-                            var lastIdx = items.Barcodes.Count - 1;
-                            if (lastIdx >= 0)
-                            {
-                                items.Barcodes.SetCurrentLine(lastIdx);
-                                var lastCode = items.Barcodes.BcdCode;
-                                if (!string.IsNullOrEmpty(lastCode))
-                                    items.Barcodes.Add();
-                            }
+                            barCode.ItemNo = product.ArticleNumber;
+                            barCode.UoMEntry = unitUomEntry;
+                            barCode.BarCode = product.EanCode;
 
-                            items.Barcodes.BcdCode   = product.EanCode;
-                            items.Barcodes.UoMEntry  = unitUomEntry;
+                            retParams = barcodeService.Add(barCode);
 
-                            var retCode = items.Update();
-                            if (retCode != 0)
-                            {
-                                company.GetLastError(out var errCode, out var errMsg);
-                                _logger.LogError(
-                                    "SapProductBarcodeWriter: failed for {ArticleNumber} | SAP [{Code}]: {Msg}",
-                                    product.ArticleNumber, errCode, errMsg);
-                                failed++;
-                            }
-                            else
-                            {
-                                _logger.LogInformation(
-                                    "SapProductBarcodeWriter: wrote EAN {Ean} → {ArticleNumber}",
-                                    product.EanCode, product.ArticleNumber);
+                            _logger.LogInformation(
+                                "SapProductBarcodeWriter: wrote EAN {Ean} → {ArticleNumber}",
+                                product.EanCode, product.ArticleNumber);
 
-                                // Reflect the change on the DTO so downstream mappers see Unit barcode
-                                product.HasUnitBarcode         = true;
-                                product.PrimaryBarcode         = product.EanCode;
-                                product.PrimaryBarcodeUomCode  = "Unit";
-                                product.BarcodeResolutionStatus = "UNIT_MATCH";
+                            // Reflect the change on the DTO so downstream mappers see Unit barcode
+                            product.HasUnitBarcode         = true;
+                            product.PrimaryBarcode         = product.EanCode;
+                            product.PrimaryBarcodeUomCode  = "Unit";
+                            product.BarcodeResolutionStatus = "UNIT_MATCH";
 
-                                written++;
-                            }
+                            written++;
                         }
                         catch (Exception ex)
                         {
@@ -159,6 +139,11 @@ public class SapProductBarcodeWriter
                                 "SapProductBarcodeWriter: unexpected error for {ArticleNumber}",
                                 product.ArticleNumber);
                             failed++;
+                        }
+                        finally
+                        {
+                            if (retParams != null) ReleaseComSafely(retParams, "BarCodeParams");
+                            if (barCode != null) ReleaseComSafely(barCode, "BarCode");
                         }
                     }
                 }
@@ -168,8 +153,9 @@ public class SapProductBarcodeWriter
                 }
                 finally
                 {
-                    ReleaseComSafely(items, "Items");
                     ReleaseComSafely(rs, "Recordset");
+                    ReleaseComSafely(barcodeService, "BarCodesService");
+                    ReleaseComSafely(cs, "CompanyService");
 
                     if (company != null && company.Connected)
                     {
