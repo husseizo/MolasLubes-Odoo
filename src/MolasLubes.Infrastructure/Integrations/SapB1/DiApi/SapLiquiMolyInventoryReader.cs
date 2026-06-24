@@ -938,10 +938,13 @@ SELECT
     lastDoc.DocDate AS LastDeliveredAt,
     lastDoc.CardCode AS CustomerCode,
     lastDoc.CardName AS CustomerName,
+    CASE WHEN ISNULL(lastDoc.SlpCode, -1) = -1 THEN NULL ELSE CAST(lastDoc.SlpCode AS NVARCHAR(10)) END AS SalesPersonCode,
+    COALESCE(NULLIF(slp.SlpName, ''), NULL) AS SalesPersonName,
     {metadataSelect}
 FROM Agg a
 LEFT JOIN ODLN lastDoc ON lastDoc.DocEntry = a.LastDocEntry
 LEFT JOIN OITM i ON i.ItemCode = a.ItemCode
+LEFT JOIN OSLP slp ON slp.SlpCode = lastDoc.SlpCode
 ORDER BY lastDoc.DocDate DESC, a.LastDocEntry DESC, a.ItemCode, a.WarehouseCode");
 
                     while (!rs.EoF)
@@ -988,7 +991,9 @@ ORDER BY lastDoc.DocDate DESC, a.LastDocEntry DESC, a.ItemCode, a.WarehouseCode"
                             LastDeliveryDocNum = ReadString(rs, "LastDeliveryDocNum"),
                             LastDeliveredAt = ReadDate(rs, "LastDeliveredAt"),
                             CustomerCode = ReadString(rs, "CustomerCode"),
-                            CustomerName = ReadString(rs, "CustomerName")
+                            CustomerName = ReadString(rs, "CustomerName"),
+                            SalesPersonCode = ReadString(rs, "SalesPersonCode"),
+                            SalesPersonName = ReadString(rs, "SalesPersonName")
                         });
 
                         rs.MoveNext();
@@ -1921,6 +1926,8 @@ public class InventoryDeliveryAggregateRow
     public DateTime? LastDeliveredAt { get; init; }
     public string? CustomerCode { get; init; }
     public string? CustomerName { get; init; }
+    public string? SalesPersonCode { get; init; }
+    public string? SalesPersonName { get; init; }
     public DateTime AsOfUtc { get; set; }
     public long Version { get; set; }
 }

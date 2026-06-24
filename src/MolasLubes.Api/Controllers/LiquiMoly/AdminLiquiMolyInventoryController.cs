@@ -208,11 +208,11 @@ public class AdminLiquiMolyInventoryController : ControllerBase
                 data.Version,
                 data.DateFrom,
                 data.DateTo,
-                data.Total,
+                count = data.Total,
                 skip,
                 take,
                 hasMore = skip + data.Rows.Count < data.Total,
-                rows = data.Rows
+                items = data.Rows
             });
         }
         catch (ArgumentException ex)
