@@ -406,6 +406,10 @@ namespace MolasLubes.Infrastructure.Persistence.Migrations.Neon
                     b.Property<string>("BarcodeResolutionNote")
                         .HasColumnType("text");
 
+                    b.Property<string>("EanCode")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
                     b.Property<string>("BarcodeResolutionStatus")
                         .HasMaxLength(50)
                         .HasColumnType("character varying(50)");
