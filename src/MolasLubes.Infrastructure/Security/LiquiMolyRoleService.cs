@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using MolasLubes.Domain.Entities.Cache;
 using MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 
 namespace MolasLubes.Infrastructure.Security;
@@ -91,7 +92,61 @@ public class LiquiMolyRoleService
             sapUserCode, requiredRole);
     }
 
+    // ── New-auth overload (InternalUser, no SAP call) ────────────────────
+
+    /// <summary>
+    /// Checks that the resolved InternalUser holds the required capability.
+    /// No SAP call — role is read from the user's DB record.
+    /// </summary>
+    public void AuthorizeUser(InternalUser user, string requiredRole)
+    {
+        if (!user.IsActive)
+            throw new UnauthorizedAccessException("Account is not active.");
+
+        if (!HasRoleForUser(user.Role, requiredRole))
+            throw new UnauthorizedAccessException(
+                $"Role '{user.Role}' is not authorized for '{requiredRole}'.");
+    }
+
+    public bool UserHasRole(InternalUser user, string requiredRole)
+        => user.IsActive && HasRoleForUser(user.Role, requiredRole);
+
     // ── Private ──────────────────────────────────────────
+
+    private static bool HasRoleForUser(string userRole, string requiredRole)
+    {
+        if (userRole == LiquiMolyRole.Admin) return true;
+
+        return requiredRole switch
+        {
+            LiquiMolyRole.Viewer =>
+                userRole is LiquiMolyRole.Viewer
+                         or LiquiMolyRole.Planner
+                         or LiquiMolyRole.Executor
+                         or LiquiMolyRole.Supervisor
+                         or LiquiMolyRole.Inventory,
+
+            LiquiMolyRole.Planner =>
+                userRole is LiquiMolyRole.Planner
+                         or LiquiMolyRole.Executor
+                         or LiquiMolyRole.Supervisor,
+
+            LiquiMolyRole.Executor =>
+                userRole is LiquiMolyRole.Executor
+                         or LiquiMolyRole.Planner,
+
+            LiquiMolyRole.Supervisor =>
+                userRole == LiquiMolyRole.Supervisor,
+
+            LiquiMolyRole.Inventory =>
+                userRole == LiquiMolyRole.Inventory,
+
+            LiquiMolyRole.Admin =>
+                userRole == LiquiMolyRole.Admin,
+
+            _ => false
+        };
+    }
 
     private bool HasRole(string userCode, string role)
     {

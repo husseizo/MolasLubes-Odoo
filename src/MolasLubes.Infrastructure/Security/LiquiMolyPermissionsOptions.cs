@@ -29,4 +29,5 @@ public static class LiquiMolyRole
     public const string Executor   = "Executor";
     public const string Admin      = "Admin";
     public const string Viewer     = "Viewer";
+    public const string Inventory  = "Inventory";
 }

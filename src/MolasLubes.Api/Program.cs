@@ -93,8 +93,14 @@ builder.Services.Configure<ApiKeyOptions>(
 
 builder.Services.AddScoped<ApiKeyAttribute>();
 
+// ── Internal user auth (opaque bearer tokens) ─────────────────────────
+builder.Services.AddScoped<MolasLubes.Infrastructure.Security.InternalUserService>();
+builder.Services.AddScoped<MolasLubes.Infrastructure.Security.InternalTokenService>();
+builder.Services.AddScoped<MolasLubes.Infrastructure.Security.BrandRoleResolver>();
+builder.Services.AddScoped<MolasLubes.Api.Security.BearerTokenAttribute>();
+
 // =====================================================
-// 🔐 JWT AUTHENTICATION
+// 🔐 JWT AUTHENTICATION (legacy — superseded by bearer tokens)
 // =====================================================
 builder.Services.AddSingleton<JwtService>();
 builder.Services.AddSingleton<RefreshTokenStore>();
@@ -733,6 +739,23 @@ app.MapGet("/debug/cache-counts", async (MolasCacheDbContext db) =>
 });
 
 app.MapGet("/", () => Results.Ok("MolasLubes API is running 🚀"));
+
+// ── --seed-admin CLI flag ────────────────────────────────────────────────
+if (args.Contains("--seed-admin"))
+{
+    using var scope = app.Services.CreateScope();
+    var userSvc = scope.ServiceProvider
+        .GetRequiredService<MolasLubes.Infrastructure.Security.InternalUserService>();
+
+    var (user, password) = await userSvc.EnsureAdminAsync();
+    Console.WriteLine($"Admin user: {user.Username}");
+    if (!string.IsNullOrEmpty(password))
+        Console.WriteLine($"Generated password: {password}  (save this — it will not be shown again)");
+    else
+        Console.WriteLine("Admin already exists — password unchanged.");
+
+    return;
+}
 
 app.Run();
 

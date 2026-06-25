@@ -22,5 +22,7 @@ public class CacheNotificationDeviceToken
     public DateTime? LastPushedAt { get; set; }
     public int FailureCount { get; set; }
     public string? LastError { get; set; }
+
+    public int? InternalUserId { get; set; }
 }
 

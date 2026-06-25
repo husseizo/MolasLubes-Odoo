@@ -2,47 +2,44 @@ using System.ComponentModel.DataAnnotations;
 
 namespace MolasLubes.Api.Models.Auth;
 
-/// <summary>
-/// Login request payload.
-/// </summary>
 public class LoginRequest
 {
     [Required]
-    public string SapUserCode { get; set; } = string.Empty;
+    public string Username { get; set; } = string.Empty;
 
     [Required]
     public string Password { get; set; } = string.Empty;
+
+    public string? DeviceHint { get; set; }
 }
 
-/// <summary>
-/// Successful login response with tokens and user context.
-/// </summary>
 public class LoginResponse
 {
     public string Token { get; set; } = string.Empty;
-    public string RefreshToken { get; set; } = string.Empty;
-    public string SapUserCode { get; set; } = string.Empty;
-    public string Role { get; set; } = string.Empty;
     public DateTime ExpiresAt { get; set; }
+    public int UserId { get; set; }
+    public string Username { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string Role { get; set; } = string.Empty;
+    public string? SapWarning { get; set; }
 }
 
-/// <summary>
-/// Refresh token request.
-/// </summary>
-public class RefreshTokenRequest
+public class MeResponse
+{
+    public int UserId { get; set; }
+    public string Username { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string Role { get; set; } = string.Empty;
+    public string? SapUserCode { get; set; }
+    public DateTime? LastLoginAt { get; set; }
+}
+
+public class ChangePasswordRequest
 {
     [Required]
-    public string RefreshToken { get; set; } = string.Empty;
-}
+    public string CurrentPassword { get; set; } = string.Empty;
 
-/// <summary>
-/// Refresh token response with new access token and full session context.
-/// </summary>
-public class RefreshTokenResponse
-{
-    public string Token { get; set; } = string.Empty;
-    public string RefreshToken { get; set; } = string.Empty;
-    public string SapUserCode { get; set; } = string.Empty;
-    public string Role { get; set; } = string.Empty;
-    public DateTime ExpiresAt { get; set; }
+    [Required]
+    [MinLength(8)]
+    public string NewPassword { get; set; } = string.Empty;
 }

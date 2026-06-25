@@ -30,6 +30,14 @@ public class MolasCacheDbContext : DbContext
     public DbSet<CacheLiquiMolyReplenishmentRequestLine> CacheLiquiMolyReplenishmentRequestLines => Set<CacheLiquiMolyReplenishmentRequestLine>();
     public DbSet<CacheNotificationDeviceToken> CacheNotificationDeviceTokens => Set<CacheNotificationDeviceToken>();
 
+    // =============================
+    // AUTH / USER MANAGEMENT
+    // =============================
+    public DbSet<InternalUser> InternalUsers => Set<InternalUser>();
+    public DbSet<InternalUserToken> InternalUserTokens => Set<InternalUserToken>();
+    public DbSet<BrandRoleMapping> BrandRoleMappings => Set<BrandRoleMapping>();
+    public DbSet<AuthAuditEvent> AuthAuditEvents => Set<AuthAuditEvent>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         // =====================================================
@@ -600,6 +608,100 @@ public class MolasCacheDbContext : DbContext
 
             entity.HasIndex(x => new { x.SapUserCode, x.IsActive })
                   .HasDatabaseName("IX_CacheNotificationTokens_UserActive");
+
+            entity.Property(x => x.InternalUserId)
+                  .HasColumnType("int");
+
+            entity.HasOne<InternalUser>()
+                  .WithMany()
+                  .HasForeignKey(x => x.InternalUserId)
+                  .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasIndex(x => x.InternalUserId)
+                  .HasDatabaseName("IX_CacheNotificationTokens_InternalUserId");
+        });
+
+        // =====================================================
+        // INTERNAL USERS
+        // =====================================================
+        modelBuilder.Entity<InternalUser>(entity =>
+        {
+            entity.ToTable("InternalUsers");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).ValueGeneratedOnAdd();
+
+            entity.Property(x => x.Username).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.PasswordHash).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.DisplayName).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.SapUserCode).HasMaxLength(50);
+            entity.Property(x => x.Role).HasMaxLength(20).IsRequired();
+
+            entity.HasIndex(x => x.Username)
+                  .IsUnique()
+                  .HasDatabaseName("IX_InternalUsers_Username");
+
+            entity.HasIndex(x => x.SapUserCode)
+                  .HasDatabaseName("IX_InternalUsers_SapUserCode");
+        });
+
+        // =====================================================
+        // INTERNAL USER TOKENS
+        // =====================================================
+        modelBuilder.Entity<InternalUserToken>(entity =>
+        {
+            entity.ToTable("InternalUserTokens");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).ValueGeneratedOnAdd();
+
+            entity.Property(x => x.TokenHash).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.DeviceHint).HasMaxLength(200);
+
+            entity.HasOne(x => x.User)
+                  .WithMany(x => x.Tokens)
+                  .HasForeignKey(x => x.UserId)
+                  .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasIndex(x => x.TokenHash)
+                  .IsUnique()
+                  .HasDatabaseName("IX_InternalUserTokens_TokenHash");
+
+            entity.HasIndex(x => x.UserId)
+                  .HasDatabaseName("IX_InternalUserTokens_UserId");
+        });
+
+        // =====================================================
+        // BRAND-ROLE MAPPINGS
+        // =====================================================
+        modelBuilder.Entity<BrandRoleMapping>(entity =>
+        {
+            entity.ToTable("BrandRoleMappings");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).ValueGeneratedOnAdd();
+
+            entity.Property(x => x.Brand).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.Role).HasMaxLength(20).IsRequired();
+            entity.Property(x => x.SapUserCode).HasMaxLength(50).IsRequired();
+
+            entity.HasIndex(x => new { x.Brand, x.Role })
+                  .IsUnique()
+                  .HasDatabaseName("IX_BrandRoleMappings_Brand_Role");
+        });
+
+        // =====================================================
+        // AUTH AUDIT EVENTS
+        // =====================================================
+        modelBuilder.Entity<AuthAuditEvent>(entity =>
+        {
+            entity.ToTable("AuthAuditEvents");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).ValueGeneratedOnAdd();
+
+            entity.Property(x => x.EventType).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.Detail).HasMaxLength(500);
+            entity.Property(x => x.IpHint).HasMaxLength(20);
+
+            entity.HasIndex(x => x.OccurredAt)
+                  .HasDatabaseName("IX_AuthAuditEvents_OccurredAt");
         });
 
         base.OnModelCreating(modelBuilder);

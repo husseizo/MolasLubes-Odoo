@@ -1,202 +1,131 @@
 using Microsoft.AspNetCore.Mvc;
 using MolasLubes.Api.Models.Auth;
+using MolasLubes.Api.Security;
+using MolasLubes.Domain.Entities.Cache;
 using MolasLubes.Infrastructure.Security;
 
 namespace MolasLubes.Api.Controllers;
 
-/// <summary>
-/// Authentication endpoints for JWT token management.
-/// </summary>
 [ApiController]
 [Route("api/auth")]
 public class AuthController : ControllerBase
 {
-    private readonly SapUserAuthService _sapAuth;
-    private readonly JwtService _jwtService;
-    private readonly RefreshTokenStore _tokenStore;
+    private readonly InternalUserService _users;
+    private readonly InternalTokenService _tokens;
     private readonly ILogger<AuthController> _logger;
 
     public AuthController(
-        SapUserAuthService sapAuth,
-        JwtService jwtService,
-        RefreshTokenStore tokenStore,
+        InternalUserService users,
+        InternalTokenService tokens,
         ILogger<AuthController> logger)
     {
-        _sapAuth = sapAuth;
-        _jwtService = jwtService;
-        _tokenStore = tokenStore;
+        _users  = users;
+        _tokens = tokens;
         _logger = logger;
     }
 
-    /// <summary>
-    /// Authenticates a SAP user and issues JWT tokens.
-    /// </summary>
-    /// <remarks>
-    /// POST /api/auth/login
-    /// {
-    ///   "sapUserCode": "manager",
-    ///   "password": "your-password"
-    /// }
-    /// 
-    /// Returns:
-    /// {
-    ///   "token": "eyJhbGc...",
-    ///   "refreshToken": "xyz...",
-    ///   "sapUserCode": "manager",
-    ///   "role": "Supervisor",
-    ///   "expiresAt": "2025-01-03T15:30:00Z"
-    /// }
-    /// </remarks>
     [HttpPost("login")]
     [ProducesResponseType(typeof(LoginResponse), 200)]
     [ProducesResponseType(401)]
-    [ProducesResponseType(500)]
+    [ProducesResponseType(423)]
     public async Task<IActionResult> Login([FromBody] LoginRequest request)
     {
+        var ipHint = HttpContext.Connection.RemoteIpAddress?.ToString();
+
+        var (user, isLocked, lockedUntil) = await _users.ValidateLoginAsync(request.Username, request.Password);
+
+        if (isLocked)
+        {
+            await _users.AddAuditEventAsync("ACCOUNT_LOCKED", detail: $"Login blocked, locked until {lockedUntil:O}", ipHint: ipHint);
+            return StatusCode(423, new { message = $"Account locked until {lockedUntil:O}" });
+        }
+
+        if (user == null)
+        {
+            await _users.AddAuditEventAsync("LOGIN_FAIL", detail: $"username={request.Username}", ipHint: ipHint);
+            return Unauthorized(new { message = "Invalid credentials." });
+        }
+
+        var rawToken = await _tokens.IssueTokenAsync(user.Id, expiryDays: 30, deviceHint: request.DeviceHint);
+        var expiresAt = DateTime.UtcNow.AddDays(30);
+
+        string? sapWarning = null;
         try
         {
-            // Validate credentials against SAP B1
-            var (isValid, role) = await _sapAuth.ValidateCredentialsAsync(
-                request.SapUserCode,
-                request.Password);
-
-            if (!isValid || role == null)
-            {
-                _logger.LogWarning(
-                    "Login attempt failed for user {UserCode}",
-                    request.SapUserCode);
-                return Unauthorized(new { message = "Invalid credentials" });
-            }
-
-            // Generate tokens
-            var accessToken = _jwtService.GenerateAccessToken(request.SapUserCode, role);
-            var (refreshToken, refreshExpiresAt) = _jwtService.GenerateRefreshToken();
-
-            // Store refresh token
-            _tokenStore.Store(new RefreshTokenSession
-            {
-                Token = refreshToken,
-                SapUserCode = request.SapUserCode,
-                Role = role,
-                ExpiresAt = refreshExpiresAt
-            });
-
-            _logger.LogInformation(
-                "User {UserCode} logged in successfully with role {Role}",
-                request.SapUserCode,
-                role);
-
-            return Ok(new LoginResponse
-            {
-                Token = accessToken,
-                RefreshToken = refreshToken,
-                SapUserCode = request.SapUserCode,
-                Role = role,
-                ExpiresAt = DateTime.UtcNow.AddMinutes(15) // Match JWT expiry
-            });
+            await _users.AddAuditEventAsync("LOGIN_OK", userId: user.Id, ipHint: ipHint);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error during login for user {UserCode}", request.SapUserCode);
-            return StatusCode(500, new { message = "Internal server error during authentication" });
+            _logger.LogWarning(ex, "Audit write failed for LOGIN_OK user={UserId}", user.Id);
         }
+
+        _logger.LogInformation("User {Username} (id={Id}) logged in", user.Username, user.Id);
+
+        return Ok(new LoginResponse
+        {
+            Token       = rawToken,
+            ExpiresAt   = expiresAt,
+            UserId      = user.Id,
+            Username    = user.Username,
+            DisplayName = user.DisplayName,
+            Role        = user.Role,
+            SapWarning  = sapWarning
+        });
     }
 
-    /// <summary>
-    /// Refreshes an expired access token using a valid refresh token.
-    /// </summary>
-    /// <remarks>
-    /// POST /api/auth/refresh
-    /// {
-    ///   "refreshToken": "xyz..."
-    /// }
-    /// 
-    /// Returns:
-    /// {
-    ///   "token": "eyJhbGc...",
-    ///   "refreshToken": "xyz...",
-    ///   "sapUserCode": "manager",
-    ///   "role": "Supervisor",
-    ///   "expiresAt": "2025-01-03T15:45:00Z"
-    /// }
-    /// </remarks>
-    [HttpPost("refresh")]
-    [ProducesResponseType(typeof(RefreshTokenResponse), 200)]
-    [ProducesResponseType(401)]
-    public IActionResult Refresh([FromBody] RefreshTokenRequest request)
-    {
-        try
-        {
-            // Validate refresh token
-            var session = _tokenStore.GetAndValidate(request.RefreshToken);
-
-            if (session == null)
-            {
-                _logger.LogWarning("Refresh token validation failed or expired");
-                return Unauthorized(new { message = "Invalid or expired refresh token" });
-            }
-
-            // Generate new access token (keep same refresh token)
-            var newAccessToken = _jwtService.GenerateAccessToken(session.SapUserCode, session.Role);
-
-            _logger.LogDebug(
-                "Access token refreshed for user {UserCode}",
-                session.SapUserCode);
-
-            return Ok(new RefreshTokenResponse
-            {
-                Token = newAccessToken,
-                RefreshToken = request.RefreshToken, // Return same refresh token
-                SapUserCode = session.SapUserCode,
-                Role = session.Role,
-                ExpiresAt = DateTime.UtcNow.AddMinutes(15)
-            });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error during token refresh");
-            return StatusCode(500, new { message = "Internal server error during token refresh" });
-        }
-    }
-
-    /// <summary>
-    /// Logs out the user by revoking their refresh token.
-    /// </summary>
-    /// <remarks>
-    /// POST /api/auth/logout
-    /// {
-    ///   "refreshToken": "xyz..."
-    /// }
-    /// </remarks>
     [HttpPost("logout")]
+    [BearerToken]
     [ProducesResponseType(204)]
-    public IActionResult Logout([FromBody] RefreshTokenRequest request)
+    public async Task<IActionResult> Logout()
     {
-        _tokenStore.Revoke(request.RefreshToken);
+        var user = HttpContext.Items["CurrentUser"] as InternalUser;
+        var rawToken = HttpContext.Items["CurrentToken"] as string;
 
-        _logger.LogInformation("User logged out, refresh token revoked");
+        if (rawToken != null)
+            await _tokens.RevokeTokenAsync(rawToken);
+
+        if (user != null)
+            await _users.AddAuditEventAsync("LOGOUT", userId: user.Id,
+                ipHint: HttpContext.Connection.RemoteIpAddress?.ToString());
 
         return NoContent();
     }
 
-    /// <summary>
-    /// Validates the current JWT token (health check endpoint).
-    /// Requires valid Bearer token in Authorization header.
-    /// </summary>
-    [HttpGet("validate")]
-    [ProducesResponseType(200)]
-    [ProducesResponseType(401)]
-    public IActionResult Validate()
+    [HttpGet("me")]
+    [BearerToken]
+    [ProducesResponseType(typeof(MeResponse), 200)]
+    public IActionResult Me()
     {
-        // If this endpoint is reached, token is valid (middleware validates it)
-        var userCode = User.Identity?.Name;
-        var role = User.Claims.FirstOrDefault(c => c.Type == System.Security.Claims.ClaimTypes.Role)?.Value;
+        var user = (InternalUser)HttpContext.Items["CurrentUser"]!;
 
-        return Ok(new
+        return Ok(new MeResponse
         {
-            isValid = true,
-            sapUserCode = userCode,
-            role = role
+            UserId      = user.Id,
+            Username    = user.Username,
+            DisplayName = user.DisplayName,
+            Role        = user.Role,
+            SapUserCode = user.SapUserCode,
+            LastLoginAt = user.LastLoginAt
         });
+    }
+
+    [HttpPost("change-password")]
+    [BearerToken]
+    [ProducesResponseType(204)]
+    [ProducesResponseType(400)]
+    public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request)
+    {
+        var user = (InternalUser)HttpContext.Items["CurrentUser"]!;
+
+        var error = await _users.ChangePasswordAsync(user.Id, request.CurrentPassword, request.NewPassword);
+        if (error != null)
+            return BadRequest(new { message = error });
+
+        await _tokens.RevokeAllForUserAsync(user.Id);
+
+        await _users.AddAuditEventAsync("PASSWORD_CHANGE", userId: user.Id,
+            ipHint: HttpContext.Connection.RemoteIpAddress?.ToString());
+
+        return NoContent();
     }
 }
