@@ -132,6 +132,7 @@ public class AdminLiquiMolyInventoryController : ControllerBase
         [FromQuery] string? warehouse = null,
         [FromQuery] string? warehouseCode = null,
         [FromQuery] string? movementTypes = null,
+        [FromQuery] string? salesPersonCode = null,
         [FromQuery] int skip = 0,
         [FromQuery] int take = 200)
     {
@@ -159,7 +160,8 @@ public class AdminLiquiMolyInventoryController : ControllerBase
                 resolvedWarehouse,
                 movementTypes,
                 skip,
-                take);
+                take,
+                salesPersonCode);
             return Ok(data);
         }
         catch (ArgumentException ex)

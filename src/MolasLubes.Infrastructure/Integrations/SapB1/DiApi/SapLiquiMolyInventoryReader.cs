@@ -276,7 +276,8 @@ public class SapLiquiMolyInventoryReader
         string? warehouseCode,
         string? movementTypes,
         int skip,
-        int take)
+        int take,
+        string? salesPersonCode = null)
     {
         var scope = ResolveScope(profileKey, brand, onlyLiquiMoly: true);
 
@@ -288,6 +289,9 @@ public class SapLiquiMolyInventoryReader
 
         var resolvedRange = ResolveOptionalDateRange(dateFrom, dateTo);
         var normalizedMovementTypes = NormalizeMovementTypes(movementTypes);
+        var salesPersonClause = !string.IsNullOrWhiteSpace(salesPersonCode)
+            ? $" AND SalesPersonCode = '{salesPersonCode.Replace("'", "''")}'"
+            : "";
 
         var filteredRows = new List<InventoryMovementRow>();
         Exception? threadException = null;
@@ -343,10 +347,13 @@ FROM
         CAST(NULL AS NVARCHAR(10)) AS LinkedDocType,
         CAST(NULL AS INT) AS LinkedDocEntry,
         CAST(NULL AS NVARCHAR(50)) AS LinkedDocNum,
-        CAST(NULL AS INT) AS LinkedLineNum
+        CAST(NULL AS INT) AS LinkedLineNum,
+        CASE WHEN ISNULL(h.SlpCode, -1) = -1 THEN NULL ELSE CAST(h.SlpCode AS NVARCHAR(10)) END AS SalesPersonCode,
+        COALESCE(NULLIF(slp.SlpName, ''), NULL) AS SalesPersonName
     FROM ORDR h
     INNER JOIN RDR1 l ON h.DocEntry = l.DocEntry
     LEFT JOIN OITM i ON i.ItemCode = l.ItemCode
+    LEFT JOIN OSLP slp ON slp.SlpCode = h.SlpCode
     WHERE l.ItemCode = '{safeItem}'
 
     UNION ALL
@@ -378,10 +385,13 @@ FROM
         CAST(NULL AS NVARCHAR(10)) AS LinkedDocType,
         CAST(NULL AS INT) AS LinkedDocEntry,
         CAST(NULL AS NVARCHAR(50)) AS LinkedDocNum,
-        CAST(NULL AS INT) AS LinkedLineNum
+        CAST(NULL AS INT) AS LinkedLineNum,
+        CASE WHEN ISNULL(h.SlpCode, -1) = -1 THEN NULL ELSE CAST(h.SlpCode AS NVARCHAR(10)) END AS SalesPersonCode,
+        COALESCE(NULLIF(slp.SlpName, ''), NULL) AS SalesPersonName
     FROM ODLN h
     INNER JOIN DLN1 l ON h.DocEntry = l.DocEntry
     LEFT JOIN OITM i ON i.ItemCode = l.ItemCode
+    LEFT JOIN OSLP slp ON slp.SlpCode = h.SlpCode
     WHERE l.ItemCode = '{safeItem}'
 
     UNION ALL
@@ -413,7 +423,9 @@ FROM
         CAST(NULL AS NVARCHAR(10)) AS LinkedDocType,
         CAST(NULL AS INT) AS LinkedDocEntry,
         CAST(NULL AS NVARCHAR(50)) AS LinkedDocNum,
-        CAST(NULL AS INT) AS LinkedLineNum
+        CAST(NULL AS INT) AS LinkedLineNum,
+        CAST(NULL AS NVARCHAR(10)) AS SalesPersonCode,
+        CAST(NULL AS NVARCHAR(100)) AS SalesPersonName
     FROM OWTQ h
     INNER JOIN WTQ1 l ON h.DocEntry = l.DocEntry
     LEFT JOIN OITM i ON i.ItemCode = l.ItemCode
@@ -448,7 +460,9 @@ FROM
         CAST(NULL AS NVARCHAR(10)) AS LinkedDocType,
         CAST(NULL AS INT) AS LinkedDocEntry,
         CAST(NULL AS NVARCHAR(50)) AS LinkedDocNum,
-        CAST(NULL AS INT) AS LinkedLineNum
+        CAST(NULL AS INT) AS LinkedLineNum,
+        CAST(NULL AS NVARCHAR(10)) AS SalesPersonCode,
+        CAST(NULL AS NVARCHAR(100)) AS SalesPersonName
     FROM OWTR h
     INNER JOIN WTR1 l ON h.DocEntry = l.DocEntry
     LEFT JOIN OITM i ON i.ItemCode = l.ItemCode
@@ -482,7 +496,9 @@ FROM
         CAST(NULL AS NVARCHAR(10)) AS LinkedDocType,
         CAST(NULL AS INT) AS LinkedDocEntry,
         CAST(NULL AS NVARCHAR(50)) AS LinkedDocNum,
-        CAST(NULL AS INT) AS LinkedLineNum
+        CAST(NULL AS INT) AS LinkedLineNum,
+        CAST(NULL AS NVARCHAR(10)) AS SalesPersonCode,
+        CAST(NULL AS NVARCHAR(100)) AS SalesPersonName
     FROM OIGN h
     INNER JOIN IGN1 l ON h.DocEntry = l.DocEntry
     LEFT JOIN OITM i ON i.ItemCode = l.ItemCode
@@ -516,7 +532,9 @@ FROM
         CAST(NULL AS NVARCHAR(10)) AS LinkedDocType,
         CAST(NULL AS INT) AS LinkedDocEntry,
         CAST(NULL AS NVARCHAR(50)) AS LinkedDocNum,
-        CAST(NULL AS INT) AS LinkedLineNum
+        CAST(NULL AS INT) AS LinkedLineNum,
+        CAST(NULL AS NVARCHAR(10)) AS SalesPersonCode,
+        CAST(NULL AS NVARCHAR(100)) AS SalesPersonName
     FROM OIGE h
     INNER JOIN IGE1 l ON h.DocEntry = l.DocEntry
     LEFT JOIN OITM i ON i.ItemCode = l.ItemCode
@@ -555,7 +573,9 @@ FROM
         CASE WHEN l.TargetType = 10000071 AND l.TargetEntr IS NOT NULL THEN 'IP' ELSE NULL END AS LinkedDocType,
         TRY_CONVERT(INT, l.TargetEntr) AS LinkedDocEntry,
         CAST(post.DocNum AS NVARCHAR(50)) AS LinkedDocNum,
-        TRY_CONVERT(INT, l.TargetLine) AS LinkedLineNum
+        TRY_CONVERT(INT, l.TargetLine) AS LinkedLineNum,
+        CAST(NULL AS NVARCHAR(10)) AS SalesPersonCode,
+        CAST(NULL AS NVARCHAR(100)) AS SalesPersonName
     FROM OINC h
     INNER JOIN INC1 l ON h.DocEntry = l.DocEntry
     LEFT JOIN OITM i ON i.ItemCode = l.ItemCode
@@ -595,14 +615,16 @@ FROM
         CASE WHEN l.BaseType = 1470000065 AND l.BaseEntry IS NOT NULL THEN 'INC' ELSE NULL END AS LinkedDocType,
         TRY_CONVERT(INT, l.BaseEntry) AS LinkedDocEntry,
         CAST(countDoc.DocNum AS NVARCHAR(50)) AS LinkedDocNum,
-        TRY_CONVERT(INT, l.BaseLine) AS LinkedLineNum
+        TRY_CONVERT(INT, l.BaseLine) AS LinkedLineNum,
+        CAST(NULL AS NVARCHAR(10)) AS SalesPersonCode,
+        CAST(NULL AS NVARCHAR(100)) AS SalesPersonName
     FROM OIQR h
     INNER JOIN IQR1 l ON h.DocEntry = l.DocEntry
     LEFT JOIN OITM i ON i.ItemCode = l.ItemCode
     LEFT JOIN OINC countDoc ON countDoc.DocEntry = l.BaseEntry
     WHERE l.ItemCode = '{safeItem}'
 ) M
-WHERE 1=1 {whClause} {dateClause} {movementTypeClause}
+WHERE 1=1 {whClause} {dateClause} {movementTypeClause} {salesPersonClause}
 ORDER BY M.MovementDate DESC, M.DocEntry DESC, M.LineNum DESC";
 
                     rs.DoQuery(sql);
@@ -634,7 +656,9 @@ ORDER BY M.MovementDate DESC, M.DocEntry DESC, M.LineNum DESC";
                             LinkedDocType = ReadString(rs, "LinkedDocType"),
                             LinkedDocEntry = ReadNullableInt(rs, "LinkedDocEntry"),
                             LinkedDocNum = ReadString(rs, "LinkedDocNum"),
-                            LinkedLineNum = ReadNullableInt(rs, "LinkedLineNum")
+                            LinkedLineNum = ReadNullableInt(rs, "LinkedLineNum"),
+                            SalesPersonCode = ReadString(rs, "SalesPersonCode"),
+                            SalesPersonName = ReadString(rs, "SalesPersonName")
                         });
                         rs.MoveNext();
                     }
@@ -663,6 +687,13 @@ ORDER BY M.MovementDate DESC, M.DocEntry DESC, M.LineNum DESC";
             .Select(row => EnrichMovementRow(row, itemMeta))
             .ToList();
 
+        var salesPeople = filteredRows
+            .Where(r => r.SalesPersonCode != null)
+            .Select(r => new SalesPersonInfo { SalesPersonCode = r.SalesPersonCode, SalesPersonName = r.SalesPersonName })
+            .DistinctBy(r => r.SalesPersonCode)
+            .OrderBy(r => r.SalesPersonName)
+            .ToList();
+
         var total = filteredRows.Count;
         var rows = filteredRows
             .Skip(skip)
@@ -687,6 +718,7 @@ ORDER BY M.MovementDate DESC, M.DocEntry DESC, M.LineNum DESC";
             MovementTypes = normalizedMovementTypes?.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList(),
             AsOfUtc = DateTime.UtcNow,
             Total = total,
+            SalesPeople = salesPeople,
             Rows = rows
         };
     }
@@ -794,6 +826,7 @@ SELECT
 FROM OITW w
 INNER JOIN OITM i ON i.ItemCode = w.ItemCode
 LEFT JOIN OWHS h ON h.WhsCode = w.WhsCode
+LEFT JOIN OITBG g ON g.ItmsGrpCod = i.ItmsGrpCod
 WHERE i.frozenFor = 'N'
   {includeZeroClause}
 ORDER BY w.ItemCode, w.WhsCode");
@@ -1068,7 +1101,8 @@ ORDER BY lastDoc.DocDate DESC, a.LastDocEntry DESC, a.ItemCode, a.WarehouseCode"
                 || !string.Equals(old.PrimaryBarcode, row.PrimaryBarcode, StringComparison.Ordinal)
                 || !string.Equals(old.Brand, row.Brand, StringComparison.Ordinal)
                 || !string.Equals(old.TanNumber, row.TanNumber, StringComparison.Ordinal)
-                || !string.Equals(old.ProductionPartNumber, row.ProductionPartNumber, StringComparison.Ordinal))
+                || !string.Equals(old.ProductionPartNumber, row.ProductionPartNumber, StringComparison.Ordinal)
+                || !string.Equals(old.ItemGroup, row.ItemGroup, StringComparison.Ordinal))
             {
                 changed.Add(row);
             }
@@ -1092,6 +1126,7 @@ ORDER BY lastDoc.DocDate DESC, a.LastDocEntry DESC, a.ItemCode, a.WarehouseCode"
                 EngineCode = old.EngineCode,
                 ProductionPartNumber = old.ProductionPartNumber,
                 PartNumberInProduction = old.PartNumberInProduction,
+                ItemGroup = old.ItemGroup,
                 WarehouseCode = old.WarehouseCode,
                 WarehouseName = old.WarehouseName,
                 OnHand = 0,
@@ -1227,6 +1262,7 @@ ORDER BY lastDoc.DocDate DESC, a.LastDocEntry DESC, a.ItemCode, a.WarehouseCode"
             EngineCode = itemMeta.TanNumber,
             ProductionPartNumber = itemMeta.ProductionPartNumber,
             PartNumberInProduction = itemMeta.ProductionPartNumber,
+            ItemGroup = itemMeta.ItemGroupName,
             WarehouseCode = warehouseCode,
             WarehouseName = warehouseName,
             OnHand = onHand,
@@ -1430,21 +1466,24 @@ ORDER BY lastDoc.DocDate DESC, a.LastDocEntry DESC, a.ItemCode, a.WarehouseCode"
     COALESCE(NULLIF(i.U_Article_No, ''), {itemCodeSql}) AS MappedArticleNumber,
     NULLIF(i.U_Engine_Code, '') AS TanNumber,
     NULLIF(i.U_PT_No_Inproduction, '') AS ProductionPartNumber,
-    NULLIF(i.CodeBars, '') AS PrimaryBarcode",
+    NULLIF(i.CodeBars, '') AS PrimaryBarcode,
+    COALESCE(NULLIF(g.ItmsGrpNam, ''), NULL) AS ItemGroupName",
             InventoryMetadataMode.LiquiMoly => $@"
     CAST('Liqui Moly' AS NVARCHAR(100)) AS ItemBrand,
     COALESCE(NULLIF(i.ItemName, ''), {itemCodeSql}) AS MappedItemName,
     {itemCodeSql} AS MappedArticleNumber,
     CAST(NULL AS NVARCHAR(100)) AS TanNumber,
     CAST(NULL AS NVARCHAR(100)) AS ProductionPartNumber,
-    NULLIF(i.CodeBars, '') AS PrimaryBarcode",
+    NULLIF(i.CodeBars, '') AS PrimaryBarcode,
+    COALESCE(NULLIF(g.ItmsGrpNam, ''), NULL) AS ItemGroupName",
             _ => $@"
     CAST(NULL AS NVARCHAR(100)) AS ItemBrand,
     COALESCE(NULLIF(i.ItemName, ''), {itemCodeSql}) AS MappedItemName,
     {itemCodeSql} AS MappedArticleNumber,
     CAST(NULL AS NVARCHAR(100)) AS TanNumber,
     CAST(NULL AS NVARCHAR(100)) AS ProductionPartNumber,
-    NULLIF(i.CodeBars, '') AS PrimaryBarcode"
+    NULLIF(i.CodeBars, '') AS PrimaryBarcode,
+    COALESCE(NULLIF(g.ItmsGrpNam, ''), NULL) AS ItemGroupName"
         };
 
     private static string BuildDeliveryMetadataSelect(InventoryScope scope, string itemCodeSql) =>
@@ -1487,7 +1526,8 @@ ORDER BY lastDoc.DocDate DESC, a.LastDocEntry DESC, a.ItemCode, a.WarehouseCode"
             ArticleNumber = ReadString(rs, "MappedArticleNumber") ?? ReadString(rs, "ArticleNumber") ?? itemCode,
             TanNumber = ReadString(rs, "TanNumber"),
             ProductionPartNumber = ReadString(rs, "ProductionPartNumber"),
-            PrimaryBarcode = ReadString(rs, "PrimaryBarcode")
+            PrimaryBarcode = ReadString(rs, "PrimaryBarcode"),
+            ItemGroupName = ReadString(rs, "ItemGroupName")
         };
 
         if (scope.MetadataMode != InventoryMetadataMode.LiquiMoly || liquiMolyMeta == null)
@@ -1501,6 +1541,7 @@ ORDER BY lastDoc.DocDate DESC, a.LastDocEntry DESC, a.ItemCode, a.WarehouseCode"
             PrimaryBarcode = liquiMolyMeta.PrimaryBarcode ?? rowMeta.PrimaryBarcode,
             TanNumber = rowMeta.TanNumber,
             ProductionPartNumber = rowMeta.ProductionPartNumber,
+            ItemGroupName = rowMeta.ItemGroupName,
             IsActive = liquiMolyMeta.IsActive
         }, scope.DefaultBrandLabel);
     }
@@ -1538,6 +1579,7 @@ SELECT TOP 1
     i.ItemCode AS ItemCode,
     {metadataSelect}
 FROM OITM i
+LEFT JOIN OITBG g ON g.ItmsGrpCod = i.ItmsGrpCod
 WHERE i.ItemCode = '{safeItem}'");
 
                     if (!rs.EoF)
@@ -1583,6 +1625,7 @@ WHERE i.ItemCode = '{safeItem}'");
             TanNumber = itemMeta.TanNumber,
             ProductionPartNumber = itemMeta.ProductionPartNumber,
             PrimaryBarcode = itemMeta.PrimaryBarcode,
+            ItemGroupName = itemMeta.ItemGroupName,
             IsActive = itemMeta.IsActive
         };
     }
@@ -1622,7 +1665,9 @@ WHERE i.ItemCode = '{safeItem}'");
             LinkedDocType = row.LinkedDocType,
             LinkedDocEntry = row.LinkedDocEntry,
             LinkedDocNum = row.LinkedDocNum,
-            LinkedLineNum = row.LinkedLineNum
+            LinkedLineNum = row.LinkedLineNum,
+            SalesPersonCode = row.SalesPersonCode,
+            SalesPersonName = row.SalesPersonName
         };
 
     private static string FormatSqlDate(DateOnly date) =>
@@ -1670,9 +1715,16 @@ WHERE i.ItemCode = '{safeItem}'");
 
     private static string? ReadString(Recordset rs, string fieldName)
     {
-        var value = rs.Fields.Item(fieldName).Value;
-        var text = value?.ToString();
-        return string.IsNullOrWhiteSpace(text) ? null : text;
+        try
+        {
+            var value = rs.Fields.Item(fieldName).Value;
+            var text = value?.ToString();
+            return string.IsNullOrWhiteSpace(text) ? null : text;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static int ReadInt(Recordset rs, string fieldName) =>
@@ -1712,6 +1764,7 @@ WHERE i.ItemCode = '{safeItem}'");
         public string? TanNumber { get; init; }
         public string? ProductionPartNumber { get; init; }
         public string? PrimaryBarcode { get; init; }
+        public string? ItemGroupName { get; init; }
         public bool IsActive { get; init; }
     }
 
@@ -1795,6 +1848,7 @@ public class InventoryStockRow
     public string? EngineCode { get; init; }
     public string? ProductionPartNumber { get; init; }
     public string? PartNumberInProduction { get; init; }
+    public string? ItemGroup { get; init; }
     public string WarehouseCode { get; init; } = string.Empty;
     public string? WarehouseName { get; init; }
     public decimal OnHand { get; init; }
@@ -1827,7 +1881,14 @@ public class InventoryMovementResponse
     public List<string>? MovementTypes { get; init; }
     public DateTime AsOfUtc { get; init; }
     public int Total { get; init; }
+    public List<SalesPersonInfo> SalesPeople { get; init; } = new();
     public List<InventoryMovementRow> Rows { get; init; } = new();
+}
+
+public class SalesPersonInfo
+{
+    public string? SalesPersonCode { get; init; }
+    public string? SalesPersonName { get; init; }
 }
 
 public class InventoryMovementRow
@@ -1868,6 +1929,8 @@ public class InventoryMovementRow
     public int? LinkedDocEntry { get; init; }
     public string? LinkedDocNum { get; init; }
     public int? LinkedLineNum { get; init; }
+    public string? SalesPersonCode { get; init; }
+    public string? SalesPersonName { get; init; }
 }
 
 public class InventoryDeliveryAggregateResponse
