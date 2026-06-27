@@ -163,6 +163,18 @@ public class InternalUserService
         await _db.SaveChangesAsync();
     }
 
+    public async Task<bool> UnlockAsync(string username)
+    {
+        var user = await _db.InternalUsers
+            .FirstOrDefaultAsync(u => u.Username == username);
+        if (user == null) return false;
+        user.LockedUntil = null;
+        user.FailedLoginCount = 0;
+        user.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+        return true;
+    }
+
     // ── Audit ─────────────────────────────────────────────────────────────
 
     public async Task AddAuditEventAsync(

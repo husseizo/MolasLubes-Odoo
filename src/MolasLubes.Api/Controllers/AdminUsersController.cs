@@ -173,6 +173,27 @@ public class AdminUsersController : ControllerBase
         });
     }
 
+    // ── POST /api/admin/users/{id}/unlock ────────────────────────────────
+
+    [HttpPost("{id:int}/unlock")]
+    [ProducesResponseType(204)]
+    [ProducesResponseType(404)]
+    public async Task<IActionResult> Unlock(int id)
+    {
+        RequireAdmin();
+
+        var actor = CurrentUser();
+        var user = await _users.GetByIdAsync(id);
+        if (user == null)
+            return NotFound();
+
+        await _users.UnlockAsync(user.Username);
+        await _users.AddAuditEventAsync("ACCOUNT_LOCKED", userId: id, actorId: actor.Id,
+            detail: "manually unlocked by admin");
+
+        return NoContent();
+    }
+
     // ── POST /api/admin/users/{id}/revoke-sessions ────────────────────────
 
     [HttpPost("{id:int}/revoke-sessions")]

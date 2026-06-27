@@ -757,6 +757,22 @@ if (args.Contains("--seed-admin"))
     return;
 }
 
+// ── --unlock-admin CLI flag ──────────────────────────────────────────────
+if (args.Contains("--unlock-admin"))
+{
+    using var scope = app.Services.CreateScope();
+    var userSvc = scope.ServiceProvider
+        .GetRequiredService<MolasLubes.Infrastructure.Security.InternalUserService>();
+
+    var usernameArg = args.SkipWhile(a => a != "--unlock-admin").Skip(1).FirstOrDefault() ?? "admin";
+    var unlocked = await userSvc.UnlockAsync(usernameArg);
+    Console.WriteLine(unlocked
+        ? $"Account '{usernameArg}' unlocked successfully."
+        : $"User '{usernameArg}' not found.");
+
+    return;
+}
+
 app.Run();
 
 static string FirstNonEmpty(params string?[] values)
