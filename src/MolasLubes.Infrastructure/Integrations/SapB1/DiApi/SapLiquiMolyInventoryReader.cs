@@ -826,7 +826,7 @@ SELECT
 FROM OITW w
 INNER JOIN OITM i ON i.ItemCode = w.ItemCode
 LEFT JOIN OWHS h ON h.WhsCode = w.WhsCode
-LEFT JOIN OITBG g ON g.ItmsGrpCod = i.ItmsGrpCod
+LEFT JOIN OITB g ON g.ItmsGrpCod = i.ItmsGrpCod
 WHERE i.frozenFor = 'N'
   {includeZeroClause}
 ORDER BY w.ItemCode, w.WhsCode");
@@ -1579,7 +1579,7 @@ SELECT TOP 1
     i.ItemCode AS ItemCode,
     {metadataSelect}
 FROM OITM i
-LEFT JOIN OITBG g ON g.ItmsGrpCod = i.ItmsGrpCod
+LEFT JOIN OITB g ON g.ItmsGrpCod = i.ItmsGrpCod
 WHERE i.ItemCode = '{safeItem}'");
 
                     if (!rs.EoF)
