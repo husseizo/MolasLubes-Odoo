@@ -5,6 +5,7 @@ using MolasLubes.Application.LiquiMolyReplenishment;
 using MolasLubes.Domain.Entities.Cache;
 using MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 using MolasLubes.Infrastructure.Security;
+using MolasLubes.Infrastructure.Services.Caching;
 using MolasLubes.Infrastructure.Services.LiquiMolyReplenishment;
 
 namespace MolasLubes.Api.Controllers.LiquiMoly;
@@ -449,22 +450,25 @@ public class AdminLiquiMolyReportsController : ControllerBase
     private readonly LiquiMolyReplenishmentService     _service;
     private readonly LiquiMolyRoleService              _roleService;
     private readonly SapLiquiMolySalesOrderReportReader _soReader;
+    private readonly NeonApiCacheService               _cache;
 
     public AdminLiquiMolyReportsController(
         LiquiMolyReplenishmentAnalyzer     analyzer,
         LiquiMolyReplenishmentService      service,
         LiquiMolyRoleService               roleService,
-        SapLiquiMolySalesOrderReportReader soReader)
+        SapLiquiMolySalesOrderReportReader soReader,
+        NeonApiCacheService                cache)
     {
         _analyzer    = analyzer;
         _service     = service;
+        _cache       = cache;
         _roleService = roleService;
         _soReader    = soReader;
     }
 
     /// <summary>Full recommendation report — all LM items with demand metrics and trend.</summary>
     [HttpGet("recommendations")]
-    public IActionResult Recommendations(
+    public async Task<IActionResult> Recommendations(
         [FromQuery] string actorSapUserCode = "",
         [FromQuery] string sourceProfile    = "MolasLubes",
         [FromQuery] string targetProfile    = "AutoHub",
@@ -475,19 +479,26 @@ public class AdminLiquiMolyReportsController : ControllerBase
         if (string.IsNullOrWhiteSpace(sourceWarehouse)) return BadRequest("sourceWarehouse is required.");
         if (string.IsNullOrWhiteSpace(targetWarehouse)) return BadRequest("targetWarehouse is required.");
 
+        try { _roleService.AuthorizeAny(HttpContext.Items["CurrentUser"] as InternalUser, actorSapUserCode, LiquiMolyRole.Viewer); }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+
+        var cacheKey = $"rpt:rec:{sourceProfile}:{targetProfile}:{sourceWarehouse}:{targetWarehouse}:{targetDays}";
+        var cached = await _cache.GetRawAsync(cacheKey);
+        if (cached != null) return Content(cached, "application/json");
+
         try
         {
-            _roleService.AuthorizeAny(HttpContext.Items["CurrentUser"] as InternalUser, actorSapUserCode, LiquiMolyRole.Viewer);
             var rows = _analyzer.Analyze(sourceProfile, targetProfile, sourceWarehouse, targetWarehouse, targetDays);
-            return Ok(new { count = rows.Count, rows });
+            var result = new { count = rows.Count, rows };
+            await _cache.SetAsync(cacheKey, "reports/recommendations", result, TimeSpan.FromMinutes(20));
+            return Ok(result);
         }
-        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
-        catch (Exception ex)                   { return StatusCode(500, ex.Message); }
+        catch (Exception ex) { return StatusCode(500, ex.Message); }
     }
 
     /// <summary>Items with stock on hand but zero sales in 90 days.</summary>
     [HttpGet("dead-stock")]
-    public IActionResult DeadStock(
+    public async Task<IActionResult> DeadStock(
         [FromQuery] string actorSapUserCode = "",
         [FromQuery] string sourceProfile    = "MolasLubes",
         [FromQuery] string targetProfile    = "AutoHub",
@@ -497,16 +508,23 @@ public class AdminLiquiMolyReportsController : ControllerBase
         if (string.IsNullOrWhiteSpace(sourceWarehouse)) return BadRequest("sourceWarehouse is required.");
         if (string.IsNullOrWhiteSpace(targetWarehouse)) return BadRequest("targetWarehouse is required.");
 
+        try { _roleService.AuthorizeAny(HttpContext.Items["CurrentUser"] as InternalUser, actorSapUserCode, LiquiMolyRole.Viewer); }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
+
+        var cacheKey = $"rpt:ds:{sourceProfile}:{targetProfile}:{sourceWarehouse}:{targetWarehouse}";
+        var cached = await _cache.GetRawAsync(cacheKey);
+        if (cached != null) return Content(cached, "application/json");
+
         try
         {
-            _roleService.AuthorizeAny(HttpContext.Items["CurrentUser"] as InternalUser, actorSapUserCode, LiquiMolyRole.Viewer);
             var rows = _analyzer.Analyze(sourceProfile, targetProfile, sourceWarehouse, targetWarehouse)
                 .Where(r => r.TrendCategory == LiquiMolyTrendCategory.DeadStock)
                 .ToList();
-            return Ok(new { count = rows.Count, rows });
+            var result = new { count = rows.Count, rows };
+            await _cache.SetAsync(cacheKey, "reports/dead-stock", result, TimeSpan.FromMinutes(20));
+            return Ok(result);
         }
-        catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
-        catch (Exception ex)                   { return StatusCode(500, ex.Message); }
+        catch (Exception ex) { return StatusCode(500, ex.Message); }
     }
 
     /// <summary>Recent executed replenishment requests with GI/GR references.</summary>
@@ -595,7 +613,7 @@ public class AdminLiquiMolyReportsController : ControllerBase
     }
 
     [HttpGet("sales-order-lines")]
-    public IActionResult GetSalesOrderLines(
+    public async Task<IActionResult> GetSalesOrderLines(
         [FromQuery] string  actorSapUserCode    = "",
         [FromQuery] string  profile             = "MolasLubes",
         [FromQuery] string? brand               = null,
@@ -619,6 +637,10 @@ public class AdminLiquiMolyReportsController : ControllerBase
         skip = Math.Max(0, skip);
         take = Math.Clamp(take, 1, 500);
 
+        var cacheKey = $"rpt:sol:{profile}:{brand}:{dateFrom}:{dateTo}:{dateField}:{lineStatus}:{fulfillmentStatus}:{warehouse}:{customerCode}:{salesPersonCode}:{search}:{skip}:{take}:{sort}:{sortDirection}";
+        var cached = await _cache.GetRawAsync(cacheKey);
+        if (cached != null) return Content(cached, "application/json");
+
         try
         {
             var result = _soReader.GetSalesOrderLines(
@@ -627,6 +649,7 @@ public class AdminLiquiMolyReportsController : ControllerBase
                 warehouse, customerCode, salesPersonCode, search,
                 skip, take, sort, sortDirection);
 
+            await _cache.SetAsync(cacheKey, "reports/sales-order-lines", result, TimeSpan.FromMinutes(5));
             return Ok(result);
         }
         catch (InvalidOperationException ex) { return BadRequest(new { message = ex.Message }); }
@@ -634,7 +657,7 @@ public class AdminLiquiMolyReportsController : ControllerBase
     }
 
     [HttpGet("sales-order-lines/summary")]
-    public IActionResult GetSalesOrderLinesSummary(
+    public async Task<IActionResult> GetSalesOrderLinesSummary(
         [FromQuery] string  actorSapUserCode = "",
         [FromQuery] string  profile          = "MolasLubes",
         [FromQuery] string? brand            = null,
@@ -649,12 +672,17 @@ public class AdminLiquiMolyReportsController : ControllerBase
         try { _roleService.AuthorizeAny(HttpContext.Items["CurrentUser"] as InternalUser, actorSapUserCode, LiquiMolyRole.Viewer); }
         catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
 
+        var cacheKey = $"rpt:sol-sum:{profile}:{brand}:{dateFrom}:{dateTo}:{dateField}:{warehouse}:{customerCode}:{salesPersonCode}:{search}";
+        var cached = await _cache.GetRawAsync(cacheKey);
+        if (cached != null) return Content(cached, "application/json");
+
         try
         {
             var result = _soReader.GetSalesOrderLinesSummary(
                 profile, brand, dateFrom, dateTo, dateField,
                 warehouse, customerCode, salesPersonCode, search);
 
+            await _cache.SetAsync(cacheKey, "reports/sales-order-lines/summary", result, TimeSpan.FromMinutes(5));
             return Ok(result);
         }
         catch (InvalidOperationException ex) { return BadRequest(new { message = ex.Message }); }

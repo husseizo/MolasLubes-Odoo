@@ -288,6 +288,7 @@ builder.Services.AddScoped<DeliveryCacheService>();
 builder.Services.AddScoped<SalesOrderCacheService>();
 builder.Services.AddScoped<InvoiceCacheService>();
 builder.Services.AddScoped<PaymentCacheService>();
+builder.Services.AddScoped<MolasLubes.Infrastructure.Services.Caching.NeonApiCacheService>();
 
 // =====================================================
 // DOMAIN SERVICES

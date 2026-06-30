@@ -3,6 +3,7 @@ using MolasLubes.Api.Security;
 using MolasLubes.Domain.Entities.Cache;
 using MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 using MolasLubes.Infrastructure.Security;
+using MolasLubes.Infrastructure.Services.Caching;
 
 namespace MolasLubes.Api.Controllers.LiquiMoly;
 
@@ -15,13 +16,16 @@ public class AdminLiquiMolyInventoryController : ControllerBase
 
     private readonly SapLiquiMolyInventoryReader _reader;
     private readonly LiquiMolyRoleService _roleService;
+    private readonly NeonApiCacheService _cache;
 
     public AdminLiquiMolyInventoryController(
         SapLiquiMolyInventoryReader reader,
-        LiquiMolyRoleService roleService)
+        LiquiMolyRoleService roleService,
+        NeonApiCacheService cache)
     {
         _reader = reader;
         _roleService = roleService;
+        _cache = cache;
     }
 
     [HttpGet("stock")]
@@ -123,7 +127,7 @@ public class AdminLiquiMolyInventoryController : ControllerBase
     }
 
     [HttpGet("stock/{itemCode}/movements")]
-    public IActionResult GetMovements(
+    public async Task<IActionResult> GetMovements(
         string itemCode,
         [FromQuery] string actorSapUserCode = "",
         [FromQuery] string profile = DefaultProfile,
@@ -146,12 +150,13 @@ public class AdminLiquiMolyInventoryController : ControllerBase
         skip = Math.Max(0, skip);
         take = Math.Clamp(take, 1, 1000);
 
+        var resolvedWarehouse = !string.IsNullOrWhiteSpace(warehouse) ? warehouse : warehouseCode;
+        var cacheKey = $"mov:{profile}:{brand}:{itemCode.Trim()}:{resolvedWarehouse}:{dateFrom}:{dateTo}:{movementTypes}:{salesPersonCode}:{skip}:{take}";
+        var cached = await _cache.GetRawAsync(cacheKey);
+        if (cached != null) return Content(cached, "application/json");
+
         try
         {
-            var resolvedWarehouse = !string.IsNullOrWhiteSpace(warehouse)
-                ? warehouse
-                : warehouseCode;
-
             var data = _reader.GetMovements(
                 profile,
                 brand,
@@ -163,6 +168,8 @@ public class AdminLiquiMolyInventoryController : ControllerBase
                 skip,
                 take,
                 salesPersonCode);
+
+            await _cache.SetAsync(cacheKey, "inventory/movements", data, TimeSpan.FromMinutes(10));
             return Ok(data);
         }
         catch (ArgumentException ex)

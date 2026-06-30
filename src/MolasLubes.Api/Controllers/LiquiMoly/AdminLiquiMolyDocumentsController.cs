@@ -3,6 +3,7 @@ using MolasLubes.Api.Security;
 using MolasLubes.Domain.Entities.Cache;
 using MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 using MolasLubes.Infrastructure.Security;
+using MolasLubes.Infrastructure.Services.Caching;
 
 namespace MolasLubes.Api.Controllers.LiquiMoly;
 
@@ -13,17 +14,20 @@ public class AdminLiquiMolyDocumentsController : ControllerBase
 {
     private readonly SapLiquiMolyDocumentReader _reader;
     private readonly LiquiMolyRoleService _roleService;
+    private readonly NeonApiCacheService _cache;
 
     public AdminLiquiMolyDocumentsController(
         SapLiquiMolyDocumentReader reader,
-        LiquiMolyRoleService roleService)
+        LiquiMolyRoleService roleService,
+        NeonApiCacheService cache)
     {
         _reader = reader;
         _roleService = roleService;
+        _cache = cache;
     }
 
     [HttpGet("{docType}/{docEntry:int}")]
-    public IActionResult GetDocument(
+    public async Task<IActionResult> GetDocument(
         string docType,
         int docEntry,
         [FromQuery] string actorSapUserCode = "",
@@ -39,9 +43,13 @@ public class AdminLiquiMolyDocumentsController : ControllerBase
             return StatusCode(403, ex.Message);
         }
 
+        var profileOverride = ResolveProfileOverride(brand, profile);
+        var cacheKey = $"doc:{docType.ToUpperInvariant()}:{docEntry}:{profileOverride}";
+        var cached = await _cache.GetRawAsync(cacheKey);
+        if (cached != null) return Content(cached, "application/json");
+
         try
         {
-            var profileOverride = ResolveProfileOverride(brand, profile);
             var document = _reader.GetDocument(docType, docEntry, profileOverride);
             if (document == null)
             {
@@ -53,6 +61,7 @@ public class AdminLiquiMolyDocumentsController : ControllerBase
                 });
             }
 
+            await _cache.SetAsync(cacheKey, $"documents/{docType}", document, TimeSpan.FromMinutes(30));
             return Ok(document);
         }
         catch (ArgumentException ex)
@@ -70,7 +79,7 @@ public class AdminLiquiMolyDocumentsController : ControllerBase
     }
 
     [HttpGet("{docType}/{docEntry:int}/lines/{lineNum:int}")]
-    public IActionResult GetLine(
+    public async Task<IActionResult> GetLine(
         string docType,
         int docEntry,
         int lineNum,
@@ -87,9 +96,13 @@ public class AdminLiquiMolyDocumentsController : ControllerBase
             return StatusCode(403, ex.Message);
         }
 
+        var profileOverride = ResolveProfileOverride(brand, profile);
+        var cacheKey = $"doc:{docType.ToUpperInvariant()}:{docEntry}:line:{lineNum}:{profileOverride}";
+        var cached = await _cache.GetRawAsync(cacheKey);
+        if (cached != null) return Content(cached, "application/json");
+
         try
         {
-            var profileOverride = ResolveProfileOverride(brand, profile);
             var line = _reader.GetLine(docType, docEntry, lineNum, profileOverride);
             if (line == null)
             {
@@ -102,6 +115,7 @@ public class AdminLiquiMolyDocumentsController : ControllerBase
                 });
             }
 
+            await _cache.SetAsync(cacheKey, $"documents/{docType}/lines", line, TimeSpan.FromMinutes(30));
             return Ok(line);
         }
         catch (ArgumentException ex)

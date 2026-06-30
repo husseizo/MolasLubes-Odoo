@@ -25,6 +25,7 @@ public class NeonDbContext : DbContext
     public DbSet<NeonInvoiceLine> InvoiceLines => Set<NeonInvoiceLine>();
     public DbSet<NeonPayment> Payments => Set<NeonPayment>();
     public DbSet<NeonLiquiMolyProduct> LiquiMolyProducts => Set<NeonLiquiMolyProduct>();
+    public DbSet<NeonApiCache> ApiCaches => Set<NeonApiCache>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -401,6 +402,19 @@ public class NeonDbContext : DbContext
             e.HasIndex(x => x.Category);
             e.HasIndex(x => x.IsActive);
             e.HasIndex(x => x.ScrapedAt);
+        });
+
+        // =====================================================
+        // API RESPONSE CACHE
+        // =====================================================
+        modelBuilder.Entity<NeonApiCache>(e =>
+        {
+            e.ToTable("NeonApiCache");
+            e.HasKey(x => x.CacheKey);
+            e.Property(x => x.CacheKey).HasMaxLength(512).IsRequired();
+            e.Property(x => x.Endpoint).HasMaxLength(200).IsRequired();
+            e.Property(x => x.DataJson).IsRequired();
+            e.HasIndex(x => x.ExpiresAt);
         });
 
         base.OnModelCreating(modelBuilder);
