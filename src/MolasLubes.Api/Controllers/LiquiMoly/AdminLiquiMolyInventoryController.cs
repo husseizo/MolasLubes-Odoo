@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using MolasLubes.Api.Security;
+using MolasLubes.Domain.Entities.Cache;
 using MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 using MolasLubes.Infrastructure.Security;
 
@@ -302,7 +303,7 @@ public class AdminLiquiMolyInventoryController : ControllerBase
     {
         try
         {
-            _roleService.Authorize(actorSapUserCode, LiquiMolyRole.Viewer);
+            _roleService.AuthorizeAny(HttpContext.Items["CurrentUser"] as InternalUser, actorSapUserCode, LiquiMolyRole.Viewer);
             return null;
         }
         catch (UnauthorizedAccessException ex)

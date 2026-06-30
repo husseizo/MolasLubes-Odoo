@@ -240,7 +240,7 @@ public class AdminLiquiMolyReplenishmentController : ControllerBase
     {
         try
         {
-            _roleService.Authorize(actorSapUserCode, LiquiMolyRole.Planner);
+            _roleService.AuthorizeAny(HttpContext.Items["CurrentUser"] as InternalUser, actorSapUserCode, LiquiMolyRole.Planner);
             var result = _warehouseReader.GetWarehouseOptions(sourceProfile, targetProfile);
             return Ok(result);
         }
@@ -256,7 +256,7 @@ public class AdminLiquiMolyReplenishmentController : ControllerBase
         [FromQuery] string actorSapUserCode = "",
         CancellationToken ct = default)
     {
-        try { _roleService.Authorize(actorSapUserCode, LiquiMolyRole.Viewer); }
+        try { _roleService.AuthorizeAny(HttpContext.Items["CurrentUser"] as InternalUser, actorSapUserCode, LiquiMolyRole.Viewer); }
         catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
 
         var header = await _service.GetAsync(requestRef, ct);
@@ -271,7 +271,7 @@ public class AdminLiquiMolyReplenishmentController : ControllerBase
         [FromQuery] int take                = 50,
         CancellationToken ct = default)
     {
-        try { _roleService.Authorize(actorSapUserCode, LiquiMolyRole.Viewer); }
+        try { _roleService.AuthorizeAny(HttpContext.Items["CurrentUser"] as InternalUser, actorSapUserCode, LiquiMolyRole.Viewer); }
         catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
 
         try
@@ -308,7 +308,7 @@ public class AdminLiquiMolyReplenishmentController : ControllerBase
         if (string.IsNullOrWhiteSpace(actorSapUserCode))
             return BadRequest(new { message = "actorSapUserCode is required." });
 
-        try { _roleService.Authorize(actorSapUserCode, LiquiMolyRole.Viewer); }
+        try { _roleService.AuthorizeAny(HttpContext.Items["CurrentUser"] as InternalUser, actorSapUserCode, LiquiMolyRole.Viewer); }
         catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
 
         try
@@ -477,7 +477,7 @@ public class AdminLiquiMolyReportsController : ControllerBase
 
         try
         {
-            _roleService.Authorize(actorSapUserCode, LiquiMolyRole.Viewer);
+            _roleService.AuthorizeAny(HttpContext.Items["CurrentUser"] as InternalUser, actorSapUserCode, LiquiMolyRole.Viewer);
             var rows = _analyzer.Analyze(sourceProfile, targetProfile, sourceWarehouse, targetWarehouse, targetDays);
             return Ok(new { count = rows.Count, rows });
         }
@@ -499,7 +499,7 @@ public class AdminLiquiMolyReportsController : ControllerBase
 
         try
         {
-            _roleService.Authorize(actorSapUserCode, LiquiMolyRole.Viewer);
+            _roleService.AuthorizeAny(HttpContext.Items["CurrentUser"] as InternalUser, actorSapUserCode, LiquiMolyRole.Viewer);
             var rows = _analyzer.Analyze(sourceProfile, targetProfile, sourceWarehouse, targetWarehouse)
                 .Where(r => r.TrendCategory == LiquiMolyTrendCategory.DeadStock)
                 .ToList();
@@ -517,7 +517,7 @@ public class AdminLiquiMolyReportsController : ControllerBase
         [FromQuery] int take = 50,
         CancellationToken ct = default)
     {
-        try { _roleService.Authorize(actorSapUserCode, LiquiMolyRole.Viewer); }
+        try { _roleService.AuthorizeAny(HttpContext.Items["CurrentUser"] as InternalUser, actorSapUserCode, LiquiMolyRole.Viewer); }
         catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
 
         try
@@ -558,7 +558,7 @@ public class AdminLiquiMolyReportsController : ControllerBase
         [FromQuery] int take = 50,
         CancellationToken ct = default)
     {
-        try { _roleService.Authorize(actorSapUserCode, LiquiMolyRole.Viewer); }
+        try { _roleService.AuthorizeAny(HttpContext.Items["CurrentUser"] as InternalUser, actorSapUserCode, LiquiMolyRole.Viewer); }
         catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
 
         // Include all statuses that carry an approval decision so execution
@@ -613,7 +613,7 @@ public class AdminLiquiMolyReportsController : ControllerBase
         [FromQuery] string  sort                = "orderDate",
         [FromQuery] string  sortDirection       = "desc")
     {
-        try { _roleService.Authorize(actorSapUserCode, LiquiMolyRole.Viewer); }
+        try { _roleService.AuthorizeAny(HttpContext.Items["CurrentUser"] as InternalUser, actorSapUserCode, LiquiMolyRole.Viewer); }
         catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
 
         skip = Math.Max(0, skip);
@@ -646,7 +646,7 @@ public class AdminLiquiMolyReportsController : ControllerBase
         [FromQuery] string? salesPersonCode  = null,
         [FromQuery] string? search           = null)
     {
-        try { _roleService.Authorize(actorSapUserCode, LiquiMolyRole.Viewer); }
+        try { _roleService.AuthorizeAny(HttpContext.Items["CurrentUser"] as InternalUser, actorSapUserCode, LiquiMolyRole.Viewer); }
         catch (UnauthorizedAccessException ex) { return StatusCode(403, ex.Message); }
 
         try

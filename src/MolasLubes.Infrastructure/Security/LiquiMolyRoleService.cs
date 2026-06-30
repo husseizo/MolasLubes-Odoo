@@ -111,6 +111,20 @@ public class LiquiMolyRoleService
     public bool UserHasRole(InternalUser user, string requiredRole)
         => user.IsActive && HasRoleForUser(user.Role, requiredRole);
 
+    /// <summary>
+    /// Dual-path authorization. When bearerUser is non-null (request authenticated via
+    /// bearer token) the InternalUser's current DB role is used. Otherwise falls back to
+    /// the SAP user + appsettings allowlist path. Call sites pass
+    /// HttpContext.Items["CurrentUser"] as InternalUser as the first argument.
+    /// </summary>
+    public void AuthorizeAny(InternalUser? bearerUser, string sapUserCode, string requiredRole)
+    {
+        if (bearerUser != null)
+            AuthorizeUser(bearerUser, requiredRole);
+        else
+            Authorize(sapUserCode, requiredRole);
+    }
+
     // ── Private ──────────────────────────────────────────
 
     private static bool HasRoleForUser(string userRole, string requiredRole)

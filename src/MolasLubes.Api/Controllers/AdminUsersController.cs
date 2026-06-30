@@ -102,6 +102,11 @@ public class AdminUsersController : ControllerBase
         RequireAdmin();
 
         var actor = CurrentUser();
+
+        // Read current state before update so we can detect role/active changes.
+        var existing = await _users.GetByIdAsync(id);
+        if (existing == null) return NotFound();
+
         var (user, error) = await _users.UpdateAsync(id, request.DisplayName, request.Role, request.SapUserCode, request.IsActive);
 
         if (user == null)
@@ -110,11 +115,18 @@ public class AdminUsersController : ControllerBase
         if (error != null)
             return BadRequest(new { message = error });
 
-        if (request.Role != null)
+        if (request.Role != null && request.Role != existing.Role)
+        {
+            // Revoke all sessions so re-login is required with the new role.
+            await _tokens.RevokeAllForUserAsync(id);
             await _users.AddAuditEventAsync("ROLE_CHANGE", userId: id, actorId: actor.Id,
-                detail: $"role → {request.Role}");
+                detail: $"role {existing.Role} → {request.Role}");
+        }
 
-        return Ok(MapDetail(user!));
+        if (request.IsActive == false && existing.IsActive)
+            await _tokens.RevokeAllForUserAsync(id);
+
+        return Ok(MapDetail(user));
     }
 
     // ── DELETE /api/admin/users/{id} — soft-delete ────────────────────────
@@ -194,9 +206,11 @@ public class AdminUsersController : ControllerBase
         return NoContent();
     }
 
-    // ── POST /api/admin/users/{id}/revoke-sessions ────────────────────────
+    // ── POST /api/admin/users/{id}/revoke-sessions
+    // ── DELETE /api/admin/users/{id}/sessions  (mobile contract alias) ────
 
     [HttpPost("{id:int}/revoke-sessions")]
+    [HttpDelete("{id:int}/sessions")]
     [ProducesResponseType(200)]
     [ProducesResponseType(404)]
     public async Task<IActionResult> RevokeSessions(int id)
