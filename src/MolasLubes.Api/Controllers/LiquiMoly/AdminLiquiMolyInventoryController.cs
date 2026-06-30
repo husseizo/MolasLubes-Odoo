@@ -15,21 +15,24 @@ public class AdminLiquiMolyInventoryController : ControllerBase
     private const string DefaultProfile = "MolasLubes";
 
     private readonly SapLiquiMolyInventoryReader _reader;
+    private readonly NeonInventoryService _neon;
     private readonly LiquiMolyRoleService _roleService;
     private readonly NeonApiCacheService _cache;
 
     public AdminLiquiMolyInventoryController(
         SapLiquiMolyInventoryReader reader,
+        NeonInventoryService neon,
         LiquiMolyRoleService roleService,
         NeonApiCacheService cache)
     {
         _reader = reader;
+        _neon = neon;
         _roleService = roleService;
         _cache = cache;
     }
 
     [HttpGet("stock")]
-    public IActionResult GetStock(
+    public async Task<IActionResult> GetStock(
         [FromQuery] string actorSapUserCode = "",
         [FromQuery] string profile = DefaultProfile,
         [FromQuery] string? brand = null,
@@ -38,7 +41,8 @@ public class AdminLiquiMolyInventoryController : ControllerBase
         [FromQuery] int skip = 0,
         [FromQuery] int take = 50,
         [FromQuery] bool includeZero = false,
-        [FromQuery] bool onlyLiquiMoly = true)
+        [FromQuery] bool onlyLiquiMoly = true,
+        CancellationToken ct = default)
     {
         var auth = AuthorizeViewer(actorSapUserCode);
         if (auth != null) return auth;
@@ -48,7 +52,7 @@ public class AdminLiquiMolyInventoryController : ControllerBase
 
         try
         {
-            var data = _reader.GetStock(profile, brand, search, warehouseCode, skip, take, includeZero, onlyLiquiMoly);
+            var data = await _neon.GetStockAsync(search, warehouseCode, skip, take, includeZero, ct);
             return Ok(new
             {
                 data.AsOfUtc,
@@ -183,7 +187,7 @@ public class AdminLiquiMolyInventoryController : ControllerBase
     }
 
     [HttpGet("deliveries")]
-    public IActionResult GetDeliveries(
+    public async Task<IActionResult> GetDeliveries(
         [FromQuery] string actorSapUserCode = "",
         [FromQuery] string profile = DefaultProfile,
         [FromQuery] string? brand = null,
@@ -192,7 +196,8 @@ public class AdminLiquiMolyInventoryController : ControllerBase
         [FromQuery] string? warehouse = null,
         [FromQuery] string? search = null,
         [FromQuery] int skip = 0,
-        [FromQuery] int take = 50)
+        [FromQuery] int take = 50,
+        CancellationToken ct = default)
     {
         var auth = AuthorizeViewer(actorSapUserCode);
         if (auth != null) return auth;
@@ -202,15 +207,7 @@ public class AdminLiquiMolyInventoryController : ControllerBase
 
         try
         {
-            var data = _reader.GetDeliveryAggregates(
-                profile,
-                brand,
-                dateFrom,
-                dateTo,
-                warehouse,
-                search,
-                skip,
-                take);
+            var data = await _neon.GetDeliveriesAsync(dateFrom, dateTo, search, skip, take, ct);
 
             return Ok(new
             {
@@ -236,17 +233,18 @@ public class AdminLiquiMolyInventoryController : ControllerBase
     }
 
     [HttpGet("deliveries/today-summary")]
-    public IActionResult GetTodayDeliveries(
+    public async Task<IActionResult> GetTodayDeliveries(
         [FromQuery] string actorSapUserCode = "",
         [FromQuery] string profile = DefaultProfile,
-        [FromQuery] string? brand = null)
+        [FromQuery] string? brand = null,
+        CancellationToken ct = default)
     {
         var auth = AuthorizeViewer(actorSapUserCode);
         if (auth != null) return auth;
 
         try
         {
-            var data = _reader.GetTodayDeliveries(profile, brand);
+            var data = await _neon.GetTodayDeliveriesAsync(ct);
             return Ok(data);
         }
         catch (Exception ex)
@@ -256,7 +254,7 @@ public class AdminLiquiMolyInventoryController : ControllerBase
     }
 
     [HttpGet("stock/changes")]
-    public IActionResult GetStockChanges(
+    public async Task<IActionResult> GetStockChanges(
         [FromQuery] string actorSapUserCode = "",
         [FromQuery] string profile = DefaultProfile,
         [FromQuery] string? brand = null,
@@ -264,7 +262,8 @@ public class AdminLiquiMolyInventoryController : ControllerBase
         [FromQuery] string? search = null,
         [FromQuery] string? warehouseCode = null,
         [FromQuery] bool includeZero = false,
-        [FromQuery] bool onlyLiquiMoly = true)
+        [FromQuery] bool onlyLiquiMoly = true,
+        CancellationToken ct = default)
     {
         var auth = AuthorizeViewer(actorSapUserCode);
         if (auth != null) return auth;
@@ -274,7 +273,7 @@ public class AdminLiquiMolyInventoryController : ControllerBase
 
         try
         {
-            var data = _reader.GetChanges(profile, brand, sinceVersion, search, warehouseCode, includeZero, onlyLiquiMoly);
+            var data = await _neon.GetChangesAsync(search, warehouseCode, sinceVersion, includeZero, ct);
             return Ok(data);
         }
         catch (Exception ex)
@@ -284,20 +283,21 @@ public class AdminLiquiMolyInventoryController : ControllerBase
     }
 
     [HttpGet("stock/summary")]
-    public IActionResult GetStockSummary(
+    public async Task<IActionResult> GetStockSummary(
         [FromQuery] string actorSapUserCode = "",
         [FromQuery] string profile = DefaultProfile,
         [FromQuery] string? brand = null,
         [FromQuery] string? warehouseCode = null,
         [FromQuery] bool includeZero = false,
-        [FromQuery] bool onlyLiquiMoly = true)
+        [FromQuery] bool onlyLiquiMoly = true,
+        CancellationToken ct = default)
     {
         var auth = AuthorizeViewer(actorSapUserCode);
         if (auth != null) return auth;
 
         try
         {
-            var data = _reader.GetSummary(profile, brand, warehouseCode, includeZero, onlyLiquiMoly);
+            var data = await _neon.GetSummaryAsync(warehouseCode, includeZero, ct);
             return Ok(data);
         }
         catch (Exception ex)
