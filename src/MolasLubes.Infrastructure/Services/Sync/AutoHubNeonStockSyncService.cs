@@ -6,15 +6,8 @@ using MolasLubes.Infrastructure.Persistence;
 
 namespace MolasLubes.Infrastructure.Services.Sync;
 
-/// <summary>
-/// Syncs AutoHub stock directly from SAP B1 into NeonProducts (Brand="AutoHub").
-/// Bypasses the SQL Server cache layer — AutoHub stock is not in MolasCacheDbContext.
-/// Runs a full sync every call (no delta — aggregate OITW queries are always full reads).
-/// </summary>
 public class AutoHubNeonStockSyncService
 {
-    private const string BrandKey = "AutoHub";
-
     private readonly SapAutoHubStockReader _reader;
     private readonly NeonDbContext _neon;
     private readonly ILogger<AutoHubNeonStockSyncService> _logger;
@@ -37,7 +30,6 @@ public class AutoHubNeonStockSyncService
 
         _logger.LogInformation("AutoHubNeonStockSync: SAP returned {Count} items", rows.Count);
 
-        // Safety: if SAP returns nothing, abort rather than deactivate the entire AutoHub catalog
         if (rows.Count == 0)
         {
             _logger.LogWarning(
@@ -53,58 +45,39 @@ public class AutoHubNeonStockSyncService
 
             var now = DateTime.UtcNow;
 
-            var existing = await _neon.Products
-                .Where(p => p.Brand == BrandKey)
+            var existing = await _neon.AutoHubProducts
                 .ToDictionaryAsync(p => p.ItemCode, ct);
 
             var incomingCodes = new HashSet<string>(
                 rows.Select(r => r.ItemCode), StringComparer.OrdinalIgnoreCase);
 
-            int upserted = 0, deactivated = 0, skipped = 0;
+            int upserted = 0, deactivated = 0;
 
             foreach (var row in rows)
             {
                 if (existing.TryGetValue(row.ItemCode, out var entity))
                 {
-                    entity.ItemName        = row.ItemName;
-                    entity.OnHandSap       = row.OnHand;
-                    entity.AvailableCache  = Math.Max(0m, row.Available);
-                    entity.IsActive        = row.OnHand > 0 || row.Available > 0;
-                    entity.SyncedAt        = now;
-                    upserted++;
+                    entity.ItemName       = row.ItemName;
+                    entity.OnHandSap      = row.OnHand;
+                    entity.AvailableCache = Math.Max(0m, row.Available);
+                    entity.IsActive       = row.OnHand > 0 || row.Available > 0;
+                    entity.SyncedAt       = now;
                 }
                 else
                 {
-                    // Guard against ItemCode collision with MolasLubes rows
-                    var clash = await _neon.Products
-                        .AsNoTracking()
-                        .AnyAsync(p => p.ItemCode == row.ItemCode && p.Brand != BrandKey, ct);
-
-                    if (clash)
+                    _neon.AutoHubProducts.Add(new NeonAutoHubProduct
                     {
-                        _logger.LogWarning(
-                            "AutoHubNeonStockSync: ItemCode {Code} conflicts with an existing non-AutoHub row — skipped",
-                            row.ItemCode);
-                        skipped++;
-                        continue;
-                    }
-
-                    _neon.Products.Add(new NeonProduct
-                    {
-                        ItemCode        = row.ItemCode,
-                        ItemName        = row.ItemName,
-                        Brand           = BrandKey,
-                        OnHandSap       = row.OnHand,
-                        AvailableCache  = Math.Max(0m, row.Available),
-                        IsActive        = row.OnHand > 0 || row.Available > 0,
-                        IsInventoryItem = true,
-                        SyncedAt        = now
+                        ItemCode      = row.ItemCode,
+                        ItemName      = row.ItemName,
+                        OnHandSap     = row.OnHand,
+                        AvailableCache = Math.Max(0m, row.Available),
+                        IsActive      = row.OnHand > 0 || row.Available > 0,
+                        SyncedAt      = now
                     });
-                    upserted++;
                 }
+                upserted++;
             }
 
-            // Deactivate AutoHub rows SAP no longer returns (item frozen or deleted)
             foreach (var entity in existing.Values.Where(e => !incomingCodes.Contains(e.ItemCode)))
             {
                 entity.IsActive = false;
@@ -116,8 +89,8 @@ public class AutoHubNeonStockSyncService
             await tx.CommitAsync(ct);
 
             _logger.LogInformation(
-                "AutoHubNeonStockSync: completed | Upserted={U} | Deactivated={D} | Skipped={S}",
-                upserted, deactivated, skipped);
+                "AutoHubNeonStockSync: completed | Upserted={U} | Deactivated={D}",
+                upserted, deactivated);
         });
     }
 }

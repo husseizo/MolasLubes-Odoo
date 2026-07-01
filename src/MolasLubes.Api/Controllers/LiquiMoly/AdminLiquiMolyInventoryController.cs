@@ -16,19 +16,22 @@ public class AdminLiquiMolyInventoryController : ControllerBase
 
     private readonly SapLiquiMolyInventoryReader _reader;
     private readonly NeonInventoryService _neon;
+    private readonly AutoHubNeonInventoryService _autoHubNeon;
     private readonly LiquiMolyRoleService _roleService;
     private readonly NeonApiCacheService _cache;
 
     public AdminLiquiMolyInventoryController(
         SapLiquiMolyInventoryReader reader,
         NeonInventoryService neon,
+        AutoHubNeonInventoryService autoHubNeon,
         LiquiMolyRoleService roleService,
         NeonApiCacheService cache)
     {
-        _reader = reader;
-        _neon = neon;
+        _reader      = reader;
+        _neon        = neon;
+        _autoHubNeon = autoHubNeon;
         _roleService = roleService;
-        _cache = cache;
+        _cache       = cache;
     }
 
     [HttpGet("stock")]
@@ -52,8 +55,12 @@ public class AdminLiquiMolyInventoryController : ControllerBase
 
         try
         {
-            var resolvedBrand = ResolveNeonBrand(profile, brand);
-            var data = await _neon.GetStockAsync(search, warehouseCode, skip, take, includeZero, resolvedBrand, ct);
+            InventoryStockSnapshotResponse data;
+            if (IsAutoHub(profile, brand))
+                data = await _autoHubNeon.GetStockAsync(search, warehouseCode, skip, take, includeZero, ct);
+            else
+                data = await _neon.GetStockAsync(search, warehouseCode, skip, take, includeZero, ct);
+
             return Ok(new
             {
                 data.AsOfUtc,
@@ -317,8 +324,12 @@ public class AdminLiquiMolyInventoryController : ControllerBase
 
         try
         {
-            var resolvedBrand = ResolveNeonBrand(profile, brand);
-            var data = await _neon.GetChangesAsync(search, warehouseCode, sinceVersion, includeZero, resolvedBrand, ct);
+            InventoryStockChangesResponse data;
+            if (IsAutoHub(profile, brand))
+                data = await _autoHubNeon.GetChangesAsync(search, warehouseCode, sinceVersion, includeZero, ct);
+            else
+                data = await _neon.GetChangesAsync(search, warehouseCode, sinceVersion, includeZero, ct);
+
             return Ok(data);
         }
         catch (Exception ex)
@@ -342,8 +353,12 @@ public class AdminLiquiMolyInventoryController : ControllerBase
 
         try
         {
-            var resolvedBrand = ResolveNeonBrand(profile, brand);
-            var data = await _neon.GetSummaryAsync(warehouseCode, includeZero, resolvedBrand, ct);
+            InventoryStockSummaryResponse data;
+            if (IsAutoHub(profile, brand))
+                data = await _autoHubNeon.GetSummaryAsync(warehouseCode, includeZero, ct);
+            else
+                data = await _neon.GetSummaryAsync(warehouseCode, includeZero, ct);
+
             return Ok(data);
         }
         catch (Exception ex)
@@ -365,11 +380,6 @@ public class AdminLiquiMolyInventoryController : ControllerBase
         }
     }
 
-    // Normalizes brand/profile to the exact key stored in NeonProduct.Brand, or null for MolasLubes
-    private static string? ResolveNeonBrand(string profile, string? brand)
-        => IsAutoHub(profile, brand) ? "AutoHub" : null;
-
-    // AutoHub deliveries are still in SAP — NeonDelivery only contains MolasLubes deliveries
     private static bool IsAutoHub(string profile, string? brand)
     {
         if (string.Equals(profile, "AutoHub", StringComparison.OrdinalIgnoreCase))

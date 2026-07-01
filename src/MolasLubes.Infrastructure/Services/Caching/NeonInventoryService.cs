@@ -5,15 +5,15 @@ using MolasLubes.Infrastructure.Persistence;
 namespace MolasLubes.Infrastructure.Services.Caching;
 
 /// <summary>
-/// Serves inventory stock and delivery endpoints from Neon PostgreSQL instead of live SAP B1.
+/// Serves MolasLubes inventory stock and delivery endpoints from Neon PostgreSQL.
 /// Stock is aggregated per-item (no per-warehouse breakdown — NeonProduct is item-level).
 /// Delivery lines carry no WhsCode so Warehouse is left empty.
-/// Brand/profile filtering is not supported (Neon contains only MolasLubes-profile data).
+/// AutoHub stock is handled by AutoHubNeonInventoryService.
 /// </summary>
 public class NeonInventoryService
 {
-    private const decimal LowStockThreshold    = 5m;
-    private const decimal OutOfStockThreshold  = 0m;
+    private const decimal LowStockThreshold   = 5m;
+    private const decimal OutOfStockThreshold = 0m;
 
     private readonly NeonDbContext _db;
 
@@ -27,14 +27,13 @@ public class NeonInventoryService
         int skip,
         int take,
         bool includeZero,
-        string? brand = null,
         CancellationToken ct = default)
     {
-        var q = BuildStockQuery(search, warehouseCode, includeZero, brand);
+        var q = BuildStockQuery(search, warehouseCode, includeZero);
 
-        var total     = await q.CountAsync(ct);
-        var asOfUtc   = await MaxSyncedAtAsync(brand, ct);
-        var version   = ToVersion(asOfUtc);
+        var total   = await q.CountAsync(ct);
+        var asOfUtc = await MaxSyncedAtAsync(ct);
+        var version = ToVersion(asOfUtc);
 
         var items = await q
             .OrderBy(p => p.ItemCode)
@@ -42,14 +41,12 @@ public class NeonInventoryService
             .Take(take)
             .ToListAsync(ct);
 
-        var rows = items.Select(ToStockRow).ToList();
-
         return new InventoryStockSnapshotResponse
         {
             AsOfUtc = asOfUtc,
             Version = version,
             Total   = total,
-            Rows    = rows
+            Rows    = items.Select(ToStockRow).ToList()
         };
     }
 
@@ -58,18 +55,17 @@ public class NeonInventoryService
     public async Task<InventoryStockSummaryResponse> GetSummaryAsync(
         string? warehouseCode,
         bool includeZero,
-        string? brand = null,
         CancellationToken ct = default)
     {
-        var q       = BuildStockQuery(search: null, warehouseCode, includeZero, brand);
-        var asOfUtc = await MaxSyncedAtAsync(brand, ct);
+        var q       = BuildStockQuery(search: null, warehouseCode, includeZero);
+        var asOfUtc = await MaxSyncedAtAsync(ct);
         var version = ToVersion(asOfUtc);
 
         var totals = await q
             .GroupBy(_ => 1)
             .Select(g => new
             {
-                ItemCount  = g.Count(),
+                ItemCount   = g.Count(),
                 TotalOnHand = (decimal?)g.Sum(p => p.OnHandSap) ?? 0m,
                 TotalAvail  = (decimal?)g.Sum(p => p.AvailableCache) ?? 0m
             })
@@ -77,15 +73,15 @@ public class NeonInventoryService
 
         return new InventoryStockSummaryResponse
         {
-            AsOfUtc          = asOfUtc,
-            Version          = version,
+            AsOfUtc            = asOfUtc,
+            Version            = version,
             ItemWarehouseCount = totals?.ItemCount ?? 0,
             ItemCount          = totals?.ItemCount ?? 0,
             WarehouseCount     = 1,
             TotalOnHand        = totals?.TotalOnHand ?? 0m,
             TotalCommitted     = 0m,
             TotalOrdered       = 0m,
-            TotalAvailable     = totals?.TotalOnHand ?? 0m,   // matches SAP reader convention
+            TotalAvailable     = totals?.TotalOnHand ?? 0m,
             TotalNetAvailable  = totals?.TotalAvail ?? 0m
         };
     }
@@ -97,18 +93,17 @@ public class NeonInventoryService
         string? warehouseCode,
         long sinceVersion,
         bool includeZero,
-        string? brand = null,
         CancellationToken ct = default)
     {
-        var asOfUtc  = await MaxSyncedAtAsync(brand, ct);
-        var version  = ToVersion(asOfUtc);
-        bool reset   = sinceVersion == 0;
+        var asOfUtc = await MaxSyncedAtAsync(ct);
+        var version = ToVersion(asOfUtc);
+        bool reset  = sinceVersion == 0;
 
         List<InventoryStockRow> rows;
 
         if (reset)
         {
-            var q = BuildStockQuery(search, warehouseCode, includeZero, brand);
+            var q     = BuildStockQuery(search, warehouseCode, includeZero);
             var items = await q.OrderBy(p => p.ItemCode).ToListAsync(ct);
             rows = items.Select(ToStockRow).ToList();
         }
@@ -119,8 +114,6 @@ public class NeonInventoryService
             var q = _db.Products
                 .AsNoTracking()
                 .Where(p => p.SyncedAt > sinceTime);
-
-            q = ApplyBrandFilter(q, brand);
 
             if (!string.IsNullOrWhiteSpace(search))
             {
@@ -197,17 +190,17 @@ public class NeonInventoryService
                 var first = g.First();
                 return new InventoryTodayDeliveryItem
                 {
-                    ItemCode            = g.Key,
-                    ItemName            = first.ItemName,
-                    Brand               = first.Brand,
-                    ArticleNumber       = first.ArticleNumber,
-                    TanNumber           = first.TanNumber,
-                    DeliveredQty        = g.Sum(r => r.DeliveredQty),
-                    DeliveryCount       = g.Sum(r => r.DeliveryCount),
-                    LastDeliveredAt     = g.Max(r => r.LastDeliveredAt),
+                    ItemCode             = g.Key,
+                    ItemName             = first.ItemName,
+                    Brand                = first.Brand,
+                    ArticleNumber        = first.ArticleNumber,
+                    TanNumber            = first.TanNumber,
+                    DeliveredQty         = g.Sum(r => r.DeliveredQty),
+                    DeliveryCount        = g.Sum(r => r.DeliveryCount),
+                    LastDeliveredAt      = g.Max(r => r.LastDeliveredAt),
                     LastDeliveryDocEntry = g.OrderByDescending(r => r.LastDeliveryDocEntry ?? 0).First().LastDeliveryDocEntry,
-                    LastDeliveryDocNum  = g.OrderByDescending(r => r.LastDeliveryDocEntry ?? 0).First().LastDeliveryDocNum,
-                    Warehouses          = g.Select(r => r.Warehouse).Where(w => !string.IsNullOrWhiteSpace(w)).Distinct(StringComparer.OrdinalIgnoreCase).ToList()
+                    LastDeliveryDocNum   = g.OrderByDescending(r => r.LastDeliveryDocEntry ?? 0).First().LastDeliveryDocNum,
+                    Warehouses           = g.Select(r => r.Warehouse).Where(w => !string.IsNullOrWhiteSpace(w)).Distinct(StringComparer.OrdinalIgnoreCase).ToList()
                 };
             })
             .OrderByDescending(x => x.LastDeliveredAt ?? DateTime.MinValue)
@@ -230,17 +223,13 @@ public class NeonInventoryService
     private IQueryable<MolasLubes.Domain.Entities.Neon.NeonProduct> BuildStockQuery(
         string? search,
         string? warehouseCode,
-        bool includeZero,
-        string? brand = null)
+        bool includeZero)
     {
         var q = _db.Products.AsNoTracking();
-
-        q = ApplyBrandFilter(q, brand);
 
         if (!includeZero)
             q = q.Where(p => p.OnHandSap > 0);
 
-        // warehouseCode filter: best-effort match against DefaultWarehouse
         if (!string.IsNullOrWhiteSpace(warehouseCode))
             q = q.Where(p => p.DefaultWarehouse != null &&
                               p.DefaultWarehouse.ToUpper() == warehouseCode.ToUpper());
@@ -257,38 +246,26 @@ public class NeonInventoryService
         return q;
     }
 
-    // brand="AutoHub" → only AutoHub rows; anything else → exclude AutoHub rows
-    private static IQueryable<MolasLubes.Domain.Entities.Neon.NeonProduct> ApplyBrandFilter(
-        IQueryable<MolasLubes.Domain.Entities.Neon.NeonProduct> q,
-        string? brand)
-    {
-        if (string.Equals(brand, "AutoHub", StringComparison.OrdinalIgnoreCase))
-            return q.Where(p => p.Brand == "AutoHub");
-
-        // Default: MolasLubes view — exclude AutoHub rows (Brand IS NULL or Brand != "AutoHub")
-        return q.Where(p => p.Brand == null || p.Brand != "AutoHub");
-    }
-
     private static InventoryStockRow ToStockRow(MolasLubes.Domain.Entities.Neon.NeonProduct p) =>
         new()
         {
-            Key                   = $"{p.ItemCode}|{p.DefaultWarehouse ?? ""}",
-            ItemCode              = p.ItemCode,
-            ItemName              = p.ItemName,
-            Brand                 = p.Brand,
-            ItemBrand             = p.Brand,
-            PrimaryBarcode        = p.Barcode,
-            ItemGroup             = p.ItemGroupName,
-            WarehouseCode         = p.DefaultWarehouse ?? "",
-            WarehouseName         = null,
-            OnHand                = p.OnHandSap,
-            Committed             = 0m,
-            Ordered               = 0m,
-            Available             = p.AvailableCache,
-            StockStatus           = ResolveStockStatus(p.OnHandSap, p.AvailableCache),
-            LowStockThreshold     = LowStockThreshold,
-            OutOfStockThreshold   = OutOfStockThreshold,
-            IsDeleted             = false
+            Key                 = $"{p.ItemCode}|{p.DefaultWarehouse ?? ""}",
+            ItemCode            = p.ItemCode,
+            ItemName            = p.ItemName,
+            Brand               = p.Brand,
+            ItemBrand           = p.Brand,
+            PrimaryBarcode      = p.Barcode,
+            ItemGroup           = p.ItemGroupName,
+            WarehouseCode       = p.DefaultWarehouse ?? "",
+            WarehouseName       = null,
+            OnHand              = p.OnHandSap,
+            Committed           = 0m,
+            Ordered             = 0m,
+            Available           = p.AvailableCache,
+            StockStatus         = ResolveStockStatus(p.OnHandSap, p.AvailableCache),
+            LowStockThreshold   = LowStockThreshold,
+            OutOfStockThreshold = OutOfStockThreshold,
+            IsDeleted           = false
         };
 
     private async Task<List<InventoryDeliveryAggregateRow>> BuildDeliveryAggregatesAsync(
@@ -297,12 +274,10 @@ public class NeonInventoryService
         string? search,
         CancellationToken ct)
     {
-        // Convert Dar es Salaam business dates to UTC window for Neon query
-        var tz       = GetDarEsSalaamTimeZone();
-        var utcFrom  = TimeZoneInfo.ConvertTimeToUtc(dateFrom.ToDateTime(TimeOnly.MinValue), tz);
-        var utcTo    = TimeZoneInfo.ConvertTimeToUtc(dateTo.ToDateTime(TimeOnly.MaxValue), tz);
+        var tz      = GetDarEsSalaamTimeZone();
+        var utcFrom = TimeZoneInfo.ConvertTimeToUtc(dateFrom.ToDateTime(TimeOnly.MinValue), tz);
+        var utcTo   = TimeZoneInfo.ConvertTimeToUtc(dateTo.ToDateTime(TimeOnly.MaxValue), tz);
 
-        // Load lines with their delivery header (filtered, non-cancelled)
         var linesQuery = _db.DeliveryLines
             .AsNoTracking()
             .Where(l =>
@@ -334,7 +309,6 @@ public class NeonInventoryService
         if (lines.Count == 0)
             return new List<InventoryDeliveryAggregateRow>();
 
-        // Fetch customer names for all involved card codes
         var cardCodes = lines.Select(l => l.CardCode).Distinct().ToList();
         var customers = await _db.Customers
             .AsNoTracking()
@@ -342,21 +316,20 @@ public class NeonInventoryService
             .Select(c => new { c.CardCode, c.CardName })
             .ToDictionaryAsync(c => c.CardCode, c => c.CardName, ct);
 
-        // Aggregate by ItemCode (no warehouse breakdown available)
-        var aggregated = lines
+        return lines
             .GroupBy(l => l.ItemCode, StringComparer.OrdinalIgnoreCase)
             .Select(g =>
             {
-                var ordered     = g.OrderByDescending(l => l.DeliveryDate).ThenByDescending(l => l.SapDocEntry);
-                var last        = ordered.First();
+                var ordered      = g.OrderByDescending(l => l.DeliveryDate).ThenByDescending(l => l.SapDocEntry);
+                var last         = ordered.First();
                 var customerName = customers.TryGetValue(last.CardCode, out var cn) ? cn : null;
 
                 return new InventoryDeliveryAggregateRow
                 {
                     ItemCode             = g.Key,
                     ItemName             = g.First().Description,
-                    ArticleNumber        = g.Key,     // fallback — ArticleNumber not in Neon delivery
-                    Warehouse            = "",         // WhsCode not stored in NeonDeliveryLine
+                    ArticleNumber        = g.Key,
+                    Warehouse            = "",
                     DeliveredQty         = g.Sum(l => l.Quantity),
                     DeliveryCount        = g.Select(l => l.SapDocEntry).Distinct().Count(),
                     LastDeliveredAt      = g.Max(l => (DateTime?)l.DeliveryDate),
@@ -369,15 +342,12 @@ public class NeonInventoryService
                 };
             })
             .ToList();
-
-        return aggregated;
     }
 
-    private async Task<DateTime> MaxSyncedAtAsync(string? brand, CancellationToken ct)
+    private async Task<DateTime> MaxSyncedAtAsync(CancellationToken ct)
     {
-        var q = ApplyBrandFilter(_db.Products.AsNoTracking(), brand);
-
-        var max = await q
+        var max = await _db.Products
+            .AsNoTracking()
             .OrderByDescending(p => p.SyncedAt)
             .Select(p => (DateTime?)p.SyncedAt)
             .FirstOrDefaultAsync(ct);
