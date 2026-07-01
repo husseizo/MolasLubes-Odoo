@@ -50,32 +50,10 @@ public class AdminLiquiMolyInventoryController : ControllerBase
         skip = Math.Max(0, skip);
         take = Math.Clamp(take, 1, 1000);
 
-        // AutoHub lives in a separate SAP company database — not synced to Neon
-        if (IsAutoHub(profile, brand))
-        {
-            try
-            {
-                var sapData = _reader.GetStock(profile, brand, search, warehouseCode, skip, take, includeZero, onlyLiquiMoly);
-                return Ok(new
-                {
-                    sapData.AsOfUtc,
-                    sapData.Version,
-                    sapData.Total,
-                    skip,
-                    take,
-                    hasMore = skip + sapData.Rows.Count < sapData.Total,
-                    rows = sapData.Rows
-                });
-            }
-            catch (Exception ex)
-            {
-                return StatusCode(500, new { message = "Failed to load inventory stock.", detail = ex.Message });
-            }
-        }
-
         try
         {
-            var data = await _neon.GetStockAsync(search, warehouseCode, skip, take, includeZero, ct);
+            var resolvedBrand = ResolveNeonBrand(profile, brand);
+            var data = await _neon.GetStockAsync(search, warehouseCode, skip, take, includeZero, resolvedBrand, ct);
             return Ok(new
             {
                 data.AsOfUtc,
@@ -228,7 +206,7 @@ public class AdminLiquiMolyInventoryController : ControllerBase
         skip = Math.Max(0, skip);
         take = Math.Clamp(take, 1, 1000);
 
-        // AutoHub deliveries are in a separate SAP company — not synced to Neon
+        // AutoHub deliveries are not in Neon — NeonDelivery only has MolasLubes data
         if (IsAutoHub(profile, brand))
         {
             try
@@ -294,7 +272,7 @@ public class AdminLiquiMolyInventoryController : ControllerBase
         var auth = AuthorizeViewer(actorSapUserCode);
         if (auth != null) return auth;
 
-        // AutoHub deliveries are in a separate SAP company — not synced to Neon
+        // AutoHub deliveries are not in Neon — NeonDelivery only has MolasLubes data
         if (IsAutoHub(profile, brand))
         {
             try
@@ -337,23 +315,10 @@ public class AdminLiquiMolyInventoryController : ControllerBase
         if (sinceVersion < 0)
             return BadRequest(new { message = "sinceVersion must be >= 0." });
 
-        // AutoHub lives in a separate SAP company — not synced to Neon
-        if (IsAutoHub(profile, brand))
-        {
-            try
-            {
-                var sapData = _reader.GetChanges(profile, brand, sinceVersion, search, warehouseCode, includeZero, onlyLiquiMoly);
-                return Ok(sapData);
-            }
-            catch (Exception ex)
-            {
-                return StatusCode(500, new { message = "Failed to load inventory stock changes.", detail = ex.Message });
-            }
-        }
-
         try
         {
-            var data = await _neon.GetChangesAsync(search, warehouseCode, sinceVersion, includeZero, ct);
+            var resolvedBrand = ResolveNeonBrand(profile, brand);
+            var data = await _neon.GetChangesAsync(search, warehouseCode, sinceVersion, includeZero, resolvedBrand, ct);
             return Ok(data);
         }
         catch (Exception ex)
@@ -375,23 +340,10 @@ public class AdminLiquiMolyInventoryController : ControllerBase
         var auth = AuthorizeViewer(actorSapUserCode);
         if (auth != null) return auth;
 
-        // AutoHub lives in a separate SAP company — not synced to Neon
-        if (IsAutoHub(profile, brand))
-        {
-            try
-            {
-                var sapData = _reader.GetSummary(profile, brand, warehouseCode, includeZero, onlyLiquiMoly);
-                return Ok(sapData);
-            }
-            catch (Exception ex)
-            {
-                return StatusCode(500, new { message = "Failed to load inventory stock summary.", detail = ex.Message });
-            }
-        }
-
         try
         {
-            var data = await _neon.GetSummaryAsync(warehouseCode, includeZero, ct);
+            var resolvedBrand = ResolveNeonBrand(profile, brand);
+            var data = await _neon.GetSummaryAsync(warehouseCode, includeZero, resolvedBrand, ct);
             return Ok(data);
         }
         catch (Exception ex)
@@ -413,7 +365,11 @@ public class AdminLiquiMolyInventoryController : ControllerBase
         }
     }
 
-    // AutoHub is a separate SAP B1 company database with no Neon sync
+    // Normalizes brand/profile to the exact key stored in NeonProduct.Brand, or null for MolasLubes
+    private static string? ResolveNeonBrand(string profile, string? brand)
+        => IsAutoHub(profile, brand) ? "AutoHub" : null;
+
+    // AutoHub deliveries are still in SAP — NeonDelivery only contains MolasLubes deliveries
     private static bool IsAutoHub(string profile, string? brand)
     {
         if (string.Equals(profile, "AutoHub", StringComparison.OrdinalIgnoreCase))

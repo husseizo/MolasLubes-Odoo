@@ -59,6 +59,7 @@ public class NeonDbContext : DbContext
 
             e.HasKey(x => x.ItemCode);
             e.HasIndex(x => x.Barcode);
+            e.HasIndex(x => x.Brand);
 
             e.Property(x => x.Barcode) .HasMaxLength(50);
             e.Property(x => x.ItemName).IsRequired();

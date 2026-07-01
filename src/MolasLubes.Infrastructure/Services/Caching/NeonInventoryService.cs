@@ -27,12 +27,13 @@ public class NeonInventoryService
         int skip,
         int take,
         bool includeZero,
+        string? brand = null,
         CancellationToken ct = default)
     {
-        var q = BuildStockQuery(search, warehouseCode, includeZero);
+        var q = BuildStockQuery(search, warehouseCode, includeZero, brand);
 
         var total     = await q.CountAsync(ct);
-        var asOfUtc   = await MaxSyncedAtAsync(ct);
+        var asOfUtc   = await MaxSyncedAtAsync(brand, ct);
         var version   = ToVersion(asOfUtc);
 
         var items = await q
@@ -57,10 +58,11 @@ public class NeonInventoryService
     public async Task<InventoryStockSummaryResponse> GetSummaryAsync(
         string? warehouseCode,
         bool includeZero,
+        string? brand = null,
         CancellationToken ct = default)
     {
-        var q       = BuildStockQuery(search: null, warehouseCode, includeZero);
-        var asOfUtc = await MaxSyncedAtAsync(ct);
+        var q       = BuildStockQuery(search: null, warehouseCode, includeZero, brand);
+        var asOfUtc = await MaxSyncedAtAsync(brand, ct);
         var version = ToVersion(asOfUtc);
 
         var totals = await q
@@ -95,9 +97,10 @@ public class NeonInventoryService
         string? warehouseCode,
         long sinceVersion,
         bool includeZero,
+        string? brand = null,
         CancellationToken ct = default)
     {
-        var asOfUtc  = await MaxSyncedAtAsync(ct);
+        var asOfUtc  = await MaxSyncedAtAsync(brand, ct);
         var version  = ToVersion(asOfUtc);
         bool reset   = sinceVersion == 0;
 
@@ -105,7 +108,7 @@ public class NeonInventoryService
 
         if (reset)
         {
-            var q = BuildStockQuery(search, warehouseCode, includeZero);
+            var q = BuildStockQuery(search, warehouseCode, includeZero, brand);
             var items = await q.OrderBy(p => p.ItemCode).ToListAsync(ct);
             rows = items.Select(ToStockRow).ToList();
         }
@@ -116,6 +119,8 @@ public class NeonInventoryService
             var q = _db.Products
                 .AsNoTracking()
                 .Where(p => p.SyncedAt > sinceTime);
+
+            q = ApplyBrandFilter(q, brand);
 
             if (!string.IsNullOrWhiteSpace(search))
             {
@@ -225,9 +230,12 @@ public class NeonInventoryService
     private IQueryable<MolasLubes.Domain.Entities.Neon.NeonProduct> BuildStockQuery(
         string? search,
         string? warehouseCode,
-        bool includeZero)
+        bool includeZero,
+        string? brand = null)
     {
         var q = _db.Products.AsNoTracking();
+
+        q = ApplyBrandFilter(q, brand);
 
         if (!includeZero)
             q = q.Where(p => p.OnHandSap > 0);
@@ -247,6 +255,18 @@ public class NeonInventoryService
         }
 
         return q;
+    }
+
+    // brand="AutoHub" → only AutoHub rows; anything else → exclude AutoHub rows
+    private static IQueryable<MolasLubes.Domain.Entities.Neon.NeonProduct> ApplyBrandFilter(
+        IQueryable<MolasLubes.Domain.Entities.Neon.NeonProduct> q,
+        string? brand)
+    {
+        if (string.Equals(brand, "AutoHub", StringComparison.OrdinalIgnoreCase))
+            return q.Where(p => p.Brand == "AutoHub");
+
+        // Default: MolasLubes view — exclude AutoHub rows (Brand IS NULL or Brand != "AutoHub")
+        return q.Where(p => p.Brand == null || p.Brand != "AutoHub");
     }
 
     private static InventoryStockRow ToStockRow(MolasLubes.Domain.Entities.Neon.NeonProduct p) =>
@@ -353,10 +373,11 @@ public class NeonInventoryService
         return aggregated;
     }
 
-    private async Task<DateTime> MaxSyncedAtAsync(CancellationToken ct)
+    private async Task<DateTime> MaxSyncedAtAsync(string? brand, CancellationToken ct)
     {
-        var max = await _db.Products
-            .AsNoTracking()
+        var q = ApplyBrandFilter(_db.Products.AsNoTracking(), brand);
+
+        var max = await q
             .OrderByDescending(p => p.SyncedAt)
             .Select(p => (DateTime?)p.SyncedAt)
             .FirstOrDefaultAsync(ct);

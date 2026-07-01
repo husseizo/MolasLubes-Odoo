@@ -372,6 +372,10 @@ builder.Services.AddScoped<
     MolasLubes.Infrastructure.Services.Sync.GermaxCacheSyncService>();
 builder.Services.AddScoped<
     MolasLubes.Infrastructure.Services.Sync.GermaxAutoHubSyncService>();
+builder.Services.AddTransient<
+    MolasLubes.Infrastructure.Integrations.SapB1.DiApi.SapAutoHubStockReader>();
+builder.Services.AddScoped<
+    MolasLubes.Infrastructure.Services.Sync.AutoHubNeonStockSyncService>();
 
 builder.Services.AddHttpClient<GermaxProductScraperService>((sp, client) =>
 {
@@ -501,6 +505,8 @@ builder.Services.AddTransient<OpenSalesOrderWarehouseUpdateJob>();
 builder.Services.AddTransient<
     MolasLubes.Infrastructure.Scheduling.Jobs.AutoHubSapSeedSyncJob>();
 builder.Services.AddTransient<
+    MolasLubes.Infrastructure.Scheduling.Jobs.NeonAutoHubStockSyncJob>();
+builder.Services.AddTransient<
     MolasLubes.Infrastructure.Scheduling.Jobs.GermaxProductEnrichmentJob>();
 builder.Services.AddTransient<
     MolasLubes.Infrastructure.Scheduling.Jobs.GermaxRetryFailedJob>();
@@ -572,6 +578,8 @@ builder.Services.AddQuartz(q =>
         RegisterJob<OdooPaymentPushJob>("OdooPaymentPushJob", "8/15 * * ? * *"); // every 15s — Neon→Odoo (payment layer 3), reduced from 10s
 
     RegisterJob<NeonProductDeltaSyncJob>("NeonProductDeltaSyncJob", "55 */10 * ? * *");
+    RegisterJob<MolasLubes.Infrastructure.Scheduling.Jobs.NeonAutoHubStockSyncJob>(
+        "NeonAutoHubStockSyncJob", "25 */10 * ? * *"); // every 10 min — AutoHub SAP→Neon stock
     RegisterJob<NeonSalesOrderSyncJob>(
           "NeonSalesOrderSyncJob",
           "15 */5 * ? * *"); // every 5 minutes
