@@ -50,6 +50,29 @@ public class AdminLiquiMolyInventoryController : ControllerBase
         skip = Math.Max(0, skip);
         take = Math.Clamp(take, 1, 1000);
 
+        // AutoHub lives in a separate SAP company database — not synced to Neon
+        if (IsAutoHub(profile, brand))
+        {
+            try
+            {
+                var sapData = _reader.GetStock(profile, brand, search, warehouseCode, skip, take, includeZero, onlyLiquiMoly);
+                return Ok(new
+                {
+                    sapData.AsOfUtc,
+                    sapData.Version,
+                    sapData.Total,
+                    skip,
+                    take,
+                    hasMore = skip + sapData.Rows.Count < sapData.Total,
+                    rows = sapData.Rows
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "Failed to load inventory stock.", detail = ex.Message });
+            }
+        }
+
         try
         {
             var data = await _neon.GetStockAsync(search, warehouseCode, skip, take, includeZero, ct);
@@ -205,6 +228,35 @@ public class AdminLiquiMolyInventoryController : ControllerBase
         skip = Math.Max(0, skip);
         take = Math.Clamp(take, 1, 1000);
 
+        // AutoHub deliveries are in a separate SAP company — not synced to Neon
+        if (IsAutoHub(profile, brand))
+        {
+            try
+            {
+                var sapData = _reader.GetDeliveryAggregates(profile, brand, dateFrom, dateTo, warehouse, search, skip, take);
+                return Ok(new
+                {
+                    sapData.AsOfUtc,
+                    sapData.Version,
+                    sapData.DateFrom,
+                    sapData.DateTo,
+                    count = sapData.Total,
+                    skip,
+                    take,
+                    hasMore = skip + sapData.Rows.Count < sapData.Total,
+                    items = sapData.Rows
+                });
+            }
+            catch (ArgumentException ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "Failed to load delivery aggregates.", detail = ex.Message });
+            }
+        }
+
         try
         {
             var data = await _neon.GetDeliveriesAsync(dateFrom, dateTo, search, skip, take, ct);
@@ -242,6 +294,20 @@ public class AdminLiquiMolyInventoryController : ControllerBase
         var auth = AuthorizeViewer(actorSapUserCode);
         if (auth != null) return auth;
 
+        // AutoHub deliveries are in a separate SAP company — not synced to Neon
+        if (IsAutoHub(profile, brand))
+        {
+            try
+            {
+                var sapData = _reader.GetTodayDeliveries(profile, brand);
+                return Ok(sapData);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "Failed to load today's deliveries.", detail = ex.Message });
+            }
+        }
+
         try
         {
             var data = await _neon.GetTodayDeliveriesAsync(ct);
@@ -271,6 +337,20 @@ public class AdminLiquiMolyInventoryController : ControllerBase
         if (sinceVersion < 0)
             return BadRequest(new { message = "sinceVersion must be >= 0." });
 
+        // AutoHub lives in a separate SAP company — not synced to Neon
+        if (IsAutoHub(profile, brand))
+        {
+            try
+            {
+                var sapData = _reader.GetChanges(profile, brand, sinceVersion, search, warehouseCode, includeZero, onlyLiquiMoly);
+                return Ok(sapData);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "Failed to load inventory stock changes.", detail = ex.Message });
+            }
+        }
+
         try
         {
             var data = await _neon.GetChangesAsync(search, warehouseCode, sinceVersion, includeZero, ct);
@@ -295,6 +375,20 @@ public class AdminLiquiMolyInventoryController : ControllerBase
         var auth = AuthorizeViewer(actorSapUserCode);
         if (auth != null) return auth;
 
+        // AutoHub lives in a separate SAP company — not synced to Neon
+        if (IsAutoHub(profile, brand))
+        {
+            try
+            {
+                var sapData = _reader.GetSummary(profile, brand, warehouseCode, includeZero, onlyLiquiMoly);
+                return Ok(sapData);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "Failed to load inventory stock summary.", detail = ex.Message });
+            }
+        }
+
         try
         {
             var data = await _neon.GetSummaryAsync(warehouseCode, includeZero, ct);
@@ -317,5 +411,14 @@ public class AdminLiquiMolyInventoryController : ControllerBase
         {
             return StatusCode(403, new { message = ex.Message });
         }
+    }
+
+    // AutoHub is a separate SAP B1 company database with no Neon sync
+    private static bool IsAutoHub(string profile, string? brand)
+    {
+        if (string.Equals(profile, "AutoHub", StringComparison.OrdinalIgnoreCase))
+            return true;
+        var normalized = brand?.Trim().Replace(" ", "").Replace("-", "").ToUpperInvariant();
+        return string.Equals(normalized, "AUTOHUB", StringComparison.Ordinal);
     }
 }
