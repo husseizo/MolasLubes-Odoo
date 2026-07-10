@@ -241,6 +241,7 @@ public class AdminUsersController : ControllerBase
         u.Id,
         u.Username,
         u.DisplayName,
+        u.SapUserCode,
         u.Role,
         u.IsActive,
         u.LastLoginAt,

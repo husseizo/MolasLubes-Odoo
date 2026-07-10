@@ -8,7 +8,17 @@ using System.Runtime.InteropServices;
 
 namespace MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 
-public record AutoHubStockRow(string ItemCode, string ItemName, decimal OnHand, decimal Available);
+public record AutoHubStockRow(
+    string  ItemCode,
+    string  ItemName,
+    decimal OnHand,
+    decimal Available,
+    string? U_MdlTEST            = null,
+    string? U_Item_Name          = null,
+    string? U_Article_No         = null,
+    string? U_ReferenceNum       = null,
+    string? U_OriginalNumber     = null,
+    string? U_PT_No_Inproduction = null);
 
 /// <summary>
 /// Reads per-item stock totals (summed across all warehouses) from the AutoHub SAP B1 company.
@@ -75,12 +85,20 @@ public class SapAutoHubStockReader
 SELECT
     i.ItemCode,
     i.ItemName,
-    CONVERT(DECIMAL(19,6), SUM(ISNULL(w.OnHand,     0)))                          AS OnHand,
-    CONVERT(DECIMAL(19,6), SUM(ISNULL(w.OnHand, 0) - ISNULL(w.IsCommited, 0)))    AS Available
+    CONVERT(DECIMAL(19,6), SUM(ISNULL(w.OnHand,     0)))                        AS OnHand,
+    CONVERT(DECIMAL(19,6), SUM(ISNULL(w.OnHand, 0) - ISNULL(w.IsCommited, 0))) AS Available,
+    i.U_MdlTEST,
+    i.U_Item_Name,
+    i.U_Article_No,
+    i.U_ReferenceNum,
+    i.U_OriginalNumber,
+    i.U_PT_No_Inproduction
 FROM OITM i
 LEFT JOIN OITW w ON w.ItemCode = i.ItemCode
 WHERE i.frozenFor = 'N'
-GROUP BY i.ItemCode, i.ItemName
+GROUP BY i.ItemCode, i.ItemName,
+         i.U_MdlTEST, i.U_Item_Name, i.U_Article_No,
+         i.U_ReferenceNum, i.U_OriginalNumber, i.U_PT_No_Inproduction
 ORDER BY i.ItemCode");
 
                 while (!rs.EoF)
@@ -91,7 +109,17 @@ ORDER BY i.ItemCode");
                     var avail    = Convert.ToDecimal(rs.Fields.Item("Available").Value ?? 0m);
 
                     if (!string.IsNullOrWhiteSpace(itemCode))
-                        results.Add(new AutoHubStockRow(itemCode, itemName, onHand, avail));
+                        results.Add(new AutoHubStockRow(
+                            ItemCode:              itemCode,
+                            ItemName:              itemName,
+                            OnHand:                onHand,
+                            Available:             avail,
+                            U_MdlTEST:            rs.Fields.Item("U_MdlTEST").Value?.ToString(),
+                            U_Item_Name:          rs.Fields.Item("U_Item_Name").Value?.ToString(),
+                            U_Article_No:         rs.Fields.Item("U_Article_No").Value?.ToString(),
+                            U_ReferenceNum:       rs.Fields.Item("U_ReferenceNum").Value?.ToString(),
+                            U_OriginalNumber:     rs.Fields.Item("U_OriginalNumber").Value?.ToString(),
+                            U_PT_No_Inproduction: rs.Fields.Item("U_PT_No_Inproduction").Value?.ToString()));
 
                     rs.MoveNext();
                 }

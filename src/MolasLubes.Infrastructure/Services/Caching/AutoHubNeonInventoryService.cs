@@ -14,9 +14,9 @@ public class AutoHubNeonInventoryService
     private const decimal OutOfStockThreshold = 0m;
     private const string  Brand               = "AutoHub";
 
-    private readonly NeonDbContext _db;
+    private readonly AutoHubDbContext _db;
 
-    public AutoHubNeonInventoryService(NeonDbContext db) => _db = db;
+    public AutoHubNeonInventoryService(AutoHubDbContext db) => _db = db;
 
     // ── /inventory/stock ──────────────────────────────────────────────────
 

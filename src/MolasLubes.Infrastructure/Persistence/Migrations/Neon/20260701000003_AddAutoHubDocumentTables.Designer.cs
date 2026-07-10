@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using MolasLubes.Infrastructure.Persistence;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace MolasLubes.Infrastructure.Persistence.Migrations.Neon
 {
     [DbContext(typeof(NeonDbContext))]
-    partial class NeonDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260701000003_AddAutoHubDocumentTables")]
+    partial class AddAutoHubDocumentTables
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -870,6 +873,7 @@ namespace MolasLubes.Infrastructure.Persistence.Migrations.Neon
                 });
 
             // ── Navigation back-references ────────────────────────────────────
+
             modelBuilder.Entity("MolasLubes.Domain.Entities.Neon.NeonDelivery", b =>
                 {
                     b.Navigation("Lines");

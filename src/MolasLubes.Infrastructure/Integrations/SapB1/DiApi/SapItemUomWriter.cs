@@ -258,7 +258,9 @@ WHERE UgpEntry = {groupEntry}
                 return new ItemUomApplyResult(itemCode, ItemUomOutcome.NOT_FOUND, null, null);
 
             beforeUpdate?.Invoke(items);
-            items.DefaultCountingUoMEntry = targetUomEntry;
+            items.DefaultCountingUoMEntry    = targetUomEntry;
+            items.DefaultSalesUoMEntry       = targetUomEntry;
+            items.DefaultPurchasingUoMEntry  = targetUomEntry;
 
             int rc = items.Update();
             if (rc != 0)
@@ -271,7 +273,7 @@ WHERE UgpEntry = {groupEntry}
             }
 
             _logger.LogInformation(
-                "SapItemUomWriter: DefaultCountingUoMEntry set | ItemCode={Code} | UomEntry={Entry}",
+                "SapItemUomWriter: Counting/Sales/Purchase UoM set | ItemCode={Code} | UomEntry={Entry}",
                 itemCode, targetUomEntry);
 
             return new ItemUomApplyResult(itemCode, ItemUomOutcome.UPDATED, null, null);

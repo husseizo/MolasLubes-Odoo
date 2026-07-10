@@ -26,8 +26,6 @@ public class NeonDbContext : DbContext
     public DbSet<NeonPayment> Payments => Set<NeonPayment>();
     public DbSet<NeonLiquiMolyProduct> LiquiMolyProducts => Set<NeonLiquiMolyProduct>();
     public DbSet<NeonApiCache> ApiCaches => Set<NeonApiCache>();
-    public DbSet<NeonAutoHubProduct> AutoHubProducts => Set<NeonAutoHubProduct>();
-
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         // =====================================================
@@ -417,19 +415,6 @@ public class NeonDbContext : DbContext
             e.Property(x => x.Endpoint).HasMaxLength(200).IsRequired();
             e.Property(x => x.DataJson).IsRequired();
             e.HasIndex(x => x.ExpiresAt);
-        });
-
-        // =====================================================
-        // AUTOHUB PRODUCTS (separate table — not mixed with MolasLubes)
-        // =====================================================
-        modelBuilder.Entity<NeonAutoHubProduct>(e =>
-        {
-            e.ToTable("NeonAutoHubProducts");
-            e.HasKey(x => x.ItemCode);
-            e.Property(x => x.ItemName).IsRequired();
-            e.Property(x => x.OnHandSap).HasPrecision(18, 2);
-            e.Property(x => x.AvailableCache).HasPrecision(18, 2);
-            e.Property(x => x.SyncedAt).IsRequired();
         });
 
         base.OnModelCreating(modelBuilder);

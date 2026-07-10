@@ -1,9 +1,10 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using MolasLubes.Api.Security;
 using MolasLubes.Domain.Entities.Cache;
 using MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
+using MolasLubes.Infrastructure.Persistence;
 using MolasLubes.Infrastructure.Security;
-using MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 using MolasLubes.Infrastructure.Services.Caching;
 
 namespace MolasLubes.Api.Controllers.LiquiMoly;
@@ -18,6 +19,8 @@ public class AdminLiquiMolyInventoryController : ControllerBase
     private readonly SapLiquiMolyInventoryReader _reader;
     private readonly NeonInventoryService _neon;
     private readonly AutoHubNeonInventoryService _autoHubNeon;
+    private readonly AutoHubNeonDeliveryService _autoHubNeonDelivery;
+    private readonly AutoHubDbContext _autoHubDb;
     private readonly LiquiMolyRoleService _roleService;
     private readonly NeonApiCacheService _cache;
 
@@ -25,14 +28,18 @@ public class AdminLiquiMolyInventoryController : ControllerBase
         SapLiquiMolyInventoryReader reader,
         NeonInventoryService neon,
         AutoHubNeonInventoryService autoHubNeon,
+        AutoHubNeonDeliveryService autoHubNeonDelivery,
+        AutoHubDbContext autoHubDb,
         LiquiMolyRoleService roleService,
         NeonApiCacheService cache)
     {
-        _reader      = reader;
-        _neon        = neon;
-        _autoHubNeon = autoHubNeon;
-        _roleService = roleService;
-        _cache       = cache;
+        _reader              = reader;
+        _neon                = neon;
+        _autoHubNeon         = autoHubNeon;
+        _autoHubNeonDelivery = autoHubNeonDelivery;
+        _autoHubDb           = autoHubDb;
+        _roleService         = roleService;
+        _cache               = cache;
     }
 
     [HttpGet("stock")]
@@ -214,23 +221,22 @@ public class AdminLiquiMolyInventoryController : ControllerBase
         skip = Math.Max(0, skip);
         take = Math.Clamp(take, 1, 1000);
 
-        // AutoHub deliveries are not in Neon — NeonDelivery only has MolasLubes data
         if (IsAutoHub(profile, brand))
         {
             try
             {
-                var sapData = _reader.GetDeliveryAggregates(profile, brand, dateFrom, dateTo, warehouse, search, skip, take);
+                var neonData = await _autoHubNeonDelivery.GetDeliveriesAsync(dateFrom, dateTo, search, skip, take, ct);
                 return Ok(new
                 {
-                    sapData.AsOfUtc,
-                    sapData.Version,
-                    sapData.DateFrom,
-                    sapData.DateTo,
-                    count = sapData.Total,
+                    neonData.AsOfUtc,
+                    neonData.Version,
+                    neonData.DateFrom,
+                    neonData.DateTo,
+                    count = neonData.Total,
                     skip,
                     take,
-                    hasMore = skip + sapData.Rows.Count < sapData.Total,
-                    items = sapData.Rows
+                    hasMore = skip + neonData.Rows.Count < neonData.Total,
+                    items = neonData.Rows
                 });
             }
             catch (ArgumentException ex)
@@ -280,13 +286,12 @@ public class AdminLiquiMolyInventoryController : ControllerBase
         var auth = AuthorizeViewer(actorSapUserCode);
         if (auth != null) return auth;
 
-        // AutoHub deliveries are not in Neon — NeonDelivery only has MolasLubes data
         if (IsAutoHub(profile, brand))
         {
             try
             {
-                var sapData = _reader.GetTodayDeliveries(profile, brand);
-                return Ok(sapData);
+                var neonData = await _autoHubNeonDelivery.GetTodayDeliveriesAsync(ct);
+                return Ok(neonData);
             }
             catch (Exception ex)
             {
@@ -365,6 +370,43 @@ public class AdminLiquiMolyInventoryController : ControllerBase
         catch (Exception ex)
         {
             return StatusCode(500, new { message = "Failed to load inventory stock summary.", detail = ex.Message });
+        }
+    }
+
+    // ── GET /inventory/salespeople ────────────────────────────────────────────
+
+    [HttpGet("salespeople")]
+    public async Task<IActionResult> GetSalespeople(
+        [FromQuery] string actorSapUserCode = "",
+        [FromQuery] bool? isActive = null,
+        CancellationToken ct = default)
+    {
+        var auth = AuthorizeViewer(actorSapUserCode);
+        if (auth != null) return auth;
+
+        try
+        {
+            var q = _autoHubDb.AutoHubSalesPersons.AsNoTracking();
+
+            if (isActive.HasValue)
+                q = q.Where(s => s.IsActive == isActive.Value);
+
+            var items = await q
+                .OrderBy(s => s.SalesPersonName)
+                .Select(s => new
+                {
+                    s.SalesPersonCode,
+                    s.SalesPersonName,
+                    s.IsActive,
+                    s.Email
+                })
+                .ToListAsync(ct);
+
+            return Ok(new { total = items.Count, items });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Failed to load salespeople.", detail = ex.Message });
         }
     }
 

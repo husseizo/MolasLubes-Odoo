@@ -291,6 +291,7 @@ builder.Services.AddScoped<PaymentCacheService>();
 builder.Services.AddScoped<MolasLubes.Infrastructure.Services.Caching.NeonApiCacheService>();
 builder.Services.AddScoped<MolasLubes.Infrastructure.Services.Caching.NeonInventoryService>();
 builder.Services.AddScoped<MolasLubes.Infrastructure.Services.Caching.AutoHubNeonInventoryService>();
+builder.Services.AddScoped<MolasLubes.Infrastructure.Services.Caching.AutoHubNeonDeliveryService>();
 
 // =====================================================
 // DOMAIN SERVICES
@@ -375,8 +376,16 @@ builder.Services.AddScoped<
     MolasLubes.Infrastructure.Services.Sync.GermaxAutoHubSyncService>();
 builder.Services.AddTransient<
     MolasLubes.Infrastructure.Integrations.SapB1.DiApi.SapAutoHubStockReader>();
+builder.Services.AddTransient<
+    MolasLubes.Infrastructure.Integrations.SapB1.DiApi.SapAutoHubDocumentReader>();
 builder.Services.AddScoped<
     MolasLubes.Infrastructure.Services.Sync.AutoHubNeonStockSyncService>();
+builder.Services.AddScoped<
+    MolasLubes.Infrastructure.Services.Sync.AutoHubNeonDocumentSyncService>();
+builder.Services.AddScoped<
+    MolasLubes.Infrastructure.Integrations.SapB1.DiApi.SapAutoHubSalesPersonReader>();
+builder.Services.AddScoped<
+    MolasLubes.Infrastructure.Services.Sync.AutoHubNeonSalesPersonSyncService>();
 
 builder.Services.AddHttpClient<GermaxProductScraperService>((sp, client) =>
 {
@@ -508,6 +517,8 @@ builder.Services.AddTransient<
 builder.Services.AddTransient<
     MolasLubes.Infrastructure.Scheduling.Jobs.NeonAutoHubStockSyncJob>();
 builder.Services.AddTransient<
+    MolasLubes.Infrastructure.Scheduling.Jobs.AutoHubNeonDocumentSyncJob>();
+builder.Services.AddTransient<
     MolasLubes.Infrastructure.Scheduling.Jobs.GermaxProductEnrichmentJob>();
 builder.Services.AddTransient<
     MolasLubes.Infrastructure.Scheduling.Jobs.GermaxRetryFailedJob>();
@@ -581,6 +592,8 @@ builder.Services.AddQuartz(q =>
     RegisterJob<NeonProductDeltaSyncJob>("NeonProductDeltaSyncJob", "55 */10 * ? * *");
     RegisterJob<MolasLubes.Infrastructure.Scheduling.Jobs.NeonAutoHubStockSyncJob>(
         "NeonAutoHubStockSyncJob", "25 */10 * ? * *"); // every 10 min — AutoHub SAP→Neon stock
+    RegisterJob<MolasLubes.Infrastructure.Scheduling.Jobs.AutoHubNeonDocumentSyncJob>(
+        "AutoHubNeonDocumentSyncJob", "0 */15 * ? * *"); // every 15 min — AutoHub docs delta sync
     RegisterJob<NeonSalesOrderSyncJob>(
           "NeonSalesOrderSyncJob",
           "15 */5 * ? * *"); // every 5 minutes

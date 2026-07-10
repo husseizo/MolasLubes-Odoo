@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using MolasLubes.Infrastructure.Persistence;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace MolasLubes.Infrastructure.Persistence.Migrations.AutoHub
 {
     [DbContext(typeof(AutoHubDbContext))]
-    partial class AutoHubDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260701000001_AddAutoHubSapTables")]
+    partial class AddAutoHubSapTables
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -796,32 +799,6 @@ namespace MolasLubes.Infrastructure.Persistence.Migrations.AutoHub
                     b.HasKey("UomEntry");
 
                     b.ToTable("NeonAutoHubUoMs", (string)null);
-                });
-
-            // ── NeonAutoHubSalesPerson ───────────────────────────────────────
-            modelBuilder.Entity("MolasLubes.Domain.Entities.Neon.NeonAutoHubSalesPerson", b =>
-                {
-                    b.Property<int>("SalesPersonCode")
-                        .ValueGeneratedNever()
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Email")
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
-
-                    b.Property<bool>("IsActive")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("SalesPersonName")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("SyncedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("SalesPersonCode");
-
-                    b.ToTable("NeonAutoHubSalesPersons", (string)null);
                 });
 
             // ── Relationships ────────────────────────────────────────────────
