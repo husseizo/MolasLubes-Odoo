@@ -197,7 +197,7 @@ builder.Services.AddDbContext<NeonDbContext>(options =>
         {
             npgsql.MigrationsAssembly("MolasLubes.Infrastructure");
             npgsql.CommandTimeout(120);
-            npgsql.EnableRetryOnFailure(5, TimeSpan.FromSeconds(10), null);
+            npgsql.ExecutionStrategy(c => new NeonRetryStrategy(c, maxRetryCount: 5, maxRetryDelay: TimeSpan.FromSeconds(30)));
         }));
 
 // =====================================================
@@ -220,7 +220,7 @@ builder.Services.AddDbContext<AutoHubDbContext>(options =>
             npgsql.MigrationsAssembly("MolasLubes.Infrastructure");
             npgsql.MigrationsHistoryTable("__EFMigrationsHistory_AutoHub");
             npgsql.CommandTimeout(120);
-            npgsql.EnableRetryOnFailure(5, TimeSpan.FromSeconds(10), null);
+            npgsql.ExecutionStrategy(c => new NeonRetryStrategy(c, maxRetryCount: 5, maxRetryDelay: TimeSpan.FromSeconds(30)));
         }));
 
 // =====================================================
