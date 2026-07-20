@@ -12,7 +12,7 @@ public static class QuartzRetryHelper
         Exception ex)
     {
         if (context.RefireCount >= MaxRetries)
-            throw ex;
+            throw new JobExecutionException(ex, false);
 
         var exponentialDelay =
             Math.Pow(2, context.RefireCount) * BaseDelaySeconds;
