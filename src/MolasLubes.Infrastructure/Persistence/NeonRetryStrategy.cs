@@ -27,7 +27,10 @@ public sealed class NeonRetryStrategy : ExecutionStrategy
             if (ex is NpgsqlException npgsql && npgsql.IsTransient)
                 return true;
 
-            if (ex is IOException or SocketException)
+            // IOException / SocketException: TCP reset from Neon serverless cold-start.
+            // TimeoutException: Npgsql read timeout ("Timeout during reading attempt") when
+            // the Neon compute is slow to respond — also transient.
+            if (ex is IOException or SocketException or TimeoutException)
                 return true;
         }
 
