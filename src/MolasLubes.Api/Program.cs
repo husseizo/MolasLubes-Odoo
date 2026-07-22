@@ -549,58 +549,59 @@ builder.Services.AddQuartz(q =>
 
     // =========================
     // SAP → CACHE (first layer)
+    // Operational delta jobs run only during business hours: 06:00–20:00 EAT (UTC+3) = 03:00–16:59 UTC.
+    // Full/catalog syncs keep their own off-hours schedules.
     // =========================
-    RegisterJob<ProductFullSyncJob>("ProductFullSyncJob", "0 0 */6 ? * *"); // every 6 hours
-    RegisterJob<CustomerDeltaSyncJob>("CustomerDeltaSyncJob", "0 */5 * ? * *");
-    RegisterJob<SalesOrderSyncJob>("SalesOrderSyncJob", "10 */5 * ? * *");
-    RegisterJob<MolasLubes.Infrastructure.Scheduling.Jobs.SapOpenOrdersSyncJob>("SapOpenOrdersSyncJob", "20 */5 * ? * *"); // every 5 min — open orders
-    // RegisterJob<OpenSalesOrderWarehouseUpdateJob>("OpenSalesOrderWarehouseUpdateJob", "0 */5 * ? * *"); // DISABLED — warehouse auto-update turned off
-    RegisterJob<DeliveryDeltaSyncJob>("DeliveryDeltaSyncJob", "0/10 * * ? * *"); // every 10s — SAP→Cache (delivery layer 1)
+    RegisterJob<ProductFullSyncJob>("ProductFullSyncJob", "0 0 */6 ? * *"); // every 6 hours — catalog, runs any hour
+    RegisterJob<CustomerDeltaSyncJob>("CustomerDeltaSyncJob", "0 */5 3-16 ? * *");         // every 5 min, 06:00–20:00 EAT
+    RegisterJob<SalesOrderSyncJob>("SalesOrderSyncJob", "10 */5 3-16 ? * *");              // every 5 min, 06:00–20:00 EAT
+    RegisterJob<MolasLubes.Infrastructure.Scheduling.Jobs.SapOpenOrdersSyncJob>("SapOpenOrdersSyncJob", "20 */5 3-16 ? * *"); // every 5 min, 06:00–20:00 EAT
+    // RegisterJob<OpenSalesOrderWarehouseUpdateJob>("OpenSalesOrderWarehouseUpdateJob", "0 */5 3-16 ? * *"); // DISABLED
+    RegisterJob<DeliveryDeltaSyncJob>("DeliveryDeltaSyncJob", "0/10 * 3-16 ? * *");        // every 10s, 06:00–20:00 EAT
 
 
     if (syncSettings.EnableInvoiceCacheSync)
-        RegisterJob<InvoiceSyncJob>("InvoiceSyncJob", "3/10 * * ? * *"); // every 10s — SAP→Cache (invoice layer 1)
+        RegisterJob<InvoiceSyncJob>("InvoiceSyncJob", "3/10 * 3-16 ? * *");                // every 10s, 06:00–20:00 EAT
 
     if (syncSettings.EnablePaymentCacheSync)
-        RegisterJob<PaymentSyncJob>("PaymentSyncJob", "6/10 * * ? * *"); // every 10s — SAP→Cache (payment layer 1)
+        RegisterJob<PaymentSyncJob>("PaymentSyncJob", "6/10 * 3-16 ? * *");                // every 10s, 06:00–20:00 EAT
 
     // =========================
     // CACHE → NEON (second layer)
     // =========================
     if (syncSettings.EnableNeonCustomerSync)
-        RegisterJob<NeonCustomerSyncJob>("NeonCustomerSyncJob", "5 */5 * ? * *"); // every 5 min (customers change infrequently)
+        RegisterJob<NeonCustomerSyncJob>("NeonCustomerSyncJob", "5 */5 3-16 ? * *");       // every 5 min, 06:00–20:00 EAT
 
     if (syncSettings.EnableNeonInvoiceSync)
-        RegisterJob<NeonInvoiceSyncJob>("NeonInvoiceSyncJob", "4/10 * * ? * *"); // every 10s — Cache→Neon (invoice layer 2)
+        RegisterJob<NeonInvoiceSyncJob>("NeonInvoiceSyncJob", "4/10 * 3-16 ? * *");        // every 10s, 06:00–20:00 EAT
 
     if (syncSettings.EnableNeonPaymentSync)
-        RegisterJob<NeonPaymentSyncJob>("NeonPaymentSyncJob", "7/10 * * ? * *"); // every 10s — Cache→Neon (payment layer 2)
+        RegisterJob<NeonPaymentSyncJob>("NeonPaymentSyncJob", "7/10 * 3-16 ? * *");        // every 10s, 06:00–20:00 EAT
 
-    RegisterJob<NeonDeliverySyncJob>("NeonDeliverySyncJob", "1/10 * * ? * *"); // every 10s — Cache→Neon (delivery layer 2)
+    RegisterJob<NeonDeliverySyncJob>("NeonDeliverySyncJob", "1/10 * 3-16 ? * *");          // every 10s, 06:00–20:00 EAT
 
     // Odoo pushes: staggered to 15s intervals to reduce queue pressure
-    // These are dependent on Neon syncs completing first, so longer intervals are acceptable
     if (syncSettings.EnableOdooDeliveryPush)
-        RegisterJob<OdooDeliveryPushJob>("OdooDeliveryPushJob", "2/15 * * ? * *"); // every 15s — Neon→Odoo (delivery layer 3), reduced from 10s
+        RegisterJob<OdooDeliveryPushJob>("OdooDeliveryPushJob", "2/15 * 3-16 ? * *");      // every 15s, 06:00–20:00 EAT
 
     if (syncSettings.EnableOdooInvoicePush)
-        RegisterJob<OdooInvoicePushJob>("OdooInvoicePushJob", "5/15 * * ? * *"); // every 15s — Neon→Odoo (invoice layer 3), reduced from 10s
+        RegisterJob<OdooInvoicePushJob>("OdooInvoicePushJob", "5/15 * 3-16 ? * *");        // every 15s, 06:00–20:00 EAT
 
     if (syncSettings.EnableOdooPaymentPush)
-        RegisterJob<OdooPaymentPushJob>("OdooPaymentPushJob", "8/15 * * ? * *"); // every 15s — Neon→Odoo (payment layer 3), reduced from 10s
+        RegisterJob<OdooPaymentPushJob>("OdooPaymentPushJob", "8/15 * 3-16 ? * *");        // every 15s, 06:00–20:00 EAT
 
-    RegisterJob<NeonProductDeltaSyncJob>("NeonProductDeltaSyncJob", "55 */10 * ? * *");
+    RegisterJob<NeonProductDeltaSyncJob>("NeonProductDeltaSyncJob", "55 */10 3-16 ? * *"); // every 10 min, 06:00–20:00 EAT
     RegisterJob<MolasLubes.Infrastructure.Scheduling.Jobs.NeonAutoHubStockSyncJob>(
-        "NeonAutoHubStockSyncJob", "25 */10 * ? * *"); // every 10 min — AutoHub SAP→Neon stock
+        "NeonAutoHubStockSyncJob", "25 */10 3-16 ? * *");                                  // every 10 min, 06:00–20:00 EAT
     RegisterJob<MolasLubes.Infrastructure.Scheduling.Jobs.AutoHubNeonDocumentSyncJob>(
-        "AutoHubNeonDocumentSyncJob", "0 */15 * ? * *"); // every 15 min — AutoHub docs delta sync
+        "AutoHubNeonDocumentSyncJob", "0 */15 3-16 ? * *");                                // every 15 min, 06:00–20:00 EAT
     RegisterJob<NeonSalesOrderSyncJob>(
-          "NeonSalesOrderSyncJob",
-          "15 */5 * ? * *"); // every 5 minutes
+        "NeonSalesOrderSyncJob",
+        "15 */5 3-16 ? * *");                                                               // every 5 min, 06:00–20:00 EAT
 
     RegisterJob<NeonSalesOrderLineSyncJob>(
         "NeonSalesOrderLineSyncJob",
-        "25 */5 * ? * *"); // every 5 minutes
+        "25 */5 3-16 ? * *");                                                               // every 5 min, 06:00–20:00 EAT
 
     // Durable manual-only full sync
     q.AddJob<CustomerFullSyncJob>(opts =>
