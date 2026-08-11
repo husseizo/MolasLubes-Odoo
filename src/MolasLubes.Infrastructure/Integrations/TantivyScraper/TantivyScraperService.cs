@@ -119,6 +119,14 @@ public sealed class TantivyScraperService : IAsyncDisposable
             }
 
             // ── 4. Navigate to product page ───────────────────────────────
+            // Sites return relative hrefs (e.g. /article.cshtml?art=B18856).
+            // Resolve against the origin before calling GotoAsync.
+            if (productUrl.StartsWith("/"))
+            {
+                var origin = new Uri(searchUrl).GetLeftPart(UriPartial.Authority);
+                productUrl = origin + productUrl;
+            }
+
             await page.GotoAsync(productUrl, new PageGotoOptions
             {
                 WaitUntil = WaitUntilState.DOMContentLoaded
