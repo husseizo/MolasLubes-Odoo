@@ -22,6 +22,7 @@ using MolasLubes.Infrastructure.Security;
 using MolasLubes.Infrastructure.Integrations.LiquiMoly;
 using MolasLubes.Infrastructure.Integrations.Meguin;
 using MolasLubes.Infrastructure.Integrations.Germax;
+using MolasLubes.Infrastructure.Integrations.TantivyScraper;
 using MolasLubes.Infrastructure.Integrations.SapB1.Profiles;
 using Microsoft.OpenApi;
 using Quartz;
@@ -230,6 +231,15 @@ builder.Services.Configure<IntegrationProfilesOptions>(
     builder.Configuration.GetSection(IntegrationProfilesOptions.SectionName));
 
 // =====================================================
+// TANTIVY SCRAPER SETTINGS (VIKA / BORSEHUNG)
+// =====================================================
+builder.Services.Configure<TantivyScraperSettings>(
+    builder.Configuration.GetSection(TantivyScraperSettings.SectionName));
+
+builder.Services.AddScoped<
+    MolasLubes.Infrastructure.Services.Sync.TantivyScrapeResultSyncService>();
+
+// =====================================================
 // GERMAX SCRAPER SETTINGS
 // =====================================================
 builder.Services.Configure<GermaxScraperSettings>(
@@ -261,6 +271,7 @@ builder.Services.AddScoped<SapItemSelector>();
 builder.Services.AddScoped<SapLiquiMolyItemMapper>();
 builder.Services.AddScoped<SapProductBarcodeReader>();
 builder.Services.AddScoped<SapProductBarcodeWriter>();
+builder.Services.AddScoped<SapItemBarcodeWriteService>();
 builder.Services.AddScoped<SapLiquiMolyStockReader>();
 builder.Services.AddScoped<SapGoodsIssueWriter>();
 builder.Services.AddScoped<SapGoodsReceiptWriter>();
@@ -386,6 +397,8 @@ builder.Services.AddScoped<
     MolasLubes.Infrastructure.Integrations.SapB1.DiApi.SapAutoHubSalesPersonReader>();
 builder.Services.AddScoped<
     MolasLubes.Infrastructure.Services.Sync.AutoHubNeonSalesPersonSyncService>();
+builder.Services.AddScoped<
+    MolasLubes.Infrastructure.Services.Sync.TantivyPartsSyncService>();
 
 builder.Services.AddHttpClient<GermaxProductScraperService>((sp, client) =>
 {
@@ -511,6 +524,7 @@ builder.Services.AddTransient<NeonSalesOrderSyncJob>();
 builder.Services.AddTransient<NeonSalesOrderLineSyncJob>();
 builder.Services.AddTransient<NeonPriceListSyncJob>();
 builder.Services.AddTransient<LiquiMolyProductScrapeJob>();
+builder.Services.AddTransient<SapBarcodeFillJob>();
 builder.Services.AddTransient<OpenSalesOrderWarehouseUpdateJob>();
 builder.Services.AddTransient<
     MolasLubes.Infrastructure.Scheduling.Jobs.AutoHubSapSeedSyncJob>();
@@ -522,6 +536,9 @@ builder.Services.AddTransient<
     MolasLubes.Infrastructure.Scheduling.Jobs.GermaxProductEnrichmentJob>();
 builder.Services.AddTransient<
     MolasLubes.Infrastructure.Scheduling.Jobs.GermaxRetryFailedJob>();
+
+builder.Services.AddTransient<
+    MolasLubes.Infrastructure.Scheduling.Jobs.TantivyScraperJob>();
 
 // =====================================================
 // QUARTZ CONFIGURATION
@@ -621,6 +638,19 @@ builder.Services.AddQuartz(q =>
         opts.WithIdentity("LiquiMolyProductScrapeJob")
             .StoreDurably());
 
+    // Missing barcode auto-fill: daily at 03:30 UTC (= 06:30 EAT, after scrape finishes).
+    // Scrapes EAN codes only for COCWHSE items still missing a unit barcode.
+    // Auto-parts (BM/MB/VAG/VOL) and MANWHSE packaging gaps are skipped — use POST
+    // /api/admin/items/{itemCode}/barcodes (mobile scan) for those.
+    q.AddJob<SapBarcodeFillJob>(opts =>
+        opts.WithIdentity("SapBarcodeFillJob")
+            .StoreDurably());
+
+    q.AddTrigger(t => t
+        .ForJob(new JobKey("SapBarcodeFillJob"))
+        .WithIdentity("SapBarcodeFillJob-trigger")
+        .WithCronSchedule("0 30 3 ? * *")); // daily at 03:30 UTC = 06:30 EAT
+
     q.AddTrigger(t => t
         .ForJob(new JobKey("LiquiMolyProductScrapeJob"))
         .WithIdentity("LiquiMolyProductScrapeJob-trigger")
@@ -659,6 +689,17 @@ builder.Services.AddQuartz(q =>
         .ForJob(new JobKey("GermaxRetryFailedJob"))
         .WithIdentity("GermaxRetryFailedJob-trigger")
         .WithCronSchedule("0 0 9,21 ? * *")); // 09:00 and 21:00 UTC
+
+    // Tantivy scraper (VIKA + Borsehung): nightly at 02:30 UTC
+    // Also manually triggerable via POST /api/admin/autohub/tantivy/scrape-catalog
+    q.AddJob<MolasLubes.Infrastructure.Scheduling.Jobs.TantivyScraperJob>(opts =>
+        opts.WithIdentity("TantivyScraperJob")
+            .StoreDurably());
+
+    q.AddTrigger(t => t
+        .ForJob(new JobKey("TantivyScraperJob"))
+        .WithIdentity("TantivyScraperJob-trigger")
+        .WithCronSchedule("0 30 2 ? * *")); // nightly at 02:30 UTC
 });
 
 builder.Services.AddQuartzHostedService(o =>
@@ -739,6 +780,9 @@ else
 {
     app.UseHttpsRedirection();
 }
+
+// Serve files from wwwroot (barcode-scanner.html, etc.)
+app.UseStaticFiles();
 
 // Authentication & Authorization middleware
 app.UseAuthentication();

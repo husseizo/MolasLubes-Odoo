@@ -824,6 +824,115 @@ namespace MolasLubes.Infrastructure.Persistence.Migrations.AutoHub
                     b.ToTable("NeonAutoHubSalesPersons", (string)null);
                 });
 
+            // ── NeonTantivyScraped ───────────────────────────────────────────
+            modelBuilder.Entity("MolasLubes.Domain.Entities.Neon.NeonTantivyScraped", b =>
+                {
+                    b.Property<string>("ItemCode")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("item_code");
+
+                    b.Property<string>("ArticleNo")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("article_no");
+
+                    b.Property<string>("Brand")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("brand");
+
+                    b.Property<string>("PartName")
+                        .HasColumnType("text")
+                        .HasColumnName("part_name");
+
+                    b.Property<string>("Specifications")
+                        .HasColumnType("text")
+                        .HasColumnName("specifications");
+
+                    b.Property<string>("ReferenceNumbers")
+                        .HasColumnType("text")
+                        .HasColumnName("reference_numbers");
+
+                    b.Property<string>("Applications")
+                        .HasColumnType("text")
+                        .HasColumnName("applications");
+
+                    b.Property<string>("ProductUrl")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("product_url");
+
+                    b.Property<string>("ImageUrl")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("image_url");
+
+                    b.Property<string>("ScrapeStatus")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasDefaultValue("PENDING")
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("scrape_status");
+
+                    b.Property<string>("ScrapeError")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("scrape_error");
+
+                    b.Property<DateTime?>("ScrapedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("scraped_at");
+
+                    b.Property<DateTime>("LastSeedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_seed_at");
+
+                    b.HasKey("ItemCode");
+
+                    b.HasIndex("Brand")
+                        .HasDatabaseName("ix_neon_tantivy_scraped_brand");
+
+                    b.HasIndex("ScrapeStatus")
+                        .HasDatabaseName("ix_neon_tantivy_scraped_scrape_status");
+
+                    b.ToTable("neon_tantivy_scraped", (string)null);
+                });
+
+            // ── TantivyPart ──────────────────────────────────────────────────
+            modelBuilder.Entity("MolasLubes.Domain.Entities.Neon.TantivyPart", b =>
+                {
+                    b.Property<string>("ItemCode")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<string>("U_Article_No")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("U_Engine_Code")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("ItemName")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("U_MdlTEST")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<DateTime>("SyncedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("ItemCode");
+
+                    b.HasIndex("U_MdlTEST")
+                        .HasDatabaseName("ix_tantivy_parts_mdltest");
+
+                    b.ToTable("Tantivy_parts", (string)null);
+                });
+
             // ── Relationships ────────────────────────────────────────────────
 
             modelBuilder.Entity("MolasLubes.Domain.Entities.Neon.NeonAutoHubDeliveryLine", b =>

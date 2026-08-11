@@ -12,13 +12,16 @@ public class AdminSyncController : ControllerBase
 {
     private readonly ISchedulerFactory _schedulerFactory;
     private readonly NeonInvoiceSyncService _invoiceSyncService;
+    private readonly TantivyPartsSyncService _tantivySyncService;
 
     public AdminSyncController(
         ISchedulerFactory schedulerFactory,
-        NeonInvoiceSyncService invoiceSyncService)
+        NeonInvoiceSyncService invoiceSyncService,
+        TantivyPartsSyncService tantivySyncService)
     {
-        _schedulerFactory = schedulerFactory;
+        _schedulerFactory   = schedulerFactory;
         _invoiceSyncService = invoiceSyncService;
+        _tantivySyncService = tantivySyncService;
     }
 
     // -------------------------------------------------
@@ -95,6 +98,81 @@ public class AdminSyncController : ControllerBase
         return Ok(new
         {
             Message = "Orphaned invoice line backfill completed"
+        });
+    }
+
+    // -------------------------------------------------
+    // TANTIVY PARTS — VIKA / BORSEHUNG / DPA
+    // Full upsert from AutoHub SAP into Tantivy_parts
+    // -------------------------------------------------
+    [HttpPost("autohub/tantivy")]
+    public async Task<IActionResult> SyncTantivyParts(CancellationToken ct)
+    {
+        var (upserted, removed) = await _tantivySyncService.SyncAsync(ct);
+
+        return Ok(new { upserted, removed });
+    }
+
+    // -------------------------------------------------
+    // TANTIVY CATALOG SCRAPE — VIKA / BORSEHUNG
+    // Triggers TantivyScraperJob (Playwright) manually
+    // -------------------------------------------------
+    [HttpPost("autohub/tantivy/scrape-catalog")]
+    public async Task<IActionResult> TriggerTantivyScrape()
+    {
+        var scheduler = await _schedulerFactory.GetScheduler();
+        await scheduler.TriggerJob(new JobKey("TantivyScraperJob"));
+
+        return Ok(new { message = "TantivyScraperJob triggered — VIKA + Borsehung scraping started" });
+    }
+
+    // -------------------------------------------------
+    // TANTIVY SCRAPE STATS
+    // -------------------------------------------------
+    [HttpGet("autohub/tantivy/scrape-stats")]
+    public async Task<IActionResult> GetTantivyScrapeStats(
+        [FromServices] MolasLubes.Infrastructure.Services.Sync.TantivyScrapeResultSyncService syncSvc,
+        CancellationToken ct)
+    {
+        var (scraped, noMatch, error, pending) = await syncSvc.GetStatsAsync(ct);
+
+        return Ok(new { scraped, noMatch, error, pending, total = scraped + noMatch + error + pending });
+    }
+
+    // -------------------------------------------------
+    // TANTIVY RESET ERRORS (re-queue for retry)
+    // -------------------------------------------------
+    [HttpPost("autohub/tantivy/reset-errors")]
+    public async Task<IActionResult> ResetTantivyScrapeErrors(
+        [FromServices] MolasLubes.Infrastructure.Services.Sync.TantivyScrapeResultSyncService syncSvc,
+        CancellationToken ct)
+    {
+        var count = await syncSvc.ResetErrorsAsync(ct);
+
+        return Ok(new { reset = count });
+    }
+
+    // -------------------------------------------------
+    // TANTIVY SYNC ARTICLE NUMBERS (TAN Numbers)
+    // Copies U_Article_No from Tantivy_parts (SAP cache)
+    // into neon_tantivy_scraped.article_no.
+    // Creates PENDING seed rows for items not yet seeded.
+    // Updates existing rows where article_no is NULL,
+    // empty, or different from the SAP TAN Number.
+    // -------------------------------------------------
+    [HttpPost("autohub/tantivy/sync-article-numbers")]
+    public async Task<IActionResult> SyncTantivyArticleNumbers(
+        [FromServices] MolasLubes.Infrastructure.Services.Sync.TantivyScrapeResultSyncService syncSvc,
+        CancellationToken ct)
+    {
+        var (seeded, updated) = await syncSvc.SyncArticleNumbersFromPartsAsync(ct);
+
+        return Ok(new
+        {
+            seeded,
+            updated,
+            total   = seeded + updated,
+            message = $"Seeded {seeded} new PENDING rows, updated {updated} existing article_no values"
         });
     }
 }

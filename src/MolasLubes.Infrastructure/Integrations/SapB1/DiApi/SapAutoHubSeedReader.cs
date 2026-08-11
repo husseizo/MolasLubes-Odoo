@@ -147,6 +147,106 @@ public class SapAutoHubSeedReader
         return results;
     }
 
+    // =====================================================
+    // TANTIVY PARTS — VIKA / BORSEHUNG / DPA items only
+    // =====================================================
+    public List<TantivyPartRow> ReadTantivyParts()
+    {
+        if (!_profiles.Profiles.TryGetValue(ProfileKey, out var profile))
+            throw new InvalidOperationException(
+                $"Integration profile '{ProfileKey}' is not configured.");
+
+        var sap = profile.Sap;
+        var results = new List<TantivyPartRow>();
+        Exception? threadException = null;
+
+        var thread = new Thread(() =>
+        {
+            Company? company = null;
+            Recordset? rs = null;
+
+            try
+            {
+                company = new Company
+                {
+                    Server        = sap.Server,
+                    CompanyDB     = sap.CompanyDB,
+                    UserName      = sap.UserName,
+                    Password      = sap.Password,
+                    DbServerType  = Enum.Parse<BoDataServerTypes>($"dst_{sap.DbServerType}"),
+                    language      = BoSuppLangs.ln_English,
+                    UseTrusted    = false,
+                    LicenseServer = sap.LicenseServer,
+                    SLDServer     = sap.SLDServer
+                };
+
+                if (company.Connect() != 0)
+                {
+                    company.GetLastError(out var code, out var msg);
+                    throw new Exception(
+                        $"SapAutoHubSeedReader.ReadTantivyParts: SAP connect failed ({code}): {msg}");
+                }
+
+                rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
+
+                const string sql = @"
+SELECT
+    T0.ItemCode,
+    T0.ItemName,
+    T0.U_MdlTEST,
+    T0.U_Article_No,
+    T0.U_Engine_Code
+FROM OITM T0
+WHERE
+    T0.frozenFor  = 'N'
+    AND T0.InvntItem = 'Y'
+    AND T0.U_MdlTEST IN ('VIKA', 'BORSEHUNG', 'DPA')
+ORDER BY T0.U_MdlTEST, T0.ItemCode";
+
+                rs.DoQuery(sql);
+
+                while (!rs.EoF)
+                {
+                    results.Add(new TantivyPartRow(
+                        ItemCode:   rs.Fields.Item("ItemCode").Value?.ToString()    ?? "",
+                        ItemName:   rs.Fields.Item("ItemName").Value?.ToString()    ?? "",
+                        MdlTest:    rs.Fields.Item("U_MdlTEST").Value?.ToString(),
+                        ArticleNo:  rs.Fields.Item("U_Article_No").Value?.ToString(),
+                        EngineCode: rs.Fields.Item("U_Engine_Code").Value?.ToString()
+                    ));
+                    rs.MoveNext();
+                }
+            }
+            catch (Exception ex)
+            {
+                threadException = ex;
+            }
+            finally
+            {
+                if (rs != null)
+                    System.Runtime.InteropServices.Marshal.ReleaseComObject(rs);
+
+                if (company != null && company.Connected)
+                    company.Disconnect();
+
+                if (company != null)
+                    System.Runtime.InteropServices.Marshal.ReleaseComObject(company);
+            }
+        });
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+
+        if (threadException != null)
+            throw threadException;
+
+        _logger.LogInformation(
+            "SapAutoHubSeedReader.ReadTantivyParts: {Count} rows returned", results.Count);
+
+        return results;
+    }
+
     private static string BuildQuery(DateTime? watermark, IReadOnlyList<string> allowedGroups)
     {
         if (allowedGroups.Count == 0)
@@ -188,3 +288,10 @@ ORDER BY T1.ItmsGrpNam, T0.ItemCode";
         return baseQuery;
     }
 }
+
+public record TantivyPartRow(
+    string  ItemCode,
+    string  ItemName,
+    string? MdlTest,
+    string? ArticleNo,
+    string? EngineCode);

@@ -34,6 +34,8 @@ public class AutoHubDbContext : DbContext
     public DbSet<NeonAutoHubPurchaseOrderLine>    AutoHubPurchaseOrderLines  => Set<NeonAutoHubPurchaseOrderLine>();
     public DbSet<NeonAutoHubUoM>                  AutoHubUoMs                => Set<NeonAutoHubUoM>();
     public DbSet<NeonAutoHubSalesPerson>          AutoHubSalesPersons        => Set<NeonAutoHubSalesPerson>();
+    public DbSet<TantivyPart>                     TantivyParts               => Set<TantivyPart>();
+    public DbSet<NeonTantivyScraped>              TantivyScraped             => Set<NeonTantivyScraped>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -402,6 +404,46 @@ public class AutoHubDbContext : DbContext
             e.Property(x => x.SalesPersonName).IsRequired();
             e.Property(x => x.Email).HasMaxLength(200);
             e.Property(x => x.SyncedAt).IsRequired();
+        });
+
+        // =====================================================
+        // TANTIVY SCRAPED (VIKA / BORSEHUNG catalog results)
+        // =====================================================
+        modelBuilder.Entity<NeonTantivyScraped>(e =>
+        {
+            e.ToTable("neon_tantivy_scraped");
+            e.HasKey(x => x.ItemCode);
+            e.Property(x => x.ItemCode).HasColumnName("item_code").HasMaxLength(50).IsRequired();
+            e.Property(x => x.ArticleNo).HasColumnName("article_no").HasMaxLength(100);
+            e.Property(x => x.Brand).HasColumnName("brand").HasMaxLength(50);
+            e.Property(x => x.PartName).HasColumnName("part_name");
+            e.Property(x => x.Specifications).HasColumnName("specifications");
+            e.Property(x => x.ReferenceNumbers).HasColumnName("reference_numbers");
+            e.Property(x => x.Applications).HasColumnName("applications");
+            e.Property(x => x.ProductUrl).HasColumnName("product_url").HasMaxLength(500);
+            e.Property(x => x.ImageUrl).HasColumnName("image_url").HasMaxLength(500);
+            e.Property(x => x.ScrapeStatus).HasColumnName("scrape_status").HasMaxLength(20).HasDefaultValue("PENDING");
+            e.Property(x => x.ScrapeError).HasColumnName("scrape_error").HasMaxLength(1000);
+            e.Property(x => x.ScrapedAt).HasColumnName("scraped_at");
+            e.Property(x => x.LastSeedAt).HasColumnName("last_seed_at").IsRequired();
+            e.HasIndex(x => x.Brand).HasDatabaseName("ix_neon_tantivy_scraped_brand");
+            e.HasIndex(x => x.ScrapeStatus).HasDatabaseName("ix_neon_tantivy_scraped_scrape_status");
+        });
+
+        // =====================================================
+        // TANTIVY PARTS (VIKA / BORSEHUNG / DPA items)
+        // =====================================================
+        modelBuilder.Entity<TantivyPart>(e =>
+        {
+            e.ToTable("Tantivy_parts");
+            e.HasKey(x => x.ItemCode);
+            e.Property(x => x.ItemCode).HasMaxLength(50).IsRequired();
+            e.Property(x => x.ItemName).IsRequired();
+            e.Property(x => x.MdlTest).HasColumnName("U_MdlTEST").HasMaxLength(50);
+            e.Property(x => x.ArticleNo).HasColumnName("U_Article_No").HasMaxLength(100);
+            e.Property(x => x.EngineCode).HasColumnName("U_Engine_Code").HasMaxLength(200);
+            e.Property(x => x.SyncedAt).IsRequired();
+            e.HasIndex(x => x.MdlTest).HasDatabaseName("ix_tantivy_parts_mdltest");
         });
 
         base.OnModelCreating(modelBuilder);
