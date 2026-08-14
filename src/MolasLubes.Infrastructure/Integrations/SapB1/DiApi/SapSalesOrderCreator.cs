@@ -99,6 +99,23 @@ public class SapSalesOrderCreator
                 order.Lines.ItemCode = line.ItemCode.Trim();
                 order.Lines.Quantity = (double)line.Quantity;
 
+                // ── PRE-ADD DESCRIPTION FORMATTING ────────────────────────
+                // After setting ItemCode, SAP auto-fills ItemDescription from
+                // OITM.ItemName.  We read that value, then apply the
+                // "ItemName/Manufacturer/OriginalDescription" prefix in the
+                // same Add() transaction — no second Update() required.
+                // If line.ItemName and line.Manufacturer are both blank (e.g.
+                // when creating from reservations), the description is left as
+                // SAP populated it.
+                {
+                    string currentDesc = (order.Lines.ItemDescription ?? string.Empty).Trim();
+                    order.Lines.ItemDescription = SapSalesOrderLineDescriptionUpdater.BuildDescription(
+                        line.ItemName,
+                        line.Manufacturer,
+                        currentDesc);
+                }
+                // ─────────────────────────────────────────────────────────
+
                 if (line.Price.HasValue && line.Price.Value > 0)
                     order.Lines.Price = (double)line.Price.Value;
 

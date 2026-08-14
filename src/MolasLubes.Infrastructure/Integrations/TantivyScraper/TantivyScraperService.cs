@@ -227,6 +227,20 @@ public sealed class TantivyScraperService : IAsyncDisposable
         return dto;
     }
 
+    public async Task RecreateAsync()
+    {
+        if (_browser != null)
+        {
+            await _browser.DisposeAsync();
+            _browser = null;
+        }
+        _playwright?.Dispose();
+        _playwright = null;
+
+        _logger.LogInformation("TantivyScraperService: browser disposed for recreation");
+        await InitAsync();
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_browser != null)

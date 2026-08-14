@@ -9,6 +9,8 @@ public class TantivyScraperSettings
     public bool   Headless               { get; set; } = true;
     public float  PageTimeoutMs          { get; set; } = 30_000;
     public float  SearchTimeoutMs        { get; set; } = 15_000;
-    public int    DelayBetweenRequestsMs { get; set; } = 2_000;
-    public int    BatchSize              { get; set; } = 20;
+    public int    DelayBetweenRequestsMs    { get; set; } = 5_000;
+    public int    BatchSize                 { get; set; } = 20;
+    public int    ConsecutiveErrorThreshold { get; set; } = 3;
+    public int    RateLimitBackoffMs        { get; set; } = 120_000;
 }

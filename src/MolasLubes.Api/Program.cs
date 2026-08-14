@@ -278,6 +278,7 @@ builder.Services.AddScoped<SapGoodsReceiptWriter>();
 builder.Services.AddScoped<SapInventoryTransferRequestWriter>();
 builder.Services.AddScoped<SapSalesOrderCreator>();
 builder.Services.AddScoped<SapSalesOrderCanceler>();
+builder.Services.AddScoped<SapSalesOrderLineDescriptionUpdater>();
 builder.Services.AddScoped<SapQuotationConverter>();
 builder.Services.AddScoped<SapOpenSalesOrderWarehouseUpdater>();
 builder.Services.AddScoped<SapInvoiceWriter>();

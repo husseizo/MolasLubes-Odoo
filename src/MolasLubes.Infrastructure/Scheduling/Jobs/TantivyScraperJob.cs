@@ -54,6 +54,7 @@ public class TantivyScraperJob : IJob
             await scraper.InitAsync();
 
             int totalScraped = 0, totalNoMatch = 0, totalError = 0;
+            int consecutiveErrors = 0;
 
             while (!ct.IsCancellationRequested)
             {
@@ -71,6 +72,7 @@ public class TantivyScraperJob : IJob
                     try
                     {
                         var result = await scraper.TryScrapeAsync(seed, ct);
+                        consecutiveErrors = 0;
 
                         if (result != null)
                         {
@@ -98,12 +100,28 @@ public class TantivyScraperJob : IJob
                     }
                     catch (Exception ex)
                     {
+                        consecutiveErrors++;
                         var msg = ex.Message.Length > 500 ? ex.Message[..500] : ex.Message;
                         await syncSvc.MarkStatusAsync(
                             seed.ItemCode, "ERROR", msg, seed.Brand, seed.ArticleNo, ct);
                         totalError++;
                         _logger.LogWarning(ex,
-                            "TantivyScraperJob: ERROR | {Code}", seed.ItemCode);
+                            "TantivyScraperJob: ERROR | {Code} | ConsecutiveErrors={N}",
+                            seed.ItemCode, consecutiveErrors);
+
+                        await Task.Delay(settings.DelayBetweenRequestsMs, ct);
+
+                        if (consecutiveErrors >= settings.ConsecutiveErrorThreshold)
+                        {
+                            _logger.LogWarning(
+                                "TantivyScraperJob: {N} consecutive errors — rate limit suspected; " +
+                                "backing off {BackoffMs}ms then recreating browser",
+                                consecutiveErrors, settings.RateLimitBackoffMs);
+
+                            await Task.Delay(settings.RateLimitBackoffMs, ct);
+                            await scraper.RecreateAsync();
+                            consecutiveErrors = 0;
+                        }
                     }
                 }
             }

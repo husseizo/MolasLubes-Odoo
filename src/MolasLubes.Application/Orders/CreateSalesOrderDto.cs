@@ -36,4 +36,11 @@ public class CreateSalesOrderLineDto
     // 🏬 OPTIONAL
     public string? VatGroup { get; set; }
     public string? WarehouseCode { get; set; }
+
+    // 🏷️ OPTIONAL — used to build Dscription prefix "ItemName/Manufacturer/..."
+    // Supply these when creating via API so the description is formatted
+    // in the same Add() transaction (no second Update() needed).
+    // If omitted, SAP's auto-populated ItemDescription is used as-is.
+    public string? ItemName     { get; set; }
+    public string? Manufacturer { get; set; }
 }

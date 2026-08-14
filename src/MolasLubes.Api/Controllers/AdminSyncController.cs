@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using MolasLubes.Api.Security;
+using MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 using MolasLubes.Infrastructure.Services.Sync;
 using Quartz;
 
@@ -99,6 +100,39 @@ public class AdminSyncController : ControllerBase
         {
             Message = "Orphaned invoice line backfill completed"
         });
+    }
+
+    // -------------------------------------------------
+    // SALES ORDER LINE DESCRIPTIONS
+    // Writes "U_ItemName/U_Manufacturer/OriginalDescription"
+    // into RDR1.Dscription for every open Sales Order line
+    // that is missing the prefix.
+    // -------------------------------------------------
+
+    /// <summary>
+    /// Batch-formats Dscription on all currently Open Sales Orders.
+    /// SQL is used read-only (to get DocEntry list); all writes go through DI API.
+    /// </summary>
+    [HttpPost("sap/sales-orders/format-descriptions")]
+    public IActionResult FormatAllOpenSalesOrderDescriptions(
+        [FromServices] SapSalesOrderLineDescriptionUpdater updater)
+    {
+        updater.UpdateAllOpenSalesOrderDescriptions();
+        return Ok(new { message = "Sales Order line description formatting completed — check logs for details" });
+    }
+
+    /// <summary>
+    /// Formats Dscription on a single Sales Order by DocEntry.
+    /// </summary>
+    [HttpPost("sap/sales-orders/{docEntry:int}/format-descriptions")]
+    public IActionResult FormatSingleSalesOrderDescriptions(
+        int docEntry,
+        [FromServices] SapSalesOrderLineDescriptionUpdater updater)
+    {
+        bool ok = updater.UpdateSalesOrderLineDescriptions(docEntry);
+        return ok
+            ? Ok(new { docEntry, message = "Description update succeeded" })
+            : StatusCode(500, new { docEntry, message = "Description update failed — check logs" });
     }
 
     // -------------------------------------------------
