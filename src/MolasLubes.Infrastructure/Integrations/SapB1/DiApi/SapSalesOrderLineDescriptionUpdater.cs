@@ -84,12 +84,38 @@ public class SapSalesOrderLineDescriptionUpdater
             int docNum       = order.DocNum;
             int changedLines = 0;
 
+            // ── Detect UDF availability once before the loop ──────────────
+            // SAP throws COMException (0xFFFFFBAE: Invalid field name) when
+            // a UDF does not exist on the table. Detect this upfront so we
+            // can log a clear diagnostic instead of crashing on every line.
+            bool hasItemName     = false;
+            bool hasManufacturer = false;
+
+            if (order.Lines.Count > 0)
+            {
+                order.Lines.SetCurrentLine(0);
+                hasItemName     = UdfExists(order.Lines.UserFields, "U_ItemName");
+                hasManufacturer = UdfExists(order.Lines.UserFields, "U_Manufacturer");
+            }
+
+            if (!hasItemName && !hasManufacturer)
+            {
+                _logger.LogWarning(
+                    "[SalesOrderDescription] DocEntry {DocEntry}: UDFs U_ItemName and " +
+                    "U_Manufacturer do not exist on RDR1. " +
+                    "Create them in SAP: Tools > Customization Tools > User-Defined Fields " +
+                    "> Marketing Documents > Rows. Skipping this order.",
+                    docEntry);
+                return true;
+            }
+            // ─────────────────────────────────────────────────────────────
+
             for (int i = 0; i < order.Lines.Count; i++)
             {
                 order.Lines.SetCurrentLine(i);
 
-                string? itemName     = ReadUdf(order.Lines.UserFields.Fields.Item("U_ItemName").Value);
-                string? manufacturer = ReadUdf(order.Lines.UserFields.Fields.Item("U_Manufacturer").Value);
+                string? itemName     = hasItemName     ? ReadUdf(order.Lines.UserFields.Fields.Item("U_ItemName").Value)     : null;
+                string? manufacturer = hasManufacturer ? ReadUdf(order.Lines.UserFields.Fields.Item("U_Manufacturer").Value) : null;
                 string  currentDesc  = (order.Lines.ItemDescription ?? string.Empty).Trim();
 
                 string prefix = SalesOrderDescriptionBuilder.BuildPrefix(itemName, manufacturer);
@@ -224,6 +250,23 @@ public class SapSalesOrderLineDescriptionUpdater
     // PRIVATE UTILITIES
     // Pure logic lives in MolasLubes.Domain.Orders.SalesOrderDescriptionBuilder
     // ─────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns true if the named UDF exists on the given UserFields object.
+    /// SAP throws COMException 0xFFFFFBAE when the field name is invalid.
+    /// </summary>
+    private static bool UdfExists(UserFields userFields, string fieldName)
+    {
+        try
+        {
+            _ = userFields.Fields.Item(fieldName);
+            return true;
+        }
+        catch (System.Runtime.InteropServices.COMException)
+        {
+            return false;
+        }
+    }
 
     private static string? ReadUdf(object? rawValue)
     {
