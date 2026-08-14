@@ -110,15 +110,16 @@ public class AdminSyncController : ControllerBase
     // -------------------------------------------------
 
     /// <summary>
-    /// Batch-formats Dscription on all currently Open Sales Orders.
-    /// SQL is used read-only (to get DocEntry list); all writes go through DI API.
+    /// Triggers the SalesOrderDescriptionFormatJob immediately via Quartz.
+    /// Same job that runs automatically at 06:00 EAT every day.
+    /// SQL is used read-only (DocEntry list); all writes go through DI API.
     /// </summary>
     [HttpPost("sap/sales-orders/format-descriptions")]
-    public IActionResult FormatAllOpenSalesOrderDescriptions(
-        [FromServices] SapSalesOrderLineDescriptionUpdater updater)
+    public async Task<IActionResult> FormatAllOpenSalesOrderDescriptions()
     {
-        updater.UpdateAllOpenSalesOrderDescriptions();
-        return Ok(new { message = "Sales Order line description formatting completed — check logs for details" });
+        var scheduler = await _schedulerFactory.GetScheduler();
+        await scheduler.TriggerJob(new JobKey("SalesOrderDescriptionFormatJob"));
+        return Ok(new { message = "SalesOrderDescriptionFormatJob triggered — check logs for progress" });
     }
 
     /// <summary>

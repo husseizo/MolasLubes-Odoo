@@ -701,6 +701,19 @@ builder.Services.AddQuartz(q =>
         .ForJob(new JobKey("TantivyScraperJob"))
         .WithIdentity("TantivyScraperJob-trigger")
         .WithCronSchedule("0 30 2 ? * *")); // nightly at 02:30 UTC
+
+    // Sales Order line description formatter: daily at 06:00 EAT (03:00 UTC).
+    // Writes "U_ItemName/U_Manufacturer/Desc" prefix on every open order line
+    // that is still missing it.  Idempotent — already-formatted lines are skipped.
+    // Also manually triggerable via POST /api/admin/sync/sap/sales-orders/format-descriptions
+    q.AddJob<MolasLubes.Infrastructure.Scheduling.Jobs.SalesOrderDescriptionFormatJob>(opts =>
+        opts.WithIdentity("SalesOrderDescriptionFormatJob")
+            .StoreDurably());
+
+    q.AddTrigger(t => t
+        .ForJob(new JobKey("SalesOrderDescriptionFormatJob"))
+        .WithIdentity("SalesOrderDescriptionFormatJob-trigger")
+        .WithCronSchedule("0 0 3 ? * *")); // daily at 06:00 EAT (03:00 UTC)
 });
 
 builder.Services.AddQuartzHostedService(o =>
