@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
+using MolasLubes.Domain.Orders;
 using SAPbobsCOM;
 
 namespace MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
@@ -91,7 +92,7 @@ public class SapSalesOrderLineDescriptionUpdater
                 string? manufacturer = ReadUdf(order.Lines.UserFields.Fields.Item("U_Manufacturer").Value);
                 string  currentDesc  = (order.Lines.ItemDescription ?? string.Empty).Trim();
 
-                string prefix = BuildPrefix(itemName, manufacturer);
+                string prefix = SalesOrderDescriptionBuilder.BuildPrefix(itemName, manufacturer);
 
                 if (string.IsNullOrEmpty(prefix))
                 {
@@ -109,7 +110,8 @@ public class SapSalesOrderLineDescriptionUpdater
                     continue;
                 }
 
-                string newDesc = SafeTruncate(prefixSlash + currentDesc, MaxDescriptionLength);
+                string newDesc = SalesOrderDescriptionBuilder.BuildDescription(
+                    itemName, manufacturer, currentDesc);
 
                 _logger.LogInformation(
                     "[SalesOrderDescription] Line {Line} updated: '{Old}' -> '{New}'",
@@ -219,68 +221,9 @@ public class SapSalesOrderLineDescriptionUpdater
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // 3.  STATIC HELPERS
-    //     Pure logic — no SAP dependency.
-    //     Call BuildDescription() BEFORE order.Lines.Add() on new orders
-    //     to avoid a second Update() transaction.
-    // ─────────────────────────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Builds the "ItemName/Manufacturer" prefix.
-    /// Blank values are omitted — no double-slash, no leading/trailing slash.
-    /// Returns empty string when both are blank.
-    ///
-    /// Examples:
-    ///   ("HOSE", "VIKA")    → "HOSE/VIKA"
-    ///   ("HOSE", null)      → "HOSE"
-    ///   (null,   "VIKA")    → "VIKA"
-    ///   (null,   null)      → ""
-    /// </summary>
-    public static string BuildPrefix(string? itemName, string? manufacturer)
-    {
-        var parts = new List<string>(2);
-
-        if (!string.IsNullOrWhiteSpace(itemName))
-            parts.Add(itemName.Trim());
-
-        if (!string.IsNullOrWhiteSpace(manufacturer))
-            parts.Add(manufacturer.Trim());
-
-        return string.Join("/", parts);
-    }
-
-    /// <summary>
-    /// Applies the prefix to currentDescription and returns the final string.
-    /// Idempotent: if currentDescription already begins with the prefix, it is
-    /// returned unchanged.  Truncates safely to MaxDescriptionLength.
-    ///
-    /// Use this BEFORE order.Lines.Add() on new orders (pre-Add approach)
-    /// so that the correct Dscription is committed in a single SAP transaction.
-    /// </summary>
-    public static string BuildDescription(
-        string? itemName,
-        string? manufacturer,
-        string  currentDescription)
-    {
-        string prefix = BuildPrefix(itemName, manufacturer);
-
-        if (string.IsNullOrEmpty(prefix))
-            return currentDescription;
-
-        string prefixSlash = prefix + "/";
-
-        if (currentDescription.StartsWith(prefixSlash, StringComparison.OrdinalIgnoreCase))
-            return currentDescription;   // already correct — do not re-prefix
-
-        return SafeTruncate(prefixSlash + currentDescription, MaxDescriptionLength);
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
     // PRIVATE UTILITIES
+    // Pure logic lives in MolasLubes.Domain.Orders.SalesOrderDescriptionBuilder
     // ─────────────────────────────────────────────────────────────────────────
-
-    private static string SafeTruncate(string value, int maxLength)
-        => value.Length <= maxLength ? value : value[..maxLength];
 
     private static string? ReadUdf(object? rawValue)
     {

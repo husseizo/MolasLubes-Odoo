@@ -1,6 +1,7 @@
 ﻿using SAPbobsCOM;
 using Microsoft.Extensions.Logging;
 using MolasLubes.Application.Orders;
+using MolasLubes.Domain.Orders;
 using MolasLubes.Infrastructure.Integrations.SapB1.Helpers;
 
 namespace MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
@@ -109,7 +110,7 @@ public class SapSalesOrderCreator
                 // SAP populated it.
                 {
                     string currentDesc = (order.Lines.ItemDescription ?? string.Empty).Trim();
-                    order.Lines.ItemDescription = SapSalesOrderLineDescriptionUpdater.BuildDescription(
+                    order.Lines.ItemDescription = SalesOrderDescriptionBuilder.BuildDescription(
                         line.ItemName,
                         line.Manufacturer,
                         currentDesc);
