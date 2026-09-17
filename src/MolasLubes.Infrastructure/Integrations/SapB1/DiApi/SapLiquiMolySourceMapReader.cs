@@ -60,30 +60,24 @@ public class SapLiquiMolySourceMapReader
                 company = CreateAndConnect(profile.Sap);
                 rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
 
-                var safeWhs = warehouseCode.Replace("'", "''");
+                var safeWhs  = warehouseCode.Replace("'", "''");
+                var strategy = profile.LiquiMolyFallbackStrategy;
                 var hasLiquiMolyUdfs = HasLiquiMolyUdfs(rs);
-                rs.DoQuery(hasLiquiMolyUdfs
-                    ? $@"
-SELECT i.ItemCode, i.ItemName, i.U_Item_Name,
+
+                var (uItemNameCol, itemFilter) = hasLiquiMolyUdfs
+                    ? ("i.U_Item_Name", "i.U_MdlTEST = 'LIQUI MOLY' AND i.frozenFor = 'N'")
+                    : ("CAST(NULL AS NVARCHAR(254)) AS U_Item_Name", strategy == "AllActive"
+                        ? "i.frozenFor = 'N'"
+                        : "i.frozenFor = 'N' AND TRY_CONVERT(INT, i.ItemCode) IS NOT NULL");
+
+                rs.DoQuery($@"
+SELECT i.ItemCode, i.ItemName, {uItemNameCol},
        ISNULL(w.OnHand,     0) AS OnHand,
        ISNULL(w.IsCommited, 0) AS Committed
 FROM OITM i
 LEFT JOIN OITW w ON w.ItemCode = i.ItemCode
                 AND w.WhsCode  = '{safeWhs}'
-WHERE i.U_MdlTEST = 'LIQUI MOLY'
-  AND i.frozenFor = 'N'
-ORDER BY i.ItemCode
-"
-                    : $@"
-SELECT i.ItemCode, i.ItemName,
-       CAST(NULL AS NVARCHAR(254)) AS U_Item_Name,
-       ISNULL(w.OnHand,     0) AS OnHand,
-       ISNULL(w.IsCommited, 0) AS Committed
-FROM OITM i
-LEFT JOIN OITW w ON w.ItemCode = i.ItemCode
-                AND w.WhsCode  = '{safeWhs}'
-WHERE i.frozenFor = 'N'
-  AND TRY_CONVERT(INT, i.ItemCode) IS NOT NULL
+WHERE {itemFilter}
 ORDER BY i.ItemCode
 ");
 
@@ -151,21 +145,19 @@ ORDER BY i.ItemCode
                 company = CreateAndConnect(profile.Sap);
                 rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
 
-                var hasLiquiMolyUdfs = HasLiquiMolyUdfs(rs);
-                rs.DoQuery(hasLiquiMolyUdfs
-                    ? @"
-SELECT ItemCode, ItemName, U_Item_Name
+                var strategy2        = profile.LiquiMolyFallbackStrategy;
+                var hasLiquiMolyUdfs2 = HasLiquiMolyUdfs(rs);
+
+                var (uCol2, filter2) = hasLiquiMolyUdfs2
+                    ? ("U_Item_Name", "U_MdlTEST = 'LIQUI MOLY' AND frozenFor = 'N'")
+                    : ("CAST(NULL AS NVARCHAR(254)) AS U_Item_Name", strategy2 == "AllActive"
+                        ? "frozenFor = 'N'"
+                        : "frozenFor = 'N' AND TRY_CONVERT(INT, ItemCode) IS NOT NULL");
+
+                rs.DoQuery($@"
+SELECT ItemCode, ItemName, {uCol2}
 FROM OITM
-WHERE U_MdlTEST = 'LIQUI MOLY'
-  AND frozenFor = 'N'
-ORDER BY ItemCode
-"
-                    : @"
-SELECT ItemCode, ItemName,
-       CAST(NULL AS NVARCHAR(254)) AS U_Item_Name
-FROM OITM
-WHERE frozenFor = 'N'
-  AND TRY_CONVERT(INT, ItemCode) IS NOT NULL
+WHERE {filter2}
 ORDER BY ItemCode
 ");
 

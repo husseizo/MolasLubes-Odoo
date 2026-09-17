@@ -194,11 +194,11 @@ public class GermaxCacheSyncService
             return;
         }
 
-        row.GermaxArticleNumber = dto.GermaxArticleNumber;
-        row.OemPartNumber       = dto.OemPartNumber;
+        row.GermaxArticleNumber = dto.GermaxArticleNumber is { Length: > 50 }   ? dto.GermaxArticleNumber[..50]   : dto.GermaxArticleNumber;
+        row.OemPartNumber       = dto.OemPartNumber       is { Length: > 255 }  ? dto.OemPartNumber[..255]         : dto.OemPartNumber;
         row.FitForAuto          = dto.FitForAuto;
         row.Description         = dto.Description;
-        row.ImageUrl            = dto.ImageUrl;
+        row.ImageUrl            = dto.ImageUrl            is { Length: > 500 }  ? dto.ImageUrl[..500]              : dto.ImageUrl;
         row.AllImageUrls        = dto.AllImageUrls;
         row.ProductUrl          = dto.ProductUrl;
         row.MatchMethod         = dto.MatchMethod;

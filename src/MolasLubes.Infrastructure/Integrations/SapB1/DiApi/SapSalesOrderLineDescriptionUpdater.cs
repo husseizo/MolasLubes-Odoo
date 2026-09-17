@@ -1,66 +1,158 @@
+#pragma warning disable CA1416 // COM interop — Windows only
+
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using MolasLubes.Domain.Orders;
+using MolasLubes.Infrastructure.Integrations.SapB1.Profiles;
 using SAPbobsCOM;
 
 namespace MolasLubes.Infrastructure.Integrations.SapB1.DiApi;
 
 /// <summary>
-/// Builds and writes the formatted Sales Order line description
-/// "U_ItemName/U_Manufacturer/OriginalDescription" using SAP DI API only.
+/// Builds and writes "U_Item_Name/U_MdlTEST/OriginalDescription" into
+/// RDR1.Dscription for open Sales Orders in the AutoHub company (MOLAS_Live_2021).
 ///
-/// Rule summary
-/// ── Both UDFs present  : HOSE/VIKA/8K0121101M
-/// ── Only ItemName      : HOSE/8K0121101M
-/// ── Only Manufacturer  : VIKA/8K0121101M
-/// ── Both blank         : leave unchanged
-/// ── Already prefixed   : leave unchanged (idempotent)
-///
-/// Dependency: SapDiApiConnection (Singleton) — same pattern as every
-/// other SAP service in this project.
+/// Data source: OITM (Item Master) — U_Item_Name (item name), U_MdlTEST (brand).
+/// All DI API calls run on a dedicated STA thread (SAP COM requirement).
+/// No UDFs on RDR1 are required.
 /// </summary>
 public class SapSalesOrderLineDescriptionUpdater
 {
-    /// <summary>
-    /// SAP B1 column RDR1.Dscription.
-    /// Base schema: 100 chars. Some installations extend to 254.
-    /// Change this constant to match the actual column size in your system.
-    /// </summary>
-    private const int MaxDescriptionLength = 100;
+    private const string ProfileKey = "AutoHub";
 
-    private readonly SapDiApiConnection                             _connection;
-    private readonly ILogger<SapSalesOrderLineDescriptionUpdater>   _logger;
+    private readonly IntegrationProfilesOptions                   _profiles;
+    private readonly ILogger<SapSalesOrderLineDescriptionUpdater> _logger;
 
     public SapSalesOrderLineDescriptionUpdater(
-        SapDiApiConnection connection,
+        IOptions<IntegrationProfilesOptions> profileOptions,
         ILogger<SapSalesOrderLineDescriptionUpdater> logger)
     {
-        _connection = connection;
-        _logger     = logger;
+        _profiles = profileOptions.Value;
+        _logger   = logger;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // 1.  SINGLE-ORDER UPDATE
-    //     Call this after a new Sales Order is created, or when patching an
-    //     existing open order.
+    // 1.  SINGLE-ORDER UPDATE (public API)
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Loads the Sales Order by DocEntry, reads U_ItemName and U_Manufacturer
-    /// from every RDR1 line, and updates Dscription where the prefix is absent.
-    /// Calls order.Update() only when at least one line was actually changed.
-    /// Skips the document silently if it is not Open.
-    /// </summary>
-    /// <returns>
-    /// true  — update succeeded, or no changes were needed.
-    /// false — SAP reported an error (full details are logged).
-    /// </returns>
     public bool UpdateSalesOrderLineDescriptions(int docEntry)
+    {
+        if (!_profiles.Profiles.TryGetValue(ProfileKey, out var profile))
+            throw new InvalidOperationException($"Integration profile '{ProfileKey}' is not configured.");
+
+        bool result     = false;
+        Exception? threadEx = null;
+
+        var thread = new Thread(() =>
+        {
+            Company? company = null;
+            try
+            {
+                company = Connect(profile.Sap);
+                result  = UpdateSingleOrderCore(company, docEntry);
+            }
+            catch (Exception ex) { threadEx = ex; }
+            finally
+            {
+                if (company is { Connected: true }) company.Disconnect();
+                if (company != null) Marshal.ReleaseComObject(company);
+            }
+        });
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+
+        if (threadEx != null)
+        {
+            _logger.LogError(threadEx,
+                "[SalesOrderDescription] Unexpected error | DocEntry={DocEntry}", docEntry);
+            return false;
+        }
+
+        return result;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 2.  BATCH — ALL OPEN ORDERS (public API)
+    //     One STA thread, one connection, process all orders in sequence.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    public void UpdateAllOpenSalesOrderDescriptions()
+    {
+        if (!_profiles.Profiles.TryGetValue(ProfileKey, out var profile))
+            throw new InvalidOperationException($"Integration profile '{ProfileKey}' is not configured.");
+
+        Exception? threadEx = null;
+
+        var thread = new Thread(() =>
+        {
+            Company?   company = null;
+            Recordset? rs      = null;
+            try
+            {
+                company = Connect(profile.Sap);
+
+                _logger.LogInformation("[SalesOrderDescription] Batch: querying open Sales Orders");
+
+                rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
+                rs.DoQuery("SELECT DocEntry FROM ORDR WHERE DocStatus = 'O' ORDER BY DocEntry");
+
+                var docEntries = new List<int>();
+                while (!rs.EoF)
+                {
+                    docEntries.Add(Convert.ToInt32(rs.Fields.Item("DocEntry").Value));
+                    rs.MoveNext();
+                }
+
+                Marshal.ReleaseComObject(rs);
+                rs = null;
+
+                _logger.LogInformation(
+                    "[SalesOrderDescription] Batch: processing {Count} open Sales Orders",
+                    docEntries.Count);
+
+                int successCount = 0, failCount = 0;
+                foreach (int docEntry in docEntries)
+                {
+                    bool ok = UpdateSingleOrderCore(company, docEntry);
+                    if (ok) successCount++;
+                    else    failCount++;
+                }
+
+                _logger.LogInformation(
+                    "[SalesOrderDescription] Batch complete | Success={S} | Failed={F}",
+                    successCount, failCount);
+            }
+            catch (Exception ex) { threadEx = ex; }
+            finally
+            {
+                if (rs      != null) Marshal.ReleaseComObject(rs);
+                if (company is { Connected: true }) company.Disconnect();
+                if (company != null) Marshal.ReleaseComObject(company);
+            }
+        });
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+
+        if (threadEx != null)
+        {
+            _logger.LogError(threadEx, "[SalesOrderDescription] Batch: unexpected error");
+            throw threadEx;
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // CORE — runs inside an already-connected STA Company
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private bool UpdateSingleOrderCore(Company company, int docEntry)
     {
         _logger.LogInformation(
             "[SalesOrderDescription] Processing DocEntry {DocEntry}", docEntry);
-
-        var company = _connection.GetConnectedCompany();
 
         Documents? order = null;
         try
@@ -78,61 +170,60 @@ public class SapSalesOrderLineDescriptionUpdater
             {
                 _logger.LogInformation(
                     "[SalesOrderDescription] DocEntry {DocEntry} is not Open — skipped", docEntry);
-                return true;   // not an error condition
-            }
-
-            int docNum       = order.DocNum;
-            int changedLines = 0;
-
-            // ── Detect UDF availability once before the loop ──────────────
-            // SAP throws COMException (0xFFFFFBAE: Invalid field name) when
-            // a UDF does not exist on the table. Detect this upfront so we
-            // can log a clear diagnostic instead of crashing on every line.
-            bool hasItemName     = false;
-            bool hasManufacturer = false;
-
-            if (order.Lines.Count > 0)
-            {
-                order.Lines.SetCurrentLine(0);
-                hasItemName     = UdfExists(order.Lines.UserFields, "U_ItemName");
-                hasManufacturer = UdfExists(order.Lines.UserFields, "U_Manufacturer");
-            }
-
-            if (!hasItemName && !hasManufacturer)
-            {
-                _logger.LogWarning(
-                    "[SalesOrderDescription] DocEntry {DocEntry}: UDFs U_ItemName and " +
-                    "U_Manufacturer do not exist on RDR1. " +
-                    "Create them in SAP: Tools > Customization Tools > User-Defined Fields " +
-                    "> Marketing Documents > Rows. Skipping this order.",
-                    docEntry);
                 return true;
             }
-            // ─────────────────────────────────────────────────────────────
+
+            int docNum = order.DocNum;
+
+            // Collect all ItemCodes on this order
+            var itemCodes = new List<string>(order.Lines.Count);
+            for (int j = 0; j < order.Lines.Count; j++)
+            {
+                order.Lines.SetCurrentLine(j);
+                var code = order.Lines.ItemCode;
+                if (!string.IsNullOrWhiteSpace(code))
+                    itemCodes.Add(code.Trim());
+            }
+
+            if (itemCodes.Count == 0)
+            {
+                _logger.LogInformation(
+                    "[SalesOrderDescription] DocEntry {DocEntry} has no item lines — skipped", docEntry);
+                return true;
+            }
+
+            // Query OITM once for U_Item_Name (name) and U_MdlTEST (brand)
+            var oitmData = QueryOitm(company, itemCodes);
+
+            int changedLines = 0;
 
             for (int i = 0; i < order.Lines.Count; i++)
             {
                 order.Lines.SetCurrentLine(i);
 
-                string? itemName     = hasItemName     ? ReadUdf(order.Lines.UserFields.Fields.Item("U_ItemName").Value)     : null;
-                string? manufacturer = hasManufacturer ? ReadUdf(order.Lines.UserFields.Fields.Item("U_Manufacturer").Value) : null;
-                string  currentDesc  = (order.Lines.ItemDescription ?? string.Empty).Trim();
+                string  itemCode    = (order.Lines.ItemCode        ?? string.Empty).Trim();
+                string  currentDesc = (order.Lines.ItemDescription ?? string.Empty).Trim();
+
+                oitmData.TryGetValue(itemCode, out var master);
+                string? itemName     = master.ItemName;
+                string? manufacturer = master.Manufacturer;
 
                 string prefix = SalesOrderDescriptionBuilder.BuildPrefix(itemName, manufacturer);
 
                 if (string.IsNullOrEmpty(prefix))
                 {
                     _logger.LogInformation(
-                        "[SalesOrderDescription] Line {Line} has no ItemName or Manufacturer — skipped", i);
+                        "[SalesOrderDescription] Line {Line} ({Code}): " +
+                        "U_Item_Name and U_MdlTEST both blank in OITM — skipped",
+                        i, itemCode);
                     continue;
                 }
 
-                string prefixSlash = prefix + "/";
-
-                if (currentDesc.StartsWith(prefixSlash, StringComparison.OrdinalIgnoreCase))
+                if (currentDesc.StartsWith(prefix + "/", StringComparison.OrdinalIgnoreCase))
                 {
                     _logger.LogInformation(
-                        "[SalesOrderDescription] Line {Line} already formatted — skipped", i);
+                        "[SalesOrderDescription] Line {Line} ({Code}): already formatted — skipped",
+                        i, itemCode);
                     continue;
                 }
 
@@ -140,8 +231,8 @@ public class SapSalesOrderLineDescriptionUpdater
                     itemName, manufacturer, currentDesc);
 
                 _logger.LogInformation(
-                    "[SalesOrderDescription] Line {Line} updated: '{Old}' -> '{New}'",
-                    i, Clip(currentDesc, 40), Clip(newDesc, 60));
+                    "[SalesOrderDescription] Line {Line} ({Code}): '{Old}' -> '{New}'",
+                    i, itemCode, Clip(currentDesc, 40), Clip(newDesc, 60));
 
                 order.Lines.ItemDescription = newDesc;
                 changedLines++;
@@ -160,15 +251,14 @@ public class SapSalesOrderLineDescriptionUpdater
             {
                 company.GetLastError(out int errorCode, out string errorMessage);
                 _logger.LogError(
-                    "[SalesOrderDescription] Update failed | DocEntry={DocEntry} | DocNum={DocNum} | " +
-                    "SapCode={Code} | SapMsg={Msg}",
+                    "[SalesOrderDescription] Update failed | DocEntry={DocEntry} | " +
+                    "DocNum={DocNum} | SapCode={Code} | SapMsg={Msg}",
                     docEntry, docNum, errorCode, errorMessage);
                 return false;
             }
 
             _logger.LogInformation(
-                "[SalesOrderDescription] Sales Order updated successfully | " +
-                "DocEntry={DocEntry} | DocNum={DocNum} | ChangedLines={Changed}",
+                "[SalesOrderDescription] Updated | DocEntry={DocEntry} | DocNum={DocNum} | Lines={N}",
                 docEntry, docNum, changedLines);
 
             return true;
@@ -176,99 +266,100 @@ public class SapSalesOrderLineDescriptionUpdater
         catch (Exception ex)
         {
             _logger.LogError(ex,
-                "[SalesOrderDescription] Unexpected error | DocEntry={DocEntry}", docEntry);
+                "[SalesOrderDescription] Error on DocEntry {DocEntry}", docEntry);
             return false;
         }
         finally
         {
-            if (order != null)
-                Marshal.ReleaseComObject(order);
+            if (order != null) Marshal.ReleaseComObject(order);
         }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // 2.  BATCH — ALL OPEN ORDERS
-    //     SQL (Recordset) is used READ-ONLY to list DocEntry values.
-    //     Every document modification still goes through DI API.
+    // OITM QUERY — U_Item_Name + U_MdlTEST for a set of ItemCodes
+    // Must be called on the same STA thread as the Company object.
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Fetches all Open Sales Orders (DocStatus = 'O') via Recordset,
-    /// then calls UpdateSalesOrderLineDescriptions() for each one via DI API.
-    /// </summary>
-    public void UpdateAllOpenSalesOrderDescriptions()
+    internal static Dictionary<string, (string? ItemName, string? Manufacturer)> QueryOitm(
+        Company company,
+        IEnumerable<string> itemCodes)
     {
-        _logger.LogInformation("[SalesOrderDescription] Batch: querying open Sales Orders");
+        var result = new Dictionary<string, (string?, string?)>(StringComparer.OrdinalIgnoreCase);
 
-        var company = _connection.GetConnectedCompany();
+        var codes = itemCodes
+            .Where(c => !string.IsNullOrWhiteSpace(c))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (codes.Count == 0)
+            return result;
+
+        var inList = string.Join(",",
+            codes.Select(c => $"'{c.Replace("'", "''")}'"));
 
         Recordset? rs = null;
         try
         {
             rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
-            rs.DoQuery("SELECT DocEntry FROM ORDR WHERE DocStatus = 'O' ORDER BY DocEntry");
+            rs.DoQuery(
+                $"SELECT ItemCode, U_Item_Name, U_MdlTEST " +
+                $"FROM OITM " +
+                $"WHERE ItemCode IN ({inList})");
 
-            if (rs.EoF)
-            {
-                _logger.LogInformation(
-                    "[SalesOrderDescription] Batch: no open Sales Orders found");
-                return;
-            }
-
-            var docEntries = new List<int>();
             while (!rs.EoF)
             {
-                docEntries.Add(Convert.ToInt32(rs.Fields.Item("DocEntry").Value));
+                string  code = rs.Fields.Item("ItemCode").Value?.ToString()?.Trim() ?? string.Empty;
+                string? name = TrimField(rs.Fields.Item("U_Item_Name").Value);
+                string? mfr  = TrimField(rs.Fields.Item("U_MdlTEST").Value);
+
+                if (!string.IsNullOrEmpty(code))
+                    result[code] = (name, mfr);
+
                 rs.MoveNext();
             }
-
-            _logger.LogInformation(
-                "[SalesOrderDescription] Batch: processing {Count} open Sales Orders",
-                docEntries.Count);
-
-            int successCount = 0, failCount = 0;
-
-            foreach (int docEntry in docEntries)
-            {
-                bool ok = UpdateSalesOrderLineDescriptions(docEntry);
-                if (ok) successCount++;
-                else    failCount++;
-            }
-
-            _logger.LogInformation(
-                "[SalesOrderDescription] Batch complete | Success={S} | Failed={F}",
-                successCount, failCount);
         }
         finally
         {
-            if (rs != null)
-                Marshal.ReleaseComObject(rs);
+            if (rs != null) Marshal.ReleaseComObject(rs);
         }
+
+        return result;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // PRIVATE UTILITIES
-    // Pure logic lives in MolasLubes.Domain.Orders.SalesOrderDescriptionBuilder
+    // SAP CONNECTION HELPER
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Returns true if the named UDF exists on the given UserFields object.
-    /// SAP throws COMException 0xFFFFFBAE when the field name is invalid.
-    /// </summary>
-    private static bool UdfExists(UserFields userFields, string fieldName)
+    private static Company Connect(SapSettings sap)
     {
-        try
+        var company = new Company
         {
-            _ = userFields.Fields.Item(fieldName);
-            return true;
-        }
-        catch (System.Runtime.InteropServices.COMException)
+            Server        = sap.Server,
+            CompanyDB     = sap.CompanyDB,
+            UserName      = sap.UserName,
+            Password      = sap.Password,
+            DbServerType  = Enum.Parse<BoDataServerTypes>($"dst_{sap.DbServerType}"),
+            language      = BoSuppLangs.ln_English,
+            UseTrusted    = false,
+            LicenseServer = sap.LicenseServer,
+            SLDServer     = sap.SLDServer
+        };
+
+        if (company.Connect() != 0)
         {
-            return false;
+            company.GetLastError(out var code, out var msg);
+            throw new Exception(
+                $"[SalesOrderDescription] SAP connect failed ({code}): {msg}");
         }
+
+        return company;
     }
 
-    private static string? ReadUdf(object? rawValue)
+    // ─────────────────────────────────────────────────────────────────────────
+    // UTILITIES
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private static string? TrimField(object? rawValue)
     {
         if (rawValue == null) return null;
         string? s = rawValue.ToString()?.Trim();

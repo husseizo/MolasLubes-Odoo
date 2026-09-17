@@ -537,6 +537,150 @@ namespace MolasLubes.Infrastructure.Persistence.Migrations.Neon
                     b.ToTable("NeonLiquiMolyProducts", (string)null);
                 });
 
+            modelBuilder.Entity("MolasLubes.Domain.Entities.Neon.NeonLiquiMolyTransferHeader", b =>
+                {
+                    b.Property<int>("DocEntry")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("DocType")
+                        .HasMaxLength(8)
+                        .HasColumnType("character varying(8)");
+
+                    b.Property<string>("Comments")
+                        .HasMaxLength(254)
+                        .HasColumnType("character varying(254)");
+
+                    b.Property<DateTime>("DocDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("DocDueDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("DocNum")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("DocStatus")
+                        .IsRequired()
+                        .HasMaxLength(2)
+                        .HasColumnType("character varying(2)");
+
+                    b.Property<decimal>("DocTotal")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<string>("FromWhsCode")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("ReplenishmentRef")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<string>("SourceProfile")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<DateTime>("SyncedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("TaxDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ToWhsCode")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<int?>("UserSign")
+                        .HasColumnType("integer");
+
+                    b.HasKey("DocEntry", "DocType");
+
+                    b.HasIndex("DocDate");
+
+                    b.HasIndex("ReplenishmentRef");
+
+                    b.HasIndex("SourceProfile", "DocType");
+
+                    b.ToTable("NeonLiquiMolyTransfers", (string)null);
+                });
+
+            modelBuilder.Entity("MolasLubes.Domain.Entities.Neon.NeonLiquiMolyTransferLine", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<int?>("BaseEntry")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("BaseLine")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("BaseType")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(254)
+                        .HasColumnType("character varying(254)");
+
+                    b.Property<int>("DocEntry")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("DocType")
+                        .IsRequired()
+                        .HasMaxLength(8)
+                        .HasColumnType("character varying(8)");
+
+                    b.Property<string>("FromWhsCode")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("ItemCode")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<int>("LineNum")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal?>("LineTotal")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<decimal>("OpenQty")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("numeric(18,4)");
+
+                    b.Property<decimal?>("Price")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("numeric(18,4)");
+
+                    b.Property<decimal>("Quantity")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("numeric(18,4)");
+
+                    b.Property<string>("ToWhsCode")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("UomCode")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DocEntry", "DocType");
+
+                    b.HasIndex("ItemCode");
+
+                    b.ToTable("NeonLiquiMolyTransferLines", (string)null);
+                });
+
             modelBuilder.Entity("MolasLubes.Domain.Entities.Neon.NeonPayment", b =>
                 {
                     b.Property<int>("SapDocEntry")
@@ -847,6 +991,17 @@ namespace MolasLubes.Infrastructure.Persistence.Migrations.Neon
                     b.Navigation("Invoice");
                 });
 
+            modelBuilder.Entity("MolasLubes.Domain.Entities.Neon.NeonLiquiMolyTransferLine", b =>
+                {
+                    b.HasOne("MolasLubes.Domain.Entities.Neon.NeonLiquiMolyTransferHeader", "Transfer")
+                        .WithMany("Lines")
+                        .HasForeignKey("DocEntry", "DocType")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Transfer");
+                });
+
             modelBuilder.Entity("MolasLubes.Domain.Entities.Neon.NeonPayment", b =>
                 {
                     b.HasOne("MolasLubes.Domain.Entities.Neon.NeonInvoice", "Invoice")
@@ -880,6 +1035,11 @@ namespace MolasLubes.Infrastructure.Persistence.Migrations.Neon
                     b.Navigation("Lines");
 
                     b.Navigation("Payments");
+                });
+
+            modelBuilder.Entity("MolasLubes.Domain.Entities.Neon.NeonLiquiMolyTransferHeader", b =>
+                {
+                    b.Navigation("Lines");
                 });
 
             modelBuilder.Entity("MolasLubes.Domain.Entities.Neon.NeonSalesOrder", b =>

@@ -36,4 +36,13 @@ public sealed class NeonRetryStrategy : ExecutionStrategy
 
         return false;
     }
+
+    // Called by EF Core before each retry delay. Clear the Npgsql connection pool so
+    // the retry opens a fresh TCP connection instead of reusing the same dead socket
+    // that caused the failure — without this, all retries fail identically.
+    protected override void OnRetry()
+    {
+        try { NpgsqlConnection.ClearAllPools(); }
+        catch { /* best-effort — pool clear failure must not mask the original error */ }
+    }
 }

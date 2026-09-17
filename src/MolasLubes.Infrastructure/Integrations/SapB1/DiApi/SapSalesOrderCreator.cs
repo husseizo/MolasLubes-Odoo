@@ -89,6 +89,18 @@ public class SapSalesOrderCreator
             // =====================
             // LINES
             // =====================
+
+            // Pre-load U_Item_Name (item name) and U_MdlTEST (manufacturer)
+            // from OITM for all ItemCodes in a single Recordset query.
+            // This avoids COMException from reading UDFs that don't exist on RDR1.
+            var itemCodesInOrder = dto.Lines
+                .Where(l => !string.IsNullOrWhiteSpace(l.ItemCode))
+                .Select(l => l.ItemCode!.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var oitmData = SapSalesOrderLineDescriptionUpdater.QueryOitm(company, itemCodesInOrder);
+
             foreach (var line in dto.Lines)
             {
                 if (string.IsNullOrWhiteSpace(line.ItemCode))
@@ -102,17 +114,15 @@ public class SapSalesOrderCreator
 
                 // ── PRE-ADD DESCRIPTION FORMATTING ────────────────────────
                 // After setting ItemCode, SAP auto-fills ItemDescription from
-                // OITM.ItemName.  We read that value, then apply the
-                // "ItemName/Manufacturer/OriginalDescription" prefix in the
-                // same Add() transaction — no second Update() required.
-                // If line.ItemName and line.Manufacturer are both blank (e.g.
-                // when creating from reservations), the description is left as
-                // SAP populated it.
+                // OITM.ItemName.  Fetch U_Item_Name and U_MdlTEST from OITM
+                // (pre-loaded above) and apply the prefix in the same Add()
+                // transaction — no second Update() required.
                 {
                     string currentDesc = (order.Lines.ItemDescription ?? string.Empty).Trim();
+                    oitmData.TryGetValue(line.ItemCode.Trim(), out var master);
                     order.Lines.ItemDescription = SalesOrderDescriptionBuilder.BuildDescription(
-                        line.ItemName,
-                        line.Manufacturer,
+                        master.ItemName,
+                        master.Manufacturer,
                         currentDesc);
                 }
                 // ─────────────────────────────────────────────────────────

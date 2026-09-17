@@ -376,6 +376,12 @@ builder.Services.AddScoped<
     MolasLubes.Infrastructure.Integrations.SapB1.DiApi.SapLiquiMolyInventoryReader>();
 builder.Services.AddScoped<
     MolasLubes.Infrastructure.Integrations.SapB1.DiApi.SapLiquiMolySalesOrderReportReader>();
+builder.Services.AddScoped<
+    MolasLubes.Infrastructure.Integrations.SapB1.DiApi.SapLiquiMolyTransferReader>();
+builder.Services.AddScoped<
+    MolasLubes.Infrastructure.Integrations.SapB1.SapEventOutboxService>();
+builder.Services.AddScoped<
+    MolasLubes.Infrastructure.Services.Sync.LiquiMolyTransferSyncService>();
 
 // =====================================================
 // AUTOHUB SERVICES — PROFILE B
@@ -540,6 +546,8 @@ builder.Services.AddTransient<
 
 builder.Services.AddTransient<
     MolasLubes.Infrastructure.Scheduling.Jobs.TantivyScraperJob>();
+builder.Services.AddTransient<
+    MolasLubes.Infrastructure.Scheduling.Jobs.LiquiMolyTransferSyncJob>();
 
 // =====================================================
 // QUARTZ CONFIGURATION
@@ -620,6 +628,10 @@ builder.Services.AddQuartz(q =>
     RegisterJob<NeonSalesOrderLineSyncJob>(
         "NeonSalesOrderLineSyncJob",
         "25 */5 3-16 ? * *");                                                               // every 5 min, 06:00–20:00 EAT
+
+    if (syncSettings.EnableLiquiMolyTransferSync)
+        RegisterJob<MolasLubes.Infrastructure.Scheduling.Jobs.LiquiMolyTransferSyncJob>(
+            "LiquiMolyTransferSyncJob", "0 */2 3-16 ? * *");                               // every 2 min, 06:00–20:00 EAT
 
     // Durable manual-only full sync
     q.AddJob<CustomerFullSyncJob>(opts =>
@@ -728,57 +740,50 @@ var app = builder.Build();
 
 using (var scope = app.Services.CreateScope())
 {
-    var sqlConn = builder.Configuration.GetConnectionString("MolasCacheDb");
+    var cfg = builder.Configuration;
+
+    // Build the list of migrations to run (skip unconfigured ones).
+    var migrations = new List<(string Label, Action Migrate)>();
+
+    var sqlConn = cfg.GetConnectionString("MolasCacheDb");
     if (!string.IsNullOrWhiteSpace(sqlConn) && !sqlConn.StartsWith("CHANGE_ME"))
-    {
-        scope.ServiceProvider
-            .GetRequiredService<MolasCacheDbContext>()
-            .Database.Migrate();
-    }
+        migrations.Add(("MolasCacheDb",     () => scope.ServiceProvider.GetRequiredService<MolasCacheDbContext>().Database.Migrate()));
     else
-    {
         Log.Warning("MolasCacheDb connection string is not configured — skipping SQL Server migration.");
-    }
 
-    var neonConn = builder.Configuration.GetConnectionString("NeonDb");
+    var neonConn = cfg.GetConnectionString("NeonDb");
     if (!string.IsNullOrWhiteSpace(neonConn) && !neonConn.StartsWith("CHANGE_ME"))
-    {
-        scope.ServiceProvider
-            .GetRequiredService<NeonDbContext>()
-            .Database.Migrate();
-    }
+        migrations.Add(("NeonDb",           () => scope.ServiceProvider.GetRequiredService<NeonDbContext>().Database.Migrate()));
     else
-    {
         Log.Warning("NeonDb connection string is not configured — skipping PostgreSQL migration.");
-    }
 
-    // Profile B — MOLAS_Live_2021_Cache (SQL Server)
-    var live2021CacheConn = builder.Configuration[
-        "IntegrationProfiles:Profiles:AutoHub:ConnectionStrings:CacheDb"];
+    var live2021CacheConn = cfg["IntegrationProfiles:Profiles:AutoHub:ConnectionStrings:CacheDb"];
     if (!string.IsNullOrWhiteSpace(live2021CacheConn) && !live2021CacheConn.StartsWith("CHANGE_ME"))
-    {
-        scope.ServiceProvider
-            .GetRequiredService<Live2021CacheDbContext>()
-            .Database.Migrate();
-    }
+        migrations.Add(("Live2021CacheDb",  () => scope.ServiceProvider.GetRequiredService<Live2021CacheDbContext>().Database.Migrate()));
     else
-    {
         Log.Warning("AutoHub CacheDb connection string is not configured — skipping Live2021Cache migration.");
-    }
 
-    // Profile B — Parts_Catalog (PostgreSQL for AutoHub / Germax)
-    var autoHubNeonConn = builder.Configuration[
-        "IntegrationProfiles:Profiles:AutoHub:ConnectionStrings:NeonDb"];
+    var autoHubNeonConn = cfg["IntegrationProfiles:Profiles:AutoHub:ConnectionStrings:NeonDb"];
     if (!string.IsNullOrWhiteSpace(autoHubNeonConn) && !autoHubNeonConn.StartsWith("CHANGE_ME"))
-    {
-        scope.ServiceProvider
-            .GetRequiredService<AutoHubDbContext>()
-            .Database.Migrate();
-    }
+        migrations.Add(("AutoHubNeonDb",    () => scope.ServiceProvider.GetRequiredService<AutoHubDbContext>().Database.Migrate()));
     else
-    {
         Log.Warning("AutoHub NeonDb connection string is not configured — skipping Parts_Catalog migration.");
-    }
+
+    // Run all migrations in a background thread with a 20-second total budget so
+    // the Windows Service startup timeout (30 s) is never hit. When DBs already
+    // exist and are up-to-date this completes in < 1 s; the time cap only applies
+    // when a DB server is unreachable (connection timeout), which is non-fatal.
+    var migTask = Task.Run(() =>
+    {
+        foreach (var (label, migrate) in migrations)
+        {
+            try { migrate(); Log.Information("Migration applied: {Label}", label); }
+            catch (Exception ex) { Log.Warning(ex, "Migration skipped — {Label}: {Message}", label, ex.Message); }
+        }
+    });
+
+    if (!migTask.Wait(TimeSpan.FromSeconds(20)))
+        Log.Warning("Migrations did not complete within 20 s — service will start anyway.");
 }
 
 if (app.Environment.IsDevelopment())

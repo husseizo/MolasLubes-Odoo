@@ -26,6 +26,8 @@ public class NeonDbContext : DbContext
     public DbSet<NeonPayment> Payments => Set<NeonPayment>();
     public DbSet<NeonLiquiMolyProduct> LiquiMolyProducts => Set<NeonLiquiMolyProduct>();
     public DbSet<NeonApiCache> ApiCaches => Set<NeonApiCache>();
+    public DbSet<NeonLiquiMolyTransferHeader> LiquiMolyTransfers     => Set<NeonLiquiMolyTransferHeader>();
+    public DbSet<NeonLiquiMolyTransferLine>   LiquiMolyTransferLines => Set<NeonLiquiMolyTransferLine>();
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         // =====================================================
@@ -415,6 +417,55 @@ public class NeonDbContext : DbContext
             e.Property(x => x.Endpoint).HasMaxLength(200).IsRequired();
             e.Property(x => x.DataJson).IsRequired();
             e.HasIndex(x => x.ExpiresAt);
+        });
+
+        // =====================================================
+        // LIQUI MOLY TRANSFERS (OWTR / OWTQ synced from SAP)
+        // =====================================================
+        modelBuilder.Entity<NeonLiquiMolyTransferHeader>(e =>
+        {
+            e.ToTable("NeonLiquiMolyTransfers");
+
+            e.HasKey(x => new { x.DocEntry, x.DocType });
+
+            e.Property(x => x.DocType).HasMaxLength(8).IsRequired();
+            e.Property(x => x.SourceProfile).HasMaxLength(50).IsRequired();
+            e.Property(x => x.FromWhsCode).HasMaxLength(20).IsRequired();
+            e.Property(x => x.ToWhsCode).HasMaxLength(20).IsRequired();
+            e.Property(x => x.Comments).HasMaxLength(254);
+            e.Property(x => x.DocStatus).HasMaxLength(2).IsRequired();
+            e.Property(x => x.DocTotal).HasPrecision(18, 2);
+            e.Property(x => x.ReplenishmentRef).HasMaxLength(50);
+
+            e.HasIndex(x => x.DocDate);
+            e.HasIndex(x => x.ReplenishmentRef);
+            e.HasIndex(x => new { x.SourceProfile, x.DocType });
+        });
+
+        modelBuilder.Entity<NeonLiquiMolyTransferLine>(e =>
+        {
+            e.ToTable("NeonLiquiMolyTransferLines");
+
+            e.HasKey(x => x.Id);
+
+            e.Property(x => x.DocType).HasMaxLength(8).IsRequired();
+            e.Property(x => x.ItemCode).HasMaxLength(50).IsRequired();
+            e.Property(x => x.Description).HasMaxLength(254);
+            e.Property(x => x.UomCode).HasMaxLength(20);
+            e.Property(x => x.FromWhsCode).HasMaxLength(20);
+            e.Property(x => x.ToWhsCode).HasMaxLength(20);
+            e.Property(x => x.Quantity).HasPrecision(18, 4);
+            e.Property(x => x.OpenQty).HasPrecision(18, 4);
+            e.Property(x => x.Price).HasPrecision(18, 4);
+            e.Property(x => x.LineTotal).HasPrecision(18, 2);
+
+            e.HasOne(x => x.Transfer)
+             .WithMany(x => x.Lines)
+             .HasForeignKey(x => new { x.DocEntry, x.DocType })
+             .OnDelete(DeleteBehavior.Cascade);
+
+            e.HasIndex(x => new { x.DocEntry, x.DocType });
+            e.HasIndex(x => x.ItemCode);
         });
 
         base.OnModelCreating(modelBuilder);

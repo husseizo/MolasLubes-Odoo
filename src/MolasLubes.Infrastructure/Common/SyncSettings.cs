@@ -12,4 +12,6 @@ public class SyncSettings
     public bool EnableOdooDeliveryPush { get; set; }
     public bool EnableOdooInvoicePush { get; set; }
     public bool EnableOdooPaymentPush { get; set; }
+
+    public bool EnableLiquiMolyTransferSync { get; set; } = true;
 }

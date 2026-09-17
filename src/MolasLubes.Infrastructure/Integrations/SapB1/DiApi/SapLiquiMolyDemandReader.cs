@@ -50,10 +50,17 @@ public class SapLiquiMolyDemandReader
                     company = CreateAndConnect(profile.Sap);
                     rs = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
 
-                    var safeWhs = warehouseCode.Replace("'", "''");
+                    var safeWhs  = warehouseCode.Replace("'", "''");
+                    var strategy = profile.LiquiMolyFallbackStrategy;
                     var hasLiquiMolyUdf = HasLiquiMolyUdf(rs);
-                    rs.DoQuery(hasLiquiMolyUdf
-                        ? $@"
+
+                    var itemFilter = hasLiquiMolyUdf
+                        ? "i.U_MdlTEST = 'LIQUI MOLY' AND i.frozenFor = 'N'"
+                        : strategy == "AllActive"
+                            ? "i.frozenFor = 'N'"
+                            : "i.frozenFor = 'N' AND TRY_CONVERT(INT, i.ItemCode) IS NOT NULL";
+
+                    rs.DoQuery($@"
 SELECT
     i.ItemCode,
     i.ItemName,
@@ -72,32 +79,7 @@ LEFT JOIN INV1 l ON l.ItemCode = i.ItemCode
 LEFT JOIN OINV h ON h.DocEntry  = l.DocEntry
                 AND h.DocDate  >= DATEADD(day, -90, GETDATE())
                 AND ISNULL(h.CANCELED, 'N') = 'N'
-WHERE i.U_MdlTEST = 'LIQUI MOLY'
-  AND i.frozenFor = 'N'
-GROUP BY i.ItemCode, i.ItemName, w.OnHand, w.IsCommited
-ORDER BY i.ItemCode
-"
-                        : $@"
-SELECT
-    i.ItemCode,
-    i.ItemName,
-    ISNULL(w.OnHand,     0) AS OnHand,
-    ISNULL(w.IsCommited, 0) AS Committed,
-    ISNULL(SUM(CASE WHEN h.DocDate >= DATEADD(day, -30, GETDATE())
-                    THEN l.Quantity ELSE 0 END), 0) AS Qty30d,
-    ISNULL(SUM(CASE WHEN h.DocDate >= DATEADD(day, -60, GETDATE())
-                    THEN l.Quantity ELSE 0 END), 0) AS Qty60d,
-    ISNULL(SUM(CASE WHEN h.DocDate >= DATEADD(day, -90, GETDATE())
-                    THEN l.Quantity ELSE 0 END), 0) AS Qty90d
-FROM OITM i
-LEFT JOIN OITW w ON w.ItemCode = i.ItemCode
-                AND w.WhsCode  = '{safeWhs}'
-LEFT JOIN INV1 l ON l.ItemCode = i.ItemCode
-LEFT JOIN OINV h ON h.DocEntry  = l.DocEntry
-                AND h.DocDate  >= DATEADD(day, -90, GETDATE())
-                AND ISNULL(h.CANCELED, 'N') = 'N'
-WHERE i.frozenFor = 'N'
-  AND TRY_CONVERT(INT, i.ItemCode) IS NOT NULL
+WHERE {itemFilter}
 GROUP BY i.ItemCode, i.ItemName, w.OnHand, w.IsCommited
 ORDER BY i.ItemCode
 ");
