@@ -786,16 +786,14 @@ using (var scope = app.Services.CreateScope())
         Log.Warning("Migrations did not complete within 20 s — service will start anyway.");
 }
 
-if (app.Environment.IsDevelopment())
+app.UseSwagger();
+app.UseSwaggerUI(options =>
 {
-    app.UseSwagger();
-    app.UseSwaggerUI(options =>
-    {
-        options.EnablePersistAuthorization();
-    });
-    app.MapOpenApi();
-}
-else
+    options.EnablePersistAuthorization();
+});
+app.MapOpenApi();
+
+if (!app.Environment.IsDevelopment())
 {
     app.UseHttpsRedirection();
 }

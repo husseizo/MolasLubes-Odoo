@@ -44,6 +44,63 @@ public class LiquiMolyTransferSyncService
     }
 
     /// <summary>
+    /// Watermark-based scan: reads all OWTQ/OWTR documents updated since the last sync
+    /// and upserts them to Neon. Does not touch SapEventOutbox at all.
+    /// On first run (empty table) it fetches the full history from SAP.
+    /// </summary>
+    public async Task ScanAndUpsertAsync(CancellationToken ct = default)
+    {
+        // Watermark = last SyncedAt minus 1-day buffer for late SAP updates
+        var lastSync = await _neon.LiquiMolyTransfers
+            .MaxAsync(h => (DateTime?)h.SyncedAt, ct);
+
+        var fromDate = lastSync.HasValue
+            ? lastSync.Value.AddDays(-1)
+            : DateTime.UtcNow.AddYears(-2);   // first run: full history
+
+        IReadOnlyList<SapTransferDocumentDto> docs;
+        try
+        {
+            docs = _reader.ReadTransfersSince(fromDate);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "LiquiMolyTransferSync: SAP scan failed from {From}", fromDate);
+            return;
+        }
+
+        if (docs.Count == 0)
+        {
+            _logger.LogDebug("LiquiMolyTransferSync: no transfers updated since {From}", fromDate);
+            return;
+        }
+
+        _logger.LogInformation(
+            "LiquiMolyTransferSync: SAP returned {Count} transfers since {From}",
+            docs.Count, fromDate.ToString("yyyy-MM-dd"));
+
+        var synced = 0;
+        foreach (var doc in docs)
+        {
+            try
+            {
+                await UpsertTransferAsync(doc, ct);
+                synced++;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "LiquiMolyTransferSync: Neon upsert failed for {DocType} DocEntry={DE}",
+                    doc.DocType, doc.DocEntry);
+            }
+        }
+
+        _logger.LogInformation(
+            "LiquiMolyTransferSync: upserted {Synced}/{Total} transfers to Neon",
+            synced, docs.Count);
+    }
+
+    /// <summary>
     /// Claims one batch of pending outbox events, reads the SAP documents, and upserts Neon.
     /// Call this in a tight loop (it returns when the batch is exhausted).
     /// </summary>

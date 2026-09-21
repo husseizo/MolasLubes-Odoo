@@ -8,9 +8,9 @@ using System.Diagnostics;
 namespace MolasLubes.Infrastructure.Scheduling.Jobs;
 
 /// <summary>
-/// Drains the SapEventOutbox for OWTQ / OWTR events and syncs them to Neon.
+/// Watermark-based scan of SAP OWTQ/OWTR documents → Neon upsert.
 /// Runs every 2 minutes during business hours. DisallowConcurrentExecution ensures
-/// no two runs overlap (important: SAP DI API is serialised via a critical section).
+/// no two runs overlap (SAP DI API is serialised via a critical section).
 /// </summary>
 [DisallowConcurrentExecution]
 public class LiquiMolyTransferSyncJob : IJob
@@ -37,7 +37,7 @@ public class LiquiMolyTransferSyncJob : IJob
             var service = scope.ServiceProvider
                 .GetRequiredService<LiquiMolyTransferSyncService>();
 
-            await service.ProcessPendingAsync(context.CancellationToken);
+            await service.ScanAndUpsertAsync(context.CancellationToken);
 
             sw.Stop();
             _logger.LogInformation(
