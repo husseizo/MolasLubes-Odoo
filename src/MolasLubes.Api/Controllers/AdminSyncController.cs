@@ -137,6 +137,17 @@ public class AdminSyncController : ControllerBase
     }
 
     // -------------------------------------------------
+    // LIQUIMOLY TRANSFER SYNC (OWTQ / OWTR → Neon)
+    // -------------------------------------------------
+    [HttpPost("sap/liquimoly/transfers")]
+    public async Task<IActionResult> TriggerLiquiMolyTransferSync()
+    {
+        var scheduler = await _schedulerFactory.GetScheduler();
+        await scheduler.TriggerJob(new JobKey("LiquiMolyTransferSyncJob"));
+        return Ok(new { message = "LiquiMolyTransferSyncJob triggered — check logs for progress" });
+    }
+
+    // -------------------------------------------------
     // TANTIVY PARTS — VIKA / BORSEHUNG / DPA
     // Full upsert from AutoHub SAP into Tantivy_parts
     // -------------------------------------------------

@@ -630,8 +630,16 @@ builder.Services.AddQuartz(q =>
         "25 */5 3-16 ? * *");                                                               // every 5 min, 06:00–20:00 EAT
 
     if (syncSettings.EnableLiquiMolyTransferSync)
-        RegisterJob<MolasLubes.Infrastructure.Scheduling.Jobs.LiquiMolyTransferSyncJob>(
-            "LiquiMolyTransferSyncJob", "0 */2 3-16 ? * *");                               // every 2 min, 06:00–20:00 EAT
+    {
+        // StoreDurably so POST /api/admin/sync/sap/liquimoly/transfers can fire it outside cron window
+        q.AddJob<MolasLubes.Infrastructure.Scheduling.Jobs.LiquiMolyTransferSyncJob>(opts =>
+            opts.WithIdentity("LiquiMolyTransferSyncJob").StoreDurably());
+
+        q.AddTrigger(t => t
+            .ForJob(new JobKey("LiquiMolyTransferSyncJob"))
+            .WithIdentity("LiquiMolyTransferSyncJob-trigger")
+            .WithCronSchedule("0 */2 3-16 ? * *"));                                        // every 2 min, 06:00–19:00 EAT
+    }
 
     // Durable manual-only full sync
     q.AddJob<CustomerFullSyncJob>(opts =>

@@ -62,7 +62,7 @@ public class SapLiquiMolyTransferReader
 
                     foreach (var (docType, hdrTable, lineTable) in new[]
                     {
-                        ("OWTQ", "OWTQ", "OWTQ1"),
+                        ("OWTQ", "OWTQ", "WTQ1"),
                         ("OWTR", "OWTR", "WTR1")
                     })
                     {
@@ -72,8 +72,8 @@ SELECT h.DocEntry, h.DocNum,
        ISNULL(h.DocDate,    '1970-01-01') AS DocDate,
        ISNULL(h.TaxDate,    '1970-01-01') AS TaxDate,
        ISNULL(h.DocDueDate, '1970-01-01') AS DocDueDate,
-       ISNULL(h.fWhsCode, '') AS fWhsCode,
-       ISNULL(h.tWhsCode, '') AS tWhsCode,
+       ''                                 AS fWhsCode,
+       ISNULL(h.ToWhsCode,  '')           AS tWhsCode,
        h.Comments,
        ISNULL(h.DocStatus, 'O') AS DocStatus,
        h.UserSign,
@@ -87,18 +87,18 @@ WHERE h.UpdateDate >= '{fromDateStr}'");
 
                         while (!rs.EoF)
                         {
-                            var de = ToInt(rs.Fields.Item("DocEntry").Value);
+                            var de = ToInt((object)rs.Fields.Item("DocEntry").Value);
                             headers[de] = (
-                                DocNum:     ToInt(rs.Fields.Item("DocNum").Value),
-                                DocDate:    ToDate(rs.Fields.Item("DocDate").Value)!.Value,
-                                TaxDate:    ToDate(rs.Fields.Item("TaxDate").Value),
-                                DocDueDate: ToDate(rs.Fields.Item("DocDueDate").Value),
-                                From:       rs.Fields.Item("fWhsCode").Value?.ToString() ?? "",
-                                To:         rs.Fields.Item("tWhsCode").Value?.ToString() ?? "",
-                                Comments:   NullIfEmpty(rs.Fields.Item("Comments").Value?.ToString()),
-                                Status:     rs.Fields.Item("DocStatus").Value?.ToString() ?? "O",
-                                UserSign:   ToNullableInt(rs.Fields.Item("UserSign").Value),
-                                Total:      ToDecimal(rs.Fields.Item("DocTotal").Value));
+                                DocNum:     ToInt((object)rs.Fields.Item("DocNum").Value),
+                                DocDate:    ToDate((object)rs.Fields.Item("DocDate").Value)!.Value,
+                                TaxDate:    ToDate((object)rs.Fields.Item("TaxDate").Value),
+                                DocDueDate: ToDate((object)rs.Fields.Item("DocDueDate").Value),
+                                From:       ((object)rs.Fields.Item("fWhsCode").Value)?.ToString() ?? "",
+                                To:         ((object)rs.Fields.Item("tWhsCode").Value)?.ToString() ?? "",
+                                Comments:   NullIfEmpty(((object)rs.Fields.Item("Comments").Value)?.ToString()),
+                                Status:     ((object)rs.Fields.Item("DocStatus").Value)?.ToString() ?? "O",
+                                UserSign:   ToNullableInt((object)rs.Fields.Item("UserSign").Value),
+                                Total:      ToDecimal((object)rs.Fields.Item("DocTotal").Value));
                             rs.MoveNext();
                         }
 
@@ -113,8 +113,8 @@ SELECT l.DocEntry, l.LineNum, l.ItemCode,
        ISNULL(l.Quantity,    0) AS Quantity,
        ISNULL(l.OpenQty,     0) AS OpenQty,
        l.uomCode,
-       ISNULL(l.FromWhsCode, '') AS FromWhsCode,
-       ISNULL(l.ToWhsCode,   '') AS ToWhsCode,
+       ISNULL(l.FromWhsCod,  '') AS FromWhsCode,
+       ISNULL(l.WhsCode,     '') AS ToWhsCode,
        l.Price, l.LineTotal,
        l.BaseType, l.BaseEntry, l.BaseLine
 FROM {lineTable} l
@@ -124,25 +124,25 @@ ORDER BY l.DocEntry, l.LineNum");
                         var linesByDoc = new Dictionary<int, List<SapTransferLineDto>>();
                         while (!rs.EoF)
                         {
-                            var de = ToInt(rs.Fields.Item("DocEntry").Value);
+                            var de = ToInt((object)rs.Fields.Item("DocEntry").Value);
                             if (!linesByDoc.TryGetValue(de, out List<SapTransferLineDto>? bucket))
                                 linesByDoc[de] = bucket = new List<SapTransferLineDto>();
 
                             bucket.Add(new SapTransferLineDto(
                                 DocEntry:    de,
-                                LineNum:     ToInt(rs.Fields.Item("LineNum").Value),
-                                ItemCode:    rs.Fields.Item("ItemCode").Value?.ToString() ?? "",
-                                Description: NullIfEmpty(rs.Fields.Item("Dscription").Value?.ToString()),
-                                Quantity:    ToDecimal(rs.Fields.Item("Quantity").Value),
-                                OpenQty:     ToDecimal(rs.Fields.Item("OpenQty").Value),
-                                UomCode:     NullIfEmpty(rs.Fields.Item("uomCode").Value?.ToString()),
-                                FromWhsCode: NullIfEmpty(rs.Fields.Item("FromWhsCode").Value?.ToString()),
-                                ToWhsCode:   NullIfEmpty(rs.Fields.Item("ToWhsCode").Value?.ToString()),
-                                Price:       ToNullableDecimal(rs.Fields.Item("Price").Value),
-                                LineTotal:   ToNullableDecimal(rs.Fields.Item("LineTotal").Value),
-                                BaseType:    ToNullableInt(rs.Fields.Item("BaseType").Value),
-                                BaseEntry:   ToNullableInt(rs.Fields.Item("BaseEntry").Value),
-                                BaseLine:    ToNullableInt(rs.Fields.Item("BaseLine").Value)));
+                                LineNum:     ToInt((object)rs.Fields.Item("LineNum").Value),
+                                ItemCode:    ((object)rs.Fields.Item("ItemCode").Value)?.ToString() ?? "",
+                                Description: NullIfEmpty(((object)rs.Fields.Item("Dscription").Value)?.ToString()),
+                                Quantity:    ToDecimal((object)rs.Fields.Item("Quantity").Value),
+                                OpenQty:     ToDecimal((object)rs.Fields.Item("OpenQty").Value),
+                                UomCode:     NullIfEmpty(((object)rs.Fields.Item("uomCode").Value)?.ToString()),
+                                FromWhsCode: NullIfEmpty(((object)rs.Fields.Item("FromWhsCode").Value)?.ToString()),
+                                ToWhsCode:   NullIfEmpty(((object)rs.Fields.Item("ToWhsCode").Value)?.ToString()),
+                                Price:       ToNullableDecimal((object)rs.Fields.Item("Price").Value),
+                                LineTotal:   ToNullableDecimal((object)rs.Fields.Item("LineTotal").Value),
+                                BaseType:    ToNullableInt((object)rs.Fields.Item("BaseType").Value),
+                                BaseEntry:   ToNullableInt((object)rs.Fields.Item("BaseEntry").Value),
+                                BaseLine:    ToNullableInt((object)rs.Fields.Item("BaseLine").Value)));
 
                             rs.MoveNext();
                         }
@@ -225,7 +225,7 @@ ORDER BY l.DocEntry, l.LineNum");
                         var inList      = string.Join(",", entries);
                         var (hdrTable, lineTable) = docType == "OWTR"
                             ? ("OWTR", "WTR1")
-                            : ("OWTQ", "OWTQ1");
+                            : ("OWTQ", "WTQ1");
 
                         // ── Headers ──────────────────────────────────────────
                         rs.DoQuery($@"
@@ -233,8 +233,8 @@ SELECT h.DocEntry, h.DocNum,
        ISNULL(h.DocDate,    '1970-01-01') AS DocDate,
        ISNULL(h.TaxDate,    '1970-01-01') AS TaxDate,
        ISNULL(h.DocDueDate, '1970-01-01') AS DocDueDate,
-       ISNULL(h.fWhsCode, '') AS fWhsCode,
-       ISNULL(h.tWhsCode, '') AS tWhsCode,
+       ''                                 AS fWhsCode,
+       ISNULL(h.ToWhsCode,  '')           AS tWhsCode,
        h.Comments,
        ISNULL(h.DocStatus, 'O') AS DocStatus,
        h.UserSign,
@@ -248,18 +248,18 @@ WHERE h.DocEntry IN ({inList})");
 
                         while (!rs.EoF)
                         {
-                            var de = ToInt(rs.Fields.Item("DocEntry").Value);
+                            var de = ToInt((object)rs.Fields.Item("DocEntry").Value);
                             headers[de] = (
-                                DocNum:    ToInt(rs.Fields.Item("DocNum").Value),
-                                DocDate:   ToDate(rs.Fields.Item("DocDate").Value)!.Value,
-                                TaxDate:   ToDate(rs.Fields.Item("TaxDate").Value),
-                                DocDueDate:ToDate(rs.Fields.Item("DocDueDate").Value),
-                                From:      rs.Fields.Item("fWhsCode").Value?.ToString() ?? "",
-                                To:        rs.Fields.Item("tWhsCode").Value?.ToString() ?? "",
-                                Comments:  NullIfEmpty(rs.Fields.Item("Comments").Value?.ToString()),
-                                Status:    rs.Fields.Item("DocStatus").Value?.ToString() ?? "O",
-                                UserSign:  ToNullableInt(rs.Fields.Item("UserSign").Value),
-                                Total:     ToDecimal(rs.Fields.Item("DocTotal").Value));
+                                DocNum:    ToInt((object)rs.Fields.Item("DocNum").Value),
+                                DocDate:   ToDate((object)rs.Fields.Item("DocDate").Value)!.Value,
+                                TaxDate:   ToDate((object)rs.Fields.Item("TaxDate").Value),
+                                DocDueDate:ToDate((object)rs.Fields.Item("DocDueDate").Value),
+                                From:      ((object)rs.Fields.Item("fWhsCode").Value)?.ToString() ?? "",
+                                To:        ((object)rs.Fields.Item("tWhsCode").Value)?.ToString() ?? "",
+                                Comments:  NullIfEmpty(((object)rs.Fields.Item("Comments").Value)?.ToString()),
+                                Status:    ((object)rs.Fields.Item("DocStatus").Value)?.ToString() ?? "O",
+                                UserSign:  ToNullableInt((object)rs.Fields.Item("UserSign").Value),
+                                Total:     ToDecimal((object)rs.Fields.Item("DocTotal").Value));
 
                             rs.MoveNext();
                         }
@@ -273,8 +273,8 @@ SELECT l.DocEntry, l.LineNum, l.ItemCode,
        ISNULL(l.Quantity,    0) AS Quantity,
        ISNULL(l.OpenQty,     0) AS OpenQty,
        l.uomCode,
-       ISNULL(l.FromWhsCode, '') AS FromWhsCode,
-       ISNULL(l.ToWhsCode,   '') AS ToWhsCode,
+       ISNULL(l.FromWhsCod,  '') AS FromWhsCode,
+       ISNULL(l.WhsCode,     '') AS ToWhsCode,
        l.Price, l.LineTotal,
        l.BaseType, l.BaseEntry, l.BaseLine
 FROM {lineTable} l
@@ -284,25 +284,25 @@ ORDER BY l.DocEntry, l.LineNum");
                         var linesByDoc = new Dictionary<int, List<SapTransferLineDto>>();
                         while (!rs.EoF)
                         {
-                            var de = ToInt(rs.Fields.Item("DocEntry").Value);
+                            var de = ToInt((object)rs.Fields.Item("DocEntry").Value);
                             if (!linesByDoc.TryGetValue(de, out List<SapTransferLineDto>? bucket))
                                 linesByDoc[de] = bucket = new List<SapTransferLineDto>();
 
                             bucket.Add(new SapTransferLineDto(
                                 DocEntry:    de,
-                                LineNum:     ToInt(rs.Fields.Item("LineNum").Value),
-                                ItemCode:    rs.Fields.Item("ItemCode").Value?.ToString() ?? "",
-                                Description: NullIfEmpty(rs.Fields.Item("Dscription").Value?.ToString()),
-                                Quantity:    ToDecimal(rs.Fields.Item("Quantity").Value),
-                                OpenQty:     ToDecimal(rs.Fields.Item("OpenQty").Value),
-                                UomCode:     NullIfEmpty(rs.Fields.Item("uomCode").Value?.ToString()),
-                                FromWhsCode: NullIfEmpty(rs.Fields.Item("FromWhsCode").Value?.ToString()),
-                                ToWhsCode:   NullIfEmpty(rs.Fields.Item("ToWhsCode").Value?.ToString()),
-                                Price:       ToNullableDecimal(rs.Fields.Item("Price").Value),
-                                LineTotal:   ToNullableDecimal(rs.Fields.Item("LineTotal").Value),
-                                BaseType:    ToNullableInt(rs.Fields.Item("BaseType").Value),
-                                BaseEntry:   ToNullableInt(rs.Fields.Item("BaseEntry").Value),
-                                BaseLine:    ToNullableInt(rs.Fields.Item("BaseLine").Value)));
+                                LineNum:     ToInt((object)rs.Fields.Item("LineNum").Value),
+                                ItemCode:    ((object)rs.Fields.Item("ItemCode").Value)?.ToString() ?? "",
+                                Description: NullIfEmpty(((object)rs.Fields.Item("Dscription").Value)?.ToString()),
+                                Quantity:    ToDecimal((object)rs.Fields.Item("Quantity").Value),
+                                OpenQty:     ToDecimal((object)rs.Fields.Item("OpenQty").Value),
+                                UomCode:     NullIfEmpty(((object)rs.Fields.Item("uomCode").Value)?.ToString()),
+                                FromWhsCode: NullIfEmpty(((object)rs.Fields.Item("FromWhsCode").Value)?.ToString()),
+                                ToWhsCode:   NullIfEmpty(((object)rs.Fields.Item("ToWhsCode").Value)?.ToString()),
+                                Price:       ToNullableDecimal((object)rs.Fields.Item("Price").Value),
+                                LineTotal:   ToNullableDecimal((object)rs.Fields.Item("LineTotal").Value),
+                                BaseType:    ToNullableInt((object)rs.Fields.Item("BaseType").Value),
+                                BaseEntry:   ToNullableInt((object)rs.Fields.Item("BaseEntry").Value),
+                                BaseLine:    ToNullableInt((object)rs.Fields.Item("BaseLine").Value)));
 
                             rs.MoveNext();
                         }
