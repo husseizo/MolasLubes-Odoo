@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
 
 namespace MolasLubes.Tests.Infrastructure;
@@ -5,9 +6,16 @@ namespace MolasLubes.Tests.Infrastructure;
 /// <summary>
 /// Integration tests that guard against code/schema drift on CacheLiquiMolyTransfers.
 ///
-/// These tests connect to the live SQL Server database identified by the
-/// MOLASLUBES_CACHE_DB_CONN environment variable. They are skipped automatically
-/// when that variable is not set so that CI without a database does not fail.
+/// Environment variables:
+///   MOLASLUBES_CACHE_DB_CONN          — SQL Server connection string for MolasCacheDb.
+///   MOLASLUBES_REQUIRE_CACHE_DB_TESTS — Set to "true" to fail (not skip) when the
+///                                       connection string is absent. Use this in CI
+///                                       release-verification pipelines.
+///
+/// Skip/fail semantics:
+///   Connection string present                         → run integration tests normally
+///   Connection string absent + REQUIRE flag false/unset → genuinely SKIP (xUnit Skipped)
+///   Connection string absent + REQUIRE flag true       → FAIL with actionable message
 ///
 /// To run locally:
 ///   $env:MOLASLUBES_CACHE_DB_CONN = "Server=.;Database=MolasCacheDb;User Id=sa;Password=...;TrustServerCertificate=True"
@@ -15,9 +23,8 @@ namespace MolasLubes.Tests.Infrastructure;
 /// </summary>
 public class CacheLiquiMolyTransferSchemaTests
 {
-    // All columns the EF model expects to be present on CacheLiquiMolyTransfers.
-    // When new columns are added to CacheLiquiMolyTransfer.cs (and a matching
-    // migration is created), add them here too so the drift test stays accurate.
+    // All columns the EF model expects on CacheLiquiMolyTransfers.
+    // When new columns are added to CacheLiquiMolyTransfer.cs + migration, add them here.
     private static readonly (string Column, string DataType)[] ExpectedColumns =
     [
         ("Id",                        "int"),
@@ -43,19 +50,57 @@ public class CacheLiquiMolyTransferSchemaTests
         ("InventoryTransferDocNum",   "nvarchar"),
     ];
 
+    // ----------------------------------------------------------------
+    // Environment / connection helpers — shared by all three tests
+    // ----------------------------------------------------------------
+
     private static string? ConnectionString =>
         Environment.GetEnvironmentVariable("MOLASLUBES_CACHE_DB_CONN");
 
-    [Fact]
+    private static bool RequireDb =>
+        string.Equals(
+            Environment.GetEnvironmentVariable("MOLASLUBES_REQUIRE_CACHE_DB_TESTS"),
+            "true",
+            StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Returns the connection string when available, otherwise:
+    ///   • Calls Skip.If(true, …) when REQUIRE flag is false/unset → xUnit reports Skipped
+    ///   • Calls Assert.True(false, …) when REQUIRE flag is true   → xUnit reports Failed
+    ///
+    /// Each test method must carry [SkippableFact] (not [Fact]) for the skip to register
+    /// correctly with the runner; [Fact] would treat SkipException as an unexpected failure.
+    /// Both branches always throw; the trailing throw satisfies the compiler.
+    /// </summary>
+    private static string RequireConnectionString()
+    {
+        var cs = ConnectionString;
+        if (cs is not null)
+            return cs;
+
+        const string message =
+            "MOLASLUBES_CACHE_DB_CONN is not set. " +
+            "Set it to 'Server=.;Database=MolasCacheDb;User Id=...;Password=...;TrustServerCertificate=True' " +
+            "to run DB integration tests. " +
+            "Set MOLASLUBES_REQUIRE_CACHE_DB_TESTS=true to make this absence a hard failure in CI.";
+
+        if (RequireDb)
+            Assert.Fail(message);    // XunitException → test reported as Failed
+        else
+            Skip.If(true, message);  // SkipException  → test reported as Skipped (requires [SkippableFact])
+
+        throw new InvalidOperationException("unreachable — both branches always throw");
+    }
+
+    // ----------------------------------------------------------------
+    // Tests
+    // ----------------------------------------------------------------
+
+    [SkippableFact]
     public void AllExpectedColumns_ExistOnLiveDatabase()
     {
-        if (ConnectionString is null)
-        {
-            // Not a failure — skip gracefully when running without a database.
-            return;
-        }
-
-        var actual = GetActualColumns();
+        var cs     = RequireConnectionString();
+        var actual = GetActualColumns(cs);
 
         var missing = ExpectedColumns
             .Where(e => !actual.ContainsKey(e.Column))
@@ -67,12 +112,11 @@ public class CacheLiquiMolyTransferSchemaTests
             $"migration not applied? Missing: {string.Join(", ", missing.Select(m => m.Column))}");
     }
 
-    [Fact]
+    [SkippableFact]
     public void AllExpectedColumns_HaveCorrectDataType()
     {
-        if (ConnectionString is null) return;
-
-        var actual = GetActualColumns();
+        var cs        = RequireConnectionString();
+        var actual    = GetActualColumns(cs);
         var mismatched = new List<string>();
 
         foreach (var (col, expectedType) in ExpectedColumns)
@@ -87,38 +131,82 @@ public class CacheLiquiMolyTransferSchemaTests
             $"CacheLiquiMolyTransfers has type mismatches: {string.Join(", ", mismatched)}");
     }
 
-    [Fact]
+    /// <summary>
+    /// Verifies that every migration present in the source tree is also recorded in
+    /// __EFMigrationsHistory on the live database.
+    ///
+    /// Migration IDs are discovered by scanning the Infrastructure Migrations directory
+    /// on disk (filename stem = migration ID by EF convention). This avoids maintaining
+    /// a duplicate hard-coded list: any new migration file is automatically included.
+    ///
+    /// Note: MolasLubes.Infrastructure cannot be referenced as a ProjectReference from
+    /// the test project because it has a COMReference (SAPbobsCOM) that CoreMSBuild
+    /// cannot resolve. Filesystem scanning gives us the same dynamic discovery that
+    /// context.Database.GetPendingMigrations() would provide.
+    /// </summary>
+    [SkippableFact]
     public void NoPendingMigrations_OnLiveDatabase()
     {
-        if (ConnectionString is null) return;
+        var cs = RequireConnectionString();
 
-        // Read __EFMigrationsHistory and compare against the migration files
-        // embedded in the assembly at compile time.
-        // This test fails if a migration exists in code but is absent from the DB.
-        var appliedIds = GetAppliedMigrationIds();
+        var codeIds = DiscoverMigrationIds();
 
-        // Known migrations for MolasCacheDb — update when adding new migrations.
-        var expectedMigrationIds = new[]
-        {
-            "20260518090000_AddLiquiMolyProductBarcodeInfo",
-            "20260515100000_AddLiquiMolyProductContentSections",
-            "20260525085113_AddNotificationDeviceTokens",
-            "20260623100000_AddEanCodeToLiquiMolyProducts",
-            "20260625100000_AddInternalUserManagement",
-            "20260925000001_AddTransferRequestLinkColumns",
-        };
+        Assert.True(
+            codeIds.Count > 0,
+            "No migration files were found — the migrations directory path may be wrong. " +
+            $"Looked in: {MigrationsDir}");
 
-        var missing = expectedMigrationIds
+        var appliedIds = GetAppliedMigrationIds(cs);
+
+        var pending = codeIds
             .Where(id => !appliedIds.Contains(id))
+            .OrderBy(id => id)
             .ToList();
 
         Assert.True(
-            missing.Count == 0,
-            $"Live database is missing {missing.Count} migration(s) from __EFMigrationsHistory: " +
-            string.Join(", ", missing));
+            pending.Count == 0,
+            $"Live MolasCacheDb has {pending.Count} pending migration(s):\n" +
+            string.Join("\n", pending));
     }
 
-    private static Dictionary<string, string> GetActualColumns()
+    // ----------------------------------------------------------------
+    // Infrastructure helpers
+    // ----------------------------------------------------------------
+
+    private static string MigrationsDir
+    {
+        get
+        {
+            // Navigate from the test assembly output directory to the Infrastructure
+            // Migrations folder in the source tree.
+            //   AppContext.BaseDirectory = .../tests/MolasLubes.Tests/bin/<cfg>/<tfm>/
+            //   Five ".." levels reach the repository root.
+            var asmDir = AppContext.BaseDirectory;
+            var root   = Path.GetFullPath(Path.Combine(asmDir, "..", "..", "..", "..", ".."));
+            return Path.Combine(root, "src", "MolasLubes.Infrastructure", "Migrations");
+        }
+    }
+
+    private static IReadOnlyList<string> DiscoverMigrationIds()
+    {
+        var dir = MigrationsDir;
+        if (!Directory.Exists(dir))
+            return [];
+
+        // EF migration filenames: <14-digit-timestamp>_<Name>.cs
+        // Exclude Designer files (.Designer.cs → stem ends with "Designer" after the name)
+        // and the ModelSnapshot file.
+        return Directory.GetFiles(dir, "*.cs")
+            .Select(f => Path.GetFileNameWithoutExtension(f)!)
+            .Where(stem =>
+                Regex.IsMatch(stem, @"^\d{14}_") &&
+                !stem.EndsWith("Designer",      StringComparison.OrdinalIgnoreCase) &&
+                !stem.EndsWith("ModelSnapshot", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(stem => stem)
+            .ToList();
+    }
+
+    private static Dictionary<string, string> GetActualColumns(string connectionString)
     {
         const string sql = """
             SELECT COLUMN_NAME, DATA_TYPE
@@ -127,7 +215,7 @@ public class CacheLiquiMolyTransferSchemaTests
             """;
 
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        using var conn = new SqlConnection(ConnectionString);
+        using var conn = new SqlConnection(connectionString);
         conn.Open();
         using var cmd = new SqlCommand(sql, conn);
         using var rdr = cmd.ExecuteReader();
@@ -137,11 +225,11 @@ public class CacheLiquiMolyTransferSchemaTests
         return result;
     }
 
-    private static HashSet<string> GetAppliedMigrationIds()
+    private static HashSet<string> GetAppliedMigrationIds(string connectionString)
     {
         const string sql = "SELECT MigrationId FROM __EFMigrationsHistory";
         var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        using var conn = new SqlConnection(ConnectionString);
+        using var conn = new SqlConnection(connectionString);
         conn.Open();
         using var cmd = new SqlCommand(sql, conn);
         using var rdr = cmd.ExecuteReader();
