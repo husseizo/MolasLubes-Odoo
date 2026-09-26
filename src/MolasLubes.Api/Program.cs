@@ -751,48 +751,91 @@ using (var scope = app.Services.CreateScope())
 {
     var cfg = builder.Configuration;
 
-    // Build the list of migrations to run (skip unconfigured ones).
-    var migrations = new List<(string Label, Action Migrate)>();
+    // ── helpers ──────────────────────────────────────────────────────────────
+
+    // Runs a migration synchronously. Logs pending migrations before and after.
+    // Throws on failure — caller decides whether that is fatal.
+    static void RunMigration(string label, Microsoft.EntityFrameworkCore.DbContext ctx)
+    {
+        var pending = ctx.Database.GetPendingMigrations().ToList();
+        if (pending.Count == 0)
+        {
+            Log.Information("Migration check {Label}: schema up-to-date, no pending migrations", label);
+            return;
+        }
+
+        Log.Information("Migration check {Label}: {Count} pending — {Migrations}",
+            label, pending.Count, string.Join(", ", pending));
+
+        ctx.Database.Migrate();
+
+        var stillPending = ctx.Database.GetPendingMigrations().ToList();
+        if (stillPending.Count != 0)
+            throw new InvalidOperationException(
+                $"Database.Migrate() completed but {stillPending.Count} migration(s) remain unapplied on {label}: " +
+                string.Join(", ", stillPending));
+
+        Log.Information("Migration {Label}: applied {Count} migration(s) — {Migrations}",
+            label, pending.Count, string.Join(", ", pending));
+    }
+
+    // ── critical databases — startup fails if migration fails ─────────────────
 
     var sqlConn = cfg.GetConnectionString("MolasCacheDb");
     if (!string.IsNullOrWhiteSpace(sqlConn) && !sqlConn.StartsWith("CHANGE_ME"))
-        migrations.Add(("MolasCacheDb",     () => scope.ServiceProvider.GetRequiredService<MolasCacheDbContext>().Database.Migrate()));
+    {
+        // Synchronous, no timeout — a pending migration must complete before the
+        // service accepts requests. An unhandled exception here crashes the process.
+        RunMigration("MolasCacheDb", scope.ServiceProvider.GetRequiredService<MolasCacheDbContext>());
+    }
     else
+    {
         Log.Warning("MolasCacheDb connection string is not configured — skipping SQL Server migration.");
+    }
 
     var neonConn = cfg.GetConnectionString("NeonDb");
     if (!string.IsNullOrWhiteSpace(neonConn) && !neonConn.StartsWith("CHANGE_ME"))
-        migrations.Add(("NeonDb",           () => scope.ServiceProvider.GetRequiredService<NeonDbContext>().Database.Migrate()));
+    {
+        RunMigration("NeonDb", scope.ServiceProvider.GetRequiredService<NeonDbContext>());
+    }
     else
+    {
         Log.Warning("NeonDb connection string is not configured — skipping PostgreSQL migration.");
+    }
+
+    // ── optional profile databases — warn and continue ────────────────────────
+
+    var optionalMigrations = new List<(string Label, Func<Microsoft.EntityFrameworkCore.DbContext> GetCtx)>();
 
     var live2021CacheConn = cfg["IntegrationProfiles:Profiles:AutoHub:ConnectionStrings:CacheDb"];
     if (!string.IsNullOrWhiteSpace(live2021CacheConn) && !live2021CacheConn.StartsWith("CHANGE_ME"))
-        migrations.Add(("Live2021CacheDb",  () => scope.ServiceProvider.GetRequiredService<Live2021CacheDbContext>().Database.Migrate()));
+        optionalMigrations.Add(("Live2021CacheDb", () => scope.ServiceProvider.GetRequiredService<Live2021CacheDbContext>()));
     else
         Log.Warning("AutoHub CacheDb connection string is not configured — skipping Live2021Cache migration.");
 
     var autoHubNeonConn = cfg["IntegrationProfiles:Profiles:AutoHub:ConnectionStrings:NeonDb"];
     if (!string.IsNullOrWhiteSpace(autoHubNeonConn) && !autoHubNeonConn.StartsWith("CHANGE_ME"))
-        migrations.Add(("AutoHubNeonDb",    () => scope.ServiceProvider.GetRequiredService<AutoHubDbContext>().Database.Migrate()));
+        optionalMigrations.Add(("AutoHubNeonDb", () => scope.ServiceProvider.GetRequiredService<AutoHubDbContext>()));
     else
         Log.Warning("AutoHub NeonDb connection string is not configured — skipping Parts_Catalog migration.");
 
-    // Run all migrations in a background thread with a 20-second total budget so
-    // the Windows Service startup timeout (30 s) is never hit. When DBs already
-    // exist and are up-to-date this completes in < 1 s; the time cap only applies
-    // when a DB server is unreachable (connection timeout), which is non-fatal.
-    var migTask = Task.Run(() =>
+    if (optionalMigrations.Count > 0)
     {
-        foreach (var (label, migrate) in migrations)
+        // Run optional migrations in a background thread with a 20-second budget.
+        // Failure only logs a warning — these databases are profile-specific and
+        // the service remains operational without them.
+        var optTask = Task.Run(() =>
         {
-            try { migrate(); Log.Information("Migration applied: {Label}", label); }
-            catch (Exception ex) { Log.Warning(ex, "Migration skipped — {Label}: {Message}", label, ex.Message); }
-        }
-    });
+            foreach (var (label, getCtx) in optionalMigrations)
+            {
+                try { RunMigration(label, getCtx()); }
+                catch (Exception ex) { Log.Warning(ex, "Migration skipped — {Label}: {Message}", label, ex.Message); }
+            }
+        });
 
-    if (!migTask.Wait(TimeSpan.FromSeconds(20)))
-        Log.Warning("Migrations did not complete within 20 s — service will start anyway.");
+        if (!optTask.Wait(TimeSpan.FromSeconds(20)))
+            Log.Warning("Optional profile migrations did not complete within 20 s — service will start anyway.");
+    }
 }
 
 app.UseSwagger();
