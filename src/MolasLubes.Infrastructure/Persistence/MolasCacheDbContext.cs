@@ -472,13 +472,20 @@ public class MolasCacheDbContext : DbContext
             entity.Property(x => x.SourceWarehouse).HasMaxLength(20).IsRequired();
             entity.Property(x => x.TargetWarehouse).HasMaxLength(20).IsRequired();
             entity.Property(x => x.Comments).HasMaxLength(500);
+            entity.Property(x => x.ClientReference).HasMaxLength(64);
+            entity.Property(x => x.ActorSapUserCode).HasMaxLength(50);
+            entity.Property(x => x.BaseRequestDocNum).HasMaxLength(20);
             entity.Property(x => x.GoodsIssueDocNum).HasMaxLength(20);
             entity.Property(x => x.GoodsReceiptDocNum).HasMaxLength(20);
+            entity.Property(x => x.InventoryTransferDocNum).HasMaxLength(20);
             entity.Property(x => x.Status).HasMaxLength(20).IsRequired();
             entity.Property(x => x.ErrorMessage).HasMaxLength(1000);
 
             entity.HasIndex(x => x.Status)
                   .HasDatabaseName("IX_CacheLiquiMolyTransfers_Status");
+
+            entity.HasIndex(x => x.ClientReference)
+                  .HasDatabaseName("IX_CacheLiquiMolyTransfers_ClientReference");
         });
 
         modelBuilder.Entity<CacheLiquiMolyTransferLine>(entity =>

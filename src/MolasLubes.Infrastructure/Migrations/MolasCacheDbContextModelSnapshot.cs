@@ -757,6 +757,21 @@ namespace MolasLubes.Infrastructure.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime2");
 
+                    b.Property<string>("ActorSapUserCode")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<int?>("BaseRequestDocEntry")
+                        .HasColumnType("int");
+
+                    b.Property<string>("BaseRequestDocNum")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("ClientReference")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
                     b.Property<string>("ErrorMessage")
                         .HasMaxLength(1000)
                         .HasColumnType("nvarchar(1000)");
@@ -772,6 +787,13 @@ namespace MolasLubes.Infrastructure.Migrations
                         .HasColumnType("int");
 
                     b.Property<string>("GoodsReceiptDocNum")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<int?>("InventoryTransferDocEntry")
+                        .HasColumnType("int");
+
+                    b.Property<string>("InventoryTransferDocNum")
                         .HasMaxLength(20)
                         .HasColumnType("nvarchar(20)");
 
@@ -806,6 +828,9 @@ namespace MolasLubes.Infrastructure.Migrations
                         .HasColumnType("nvarchar(30)");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("ClientReference")
+                        .HasDatabaseName("IX_CacheLiquiMolyTransfers_ClientReference");
 
                     b.HasIndex("Status")
                         .HasDatabaseName("IX_CacheLiquiMolyTransfers_Status");

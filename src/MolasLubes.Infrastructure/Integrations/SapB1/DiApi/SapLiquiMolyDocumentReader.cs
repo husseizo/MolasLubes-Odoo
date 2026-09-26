@@ -376,7 +376,7 @@ WHERE h.DocEntry = {docEntry}";
         var lineDescriptionSql = BuildLineItemNameSql(candidate, "l.Dscription", "i.ItemName");
         var countLineDescriptionSql = BuildLineItemNameSql(candidate, "l.ItemDesc", "i.ItemName");
         var postingLineDescriptionSql = BuildLineItemNameSql(candidate, "l.ItemName", "i.ItemName");
-        var openQtySql = candidate.HeaderTable == "ORDR"
+        var openQtySql = candidate.HeaderTable is "ORDR" or "OWTQ"
             ? "CONVERT(DECIMAL(19, 6), ISNULL(l.OpenQty, 0))"
             : "CAST(NULL AS DECIMAL(19, 6))";
 

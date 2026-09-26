@@ -198,6 +198,51 @@ public class LiquiMolyTransferSyncService
         }
     }
 
+    /// <summary>
+    /// Reads a specific set of OWTQ/OWTR DocEntries from SAP and upserts them to Neon.
+    /// Called immediately after a transfer is applied to keep Neon fresh without waiting
+    /// for the next scheduled watermark scan.
+    /// </summary>
+    public async Task RefreshDocEntriesAsync(
+        IReadOnlyList<(int DocEntry, string DocType)> targets,
+        CancellationToken ct = default)
+    {
+        if (targets.Count == 0) return;
+
+        IReadOnlyList<SapTransferDocumentDto> docs;
+        try
+        {
+            docs = _reader.ReadTransfers(targets);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "LiquiMolyTransferSync: targeted refresh SAP read failed for {Count} targets",
+                targets.Count);
+            return;
+        }
+
+        var synced = 0;
+        foreach (var doc in docs)
+        {
+            try
+            {
+                await UpsertTransferAsync(doc, ct);
+                synced++;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "LiquiMolyTransferSync: targeted refresh Neon upsert failed for {DocType} DocEntry={DE}",
+                    doc.DocType, doc.DocEntry);
+            }
+        }
+
+        _logger.LogInformation(
+            "LiquiMolyTransferSync: targeted refresh upserted {Synced}/{Total}",
+            synced, docs.Count);
+    }
+
     // ── Neon upsert ───────────────────────────────────────────────────────────
 
     private async Task UpsertTransferAsync(SapTransferDocumentDto doc, CancellationToken ct)

@@ -275,6 +275,7 @@ builder.Services.AddScoped<SapItemBarcodeWriteService>();
 builder.Services.AddScoped<SapLiquiMolyStockReader>();
 builder.Services.AddScoped<SapGoodsIssueWriter>();
 builder.Services.AddScoped<SapGoodsReceiptWriter>();
+builder.Services.AddScoped<SapInventoryTransferWriter>();
 builder.Services.AddScoped<SapInventoryTransferRequestWriter>();
 builder.Services.AddScoped<SapSalesOrderCreator>();
 builder.Services.AddScoped<SapSalesOrderCanceler>();

@@ -16,11 +16,21 @@ public class CacheLiquiMolyTransfer
 
     public string? Comments { get; set; }
 
-    // SAP document references
+    // Base-request linking
+    public string? ClientReference           { get; set; }
+    public string? ActorSapUserCode          { get; set; }
+    public int?    BaseRequestDocEntry       { get; set; }
+    public string? BaseRequestDocNum         { get; set; }
+
+    // SAP document references — cross-company flow (GI + GR)
     public int?   GoodsIssueDocEntry  { get; set; }
     public string? GoodsIssueDocNum   { get; set; }
     public int?   GoodsReceiptDocEntry { get; set; }
     public string? GoodsReceiptDocNum  { get; set; }
+
+    // SAP document references — same-company flow (OWTR)
+    public int?    InventoryTransferDocEntry { get; set; }
+    public string? InventoryTransferDocNum   { get; set; }
 
     public string  Status       { get; set; } = "PENDING";
     public string? ErrorMessage { get; set; }

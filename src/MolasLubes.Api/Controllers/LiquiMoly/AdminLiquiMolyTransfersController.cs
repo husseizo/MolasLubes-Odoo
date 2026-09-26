@@ -35,7 +35,7 @@ public class AdminLiquiMolyTransfersController : ControllerBase
     }
 
     // -------------------------------------------------
-    // APPLY — create GI in source + GR in target
+    // APPLY — create SAP document(s)
     // -------------------------------------------------
     [HttpPost("apply")]
     public async Task<IActionResult> Apply(
@@ -45,7 +45,19 @@ public class AdminLiquiMolyTransfersController : ControllerBase
         if (request.Lines == null || request.Lines.Count == 0)
             return BadRequest(new { Error = "At least one line is required." });
 
-        var result = await _service.ApplyAsync(request, ct);
+        LiquiMolyTransferApplyResult result;
+        try
+        {
+            result = await _service.ApplyAsync(request, ct);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new
+            {
+                Status       = "FAILED",
+                ErrorMessage = ex.Message
+            });
+        }
 
         if (result.Status == "FAILED")
             return UnprocessableEntity(result);
@@ -60,6 +72,9 @@ public class AdminLiquiMolyTransfersController : ControllerBase
     public async Task<IActionResult> RetryReceipt(string transferRef, CancellationToken ct)
     {
         var result = await _service.RetryReceiptAsync(transferRef, ct);
+
+        if (result.ErrorMessage?.Contains("not found") == true)
+            return NotFound(result);
 
         if (result.Status == "FAILED")
             return UnprocessableEntity(result);

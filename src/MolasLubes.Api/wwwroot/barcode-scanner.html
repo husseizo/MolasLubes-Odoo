@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0C1018">
+<title>Missing Barcodes — Molaslubes</title>
+<style>
+/* ── TOKENS ─────────────────────────────────────────────────────── */
+:root {
+  --bg:          #F0F2F5;
+  --surface:     #FFFFFF;
+  --surface-2:   #F4F6FA;
+  --accent:      #F59E0B;
+  --accent-dim:  rgba(245,158,11,0.10);
+  --success:     #10B981;
+  --success-bg:  rgba(16,185,129,0.10);
+  --error:       #EF4444;
+  --error-bg:    rgba(239,68,68,0.10);
+  --text:        #1B2033;
+  --text-2:      #5C677D;
+  --text-3:      #9AA3B2;
+  --border:      #E2E6EE;
+  --coc-bg:      rgba(99,102,241,0.10);
+  --coc-color:   #818CF8;
+  --man-bg:      rgba(245,158,11,0.10);
+  --man-color:   #F59E0B;
+  --mono:        'SF Mono', ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', monospace;
+  --r:           12px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:         #0C1018; --surface:    #161C28; --surface-2:  #1E2535;
+    --accent:     #FBBF24; --accent-dim: rgba(251,191,36,0.12);
+    --success:    #34D399; --success-bg: rgba(52,211,153,0.12);
+    --error:      #F87171; --error-bg:   rgba(248,113,113,0.12);
+    --text:       #E8EDF5; --text-2:     #8B95A8; --text-3:     #5C677D;
+    --border:     #252D3F;
+    --coc-bg:     rgba(129,140,248,0.12); --coc-color:  #A5B4FC;
+    --man-bg:     rgba(251,191,36,0.12);  --man-color:  #FBBF24;
+  }
+}
+:root[data-theme="dark"] {
+  --bg:         #0C1018; --surface:    #161C28; --surface-2:  #1E2535;
+  --accent:     #FBBF24; --accent-dim: rgba(251,191,36,0.12);
+  --success:    #34D399; --success-bg: rgba(52,211,153,0.12);
+  --error:      #F87171; --error-bg:   rgba(248,113,113,0.12);
+  --text:       #E8EDF5; --text-2:     #8B95A8; --text-3:     #5C677D;
+  --border:     #252D3F;
+  --coc-bg:     rgba(129,140,248,0.12); --coc-color:  #A5B4FC;
+  --man-bg:     rgba(251,191,36,0.12);  --man-color:  #FBBF24;
+}
+:root[data-theme="light"] {
+  --bg:          #F0F2F5; --surface:     #FFFFFF; --surface-2:   #F4F6FA;
+  --accent:      #F59E0B; --accent-dim:  rgba(245,158,11,0.10);
+  --success:     #10B981; --success-bg:  rgba(16,185,129,0.10);
+  --error:       #EF4444; --error-bg:    rgba(239,68,68,0.10);
+  --text:        #1B2033; --text-2:      #5C677D; --text-3:      #9AA3B2;
+  --border:      #E2E6EE;
+  --coc-bg:      rgba(99,102,241,0.10);  --coc-color:   #818CF8;
+  --man-bg:      rgba(245,158,11,0.10);  --man-color:   #F59E0B;
+}
+
+/* ── RESET ──────────────────────────────────────────────────────── */
+*,*::before,*::after { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+html { font-size: 15px; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100dvh;
+  max-width: 480px;
+  margin: 0 auto;
+  -webkit-font-smoothing: antialiased;
+}
+button, input { font-family: inherit; }
+
+/* ── SETUP OVERLAY ──────────────────────────────────────────────── */
+.overlay {
+  position: fixed; inset: 0; z-index: 999;
+  background: var(--bg);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  padding: 32px 24px;
+  gap: 20px;
+}
+.overlay.hidden { display: none; }
+.overlay-logo {
+  width: 52px; height: 52px;
+  border-radius: 14px;
+  background: var(--accent-dim);
+  border: 1.5px solid var(--accent);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 24px;
+}
+.overlay h2 {
+  font-size: 20px; font-weight: 800; letter-spacing: -0.3px;
+  text-align: center;
+}
+.overlay p {
+  font-size: 13px; color: var(--text-2); text-align: center; line-height: 1.5;
+  max-width: 300px;
+}
+.overlay input {
+  width: 100%; max-width: 340px;
+  padding: 13px 14px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: 10px;
+  color: var(--text); font-size: 15px;
+  outline: none; transition: border-color 0.15s;
+}
+.overlay input:focus { border-color: var(--accent); }
+.overlay input::placeholder { color: var(--text-3); }
+.overlay .save-btn {
+  width: 100%; max-width: 340px;
+  padding: 13px;
+  background: var(--accent);
+  color: #000; font-size: 15px; font-weight: 800;
+  border: none; border-radius: 10px; cursor: pointer;
+  letter-spacing: -0.02em;
+}
+.overlay-err {
+  font-size: 12px; color: var(--error);
+  background: var(--error-bg);
+  padding: 7px 12px; border-radius: 8px;
+  max-width: 340px; width: 100%;
+  text-align: center; display: none;
+}
+.overlay-err.show { display: block; }
+
+/* ── HEADER ─────────────────────────────────────────────────────── */
+.hd {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--bg);
+  padding: 16px 18px 0;
+}
+.hd-top {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 10px;
+}
+h1 { font-size: 20px; font-weight: 800; letter-spacing: -0.5px; }
+
+.badge {
+  display: flex; align-items: center; gap: 6px;
+  background: var(--accent-dim);
+  border: 1px solid var(--accent);
+  border-radius: 20px;
+  padding: 4px 12px 4px 8px;
+  font-size: 12px; font-weight: 700; color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.badge-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 2s ease-in-out infinite;
+}
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+.prog {
+  height: 3px; background: var(--border);
+  border-radius: 2px; margin-bottom: 10px; overflow: hidden;
+}
+.prog-fill {
+  height: 100%; background: var(--accent);
+  border-radius: 2px; transition: width 0.5s cubic-bezier(.4,0,.2,1);
+}
+
+.filter-row {
+  display: flex; gap: 8px; padding-bottom: 12px; align-items: center;
+}
+.search-wrap { position: relative; flex: 1; }
+.search-icon {
+  position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+  color: var(--text-3); pointer-events: none;
+}
+.search-input {
+  width: 100%;
+  padding: 9px 12px 9px 32px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; color: var(--text); font-size: 14px;
+  outline: none; transition: border-color 0.15s; -webkit-appearance: none;
+}
+.search-input:focus { border-color: var(--accent); }
+.search-input::placeholder { color: var(--text-3); }
+
+.tabs {
+  display: flex; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+}
+.tab {
+  padding: 9px 10px; background: none; border: none;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.04em;
+  color: var(--text-2); cursor: pointer; transition: background 0.12s, color 0.12s;
+}
+.tab.on { background: var(--accent); color: #000; }
+
+/* ── LIST ───────────────────────────────────────────────────────── */
+.sec-label {
+  font-size: 10px; font-weight: 800; letter-spacing: 0.10em;
+  text-transform: uppercase; color: var(--text-3);
+  padding: 4px 18px 8px;
+}
+.list { padding: 0 14px; display: flex; flex-direction: column; gap: 6px; padding-bottom: 8px; }
+
+.card {
+  background: var(--surface); border: 1.5px solid var(--border);
+  border-radius: var(--r); overflow: hidden; cursor: pointer;
+  transition: border-color 0.15s;
+  -webkit-user-select: none; user-select: none;
+}
+.card:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.card.open { border-left: 3px solid var(--accent); border-color: var(--accent); }
+
+.card-hd { display: flex; align-items: center; padding: 12px 13px; gap: 9px; }
+.status-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--border); flex-shrink: 0; transition: background 0.2s;
+}
+.card.open .status-dot { background: var(--accent); }
+.meta { flex: 1; min-width: 0; }
+.icode { font-family: var(--mono); font-size: 13px; font-weight: 700; letter-spacing: 0.02em; }
+.iname { font-size: 12px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+
+.chip {
+  font-size: 10px; font-weight: 800; letter-spacing: 0.06em;
+  text-transform: uppercase; padding: 3px 7px; border-radius: 6px; flex-shrink: 0;
+}
+.chip.coc { background: var(--coc-bg); color: var(--coc-color); }
+.chip.man { background: var(--man-bg); color: var(--man-color); }
+
+.chev { color: var(--text-3); transition: transform 0.2s; flex-shrink: 0; }
+.card.open .chev { transform: rotate(90deg); }
+
+.card-body {
+  display: none; flex-direction: column; gap: 10px;
+  padding: 0 13px 13px; border-top: 1px solid var(--border);
+}
+.card.open .card-body { display: flex; }
+
+.field-label {
+  font-size: 10px; font-weight: 800; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text-3);
+  margin-top: 10px; margin-bottom: 4px;
+}
+.bcd-wrap { position: relative; }
+.bcd-input {
+  width: 100%;
+  font-family: var(--mono); font-size: 16px; font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 13px 42px 13px 13px;
+  background: var(--surface-2); border: 2px solid var(--border);
+  border-radius: 10px; color: var(--text);
+  outline: none; transition: border-color 0.15s; -webkit-appearance: none;
+}
+.bcd-input:focus { border-color: var(--accent); }
+.bcd-input::placeholder { color: var(--text-3); font-weight: 400; font-size: 14px; letter-spacing: 0; }
+
+.clear-btn {
+  position: absolute; right: 11px; top: 50%; transform: translateY(-50%);
+  background: none; border: none; color: var(--text-3);
+  cursor: pointer; padding: 6px; border-radius: 6px; display: none;
+}
+.bcd-input:not(:placeholder-shown) ~ .clear-btn { display: block; }
+
+.uom-row { display: flex; align-items: center; gap: 8px; }
+.uom-tag-label { font-size: 12px; color: var(--text-2); }
+.uom-tag {
+  font-family: var(--mono); font-size: 11px; font-weight: 700;
+  background: var(--accent-dim); color: var(--accent);
+  border: 1px solid var(--accent); border-radius: 5px; padding: 2px 8px;
+}
+.uom-hint { font-size: 11px; color: var(--text-3); }
+
+.fb {
+  font-size: 12px; font-weight: 500;
+  padding: 8px 11px; border-radius: 8px; line-height: 1.4; display: none;
+}
+.fb.ok  { background: var(--success-bg); color: var(--success); display: block; }
+.fb.err { background: var(--error-bg);   color: var(--error);   display: block; }
+
+.sub-btn {
+  width: 100%; padding: 13px;
+  background: var(--accent); color: #000;
+  font-size: 15px; font-weight: 800;
+  border: none; border-radius: 10px; cursor: pointer;
+  letter-spacing: -0.02em;
+  transition: opacity 0.12s, transform 0.1s;
+}
+.sub-btn:active   { transform: scale(0.98); opacity: 0.85; }
+.sub-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+/* ── DONE SECTION ───────────────────────────────────────────────── */
+.done-wrap { padding: 0 14px 32px; }
+.done-toggle {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 4px; cursor: pointer;
+  font-size: 12px; font-weight: 700; color: var(--success);
+  background: none; border: none; width: 100%; text-align: left;
+  -webkit-user-select: none; user-select: none;
+}
+.done-chev { margin-left: auto; transition: transform 0.2s; }
+.done-chev.shut { transform: rotate(-90deg); }
+.done-list { display: flex; flex-direction: column; gap: 6px; }
+.done-card {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 13px;
+  background: var(--success-bg);
+  border: 1px solid rgba(52,211,153,0.18);
+  border-radius: var(--r);
+}
+.done-check {
+  width: 22px; height: 22px; border-radius: 50%;
+  background: var(--success);
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.done-code { font-family: var(--mono); font-size: 13px; font-weight: 700; }
+.done-bcd  { font-family: var(--mono); font-size: 11px; color: var(--text-3); margin-top: 2px; }
+
+/* ── STATES ─────────────────────────────────────────────────────── */
+.empty { text-align: center; padding: 52px 20px; color: var(--text-3); }
+.empty svg { opacity: 0.35; margin-bottom: 14px; }
+.empty p   { font-size: 14px; line-height: 1.5; }
+.empty small { font-size: 12px; display: block; margin-top: 4px; }
+
+.spinner-wrap { text-align: center; padding: 52px 20px; color: var(--text-3); }
+.spinner {
+  width: 32px; height: 32px; margin: 0 auto 14px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.all-done { text-align: center; padding: 48px 20px; }
+.all-done-icon {
+  width: 56px; height: 56px; border-radius: 50%;
+  background: var(--success-bg);
+  display: flex; align-items: center; justify-content: center;
+  margin: 0 auto 14px;
+}
+.all-done h2 { font-size: 18px; font-weight: 800; margin-bottom: 6px; }
+.all-done p  { font-size: 13px; color: var(--text-2); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+}
+</style>
+</head>
+<body>
+
+<!-- ── API KEY SETUP OVERLAY ──────────────────────────────────── -->
+<div class="overlay" id="setupOverlay">
+  <div class="overlay-logo">📦</div>
+  <h2>Molaslubes<br>Barcode Scanner</h2>
+  <p>Enter your API key to load the missing barcode list from SAP.</p>
+  <input type="password" id="apiKeyInput" placeholder="API key" autocomplete="off" autocorrect="off" spellcheck="false">
+  <div class="overlay-err" id="setupErr"></div>
+  <button class="save-btn" onclick="saveApiKey()">Connect</button>
+</div>
+
+<!-- ── HEADER ─────────────────────────────────────────────────── -->
+<div class="hd" id="hd">
+  <div class="hd-top">
+    <h1>Missing Barcodes</h1>
+    <div class="badge"><div class="badge-dot"></div><span id="countBadge">— pending</span></div>
+  </div>
+  <div class="prog"><div class="prog-fill" id="progFill" style="width:0%"></div></div>
+  <div class="filter-row">
+    <div class="search-wrap">
+      <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input class="search-input" id="searchInput" type="search" placeholder="Item code or name…" autocomplete="off" autocorrect="off" spellcheck="false">
+    </div>
+    <div class="tabs" id="tabs">
+      <button class="tab on" data-w="all">All</button>
+      <button class="tab"    data-w="COCWHSE">COC</button>
+      <button class="tab"    data-w="MANWHSE">MAN</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── MAIN ───────────────────────────────────────────────────── -->
+<main id="main">
+  <p class="sec-label" id="secLabel">Pending</p>
+  <div class="list" id="list">
+    <div class="spinner-wrap"><div class="spinner"></div><p>Loading from SAP…</p></div>
+  </div>
+  <div id="doneWrap"></div>
+</main>
+
+<script>
+const LS_KEY = 'mlApiKey';
+let API_KEY  = localStorage.getItem(LS_KEY) || '';
+
+let pending  = [];
+let done     = [];
+let expanded = null;
+let search   = '';
+let whs      = 'all';
+let doneOpen = true;
+
+// ── BOOT ────────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', () => {
+  if (!API_KEY) {
+    showSetup();
+    return;
+  }
+  document.getElementById('setupOverlay').classList.add('hidden');
+  init();
+});
+
+function showSetup() { /* overlay already visible */ }
+
+function saveApiKey() {
+  const val = document.getElementById('apiKeyInput').value.trim();
+  if (!val) { showErr('API key is required.'); return; }
+  API_KEY = val;
+  localStorage.setItem(LS_KEY, val);
+  document.getElementById('setupOverlay').classList.add('hidden');
+  init();
+}
+
+function showErr(msg) {
+  const el = document.getElementById('setupErr');
+  el.textContent = msg;
+  el.classList.add('show');
+}
+
+document.getElementById('apiKeyInput')?.addEventListener('keydown', e => {
+  if (e.key === 'Enter') saveApiKey();
+});
+
+function init() {
+  loadItems();
+
+  document.getElementById('searchInput').addEventListener('input', e => {
+    search = e.target.value.toLowerCase().trim();
+    render();
+  });
+
+  document.getElementById('tabs').addEventListener('click', e => {
+    const btn = e.target.closest('.tab');
+    if (!btn) return;
+    whs = btn.dataset.w;
+    document.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b === btn));
+    render();
+  });
+}
+
+// ── API ──────────────────────────────────────────────────────────
+async function loadItems() {
+  document.getElementById('list').innerHTML =
+    '<div class="spinner-wrap"><div class="spinner"></div><p>Loading from SAP…</p></div>';
+
+  try {
+    const res = await fetch('/api/admin/items/barcodes/missing', {
+      headers: { 'X-Api-Key': API_KEY }
+    });
+
+    if (res.status === 401 || res.status === 403) {
+      localStorage.removeItem(LS_KEY);
+      API_KEY = '';
+      document.getElementById('setupOverlay').classList.remove('hidden');
+      showErr('Invalid API key — enter a valid key to continue.');
+      return;
+    }
+
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    const data = await res.json();
+    pending = data.items || [];
+    render();
+  } catch(e) {
+    document.getElementById('list').innerHTML = `
+      <div class="empty">
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg>
+        <p>Could not load items.<br><small>${e.message}</small></p>
+        <small style="margin-top:12px"><button onclick="loadItems()" style="background:var(--accent);color:#000;border:none;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:700;cursor:pointer">Retry</button></small>
+      </div>`;
+  }
+}
+
+async function postBarcode(itemCode, barcodeValue, uomCode) {
+  const res = await fetch(`/api/admin/items/${encodeURIComponent(itemCode)}/barcodes`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Api-Key': API_KEY },
+    body:    JSON.stringify({ barcodeValue, uomCode })
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || err.Error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+// ── RENDER ───────────────────────────────────────────────────────
+function render() {
+  const total = pending.length + done.length;
+  const pct   = total ? (done.length / total) * 100 : 0;
+
+  document.getElementById('countBadge').textContent = `${pending.length} pending`;
+  document.getElementById('progFill').style.width   = pct + '%';
+
+  const visible = pending.filter(it => {
+    if (whs !== 'all' && it.whsCode !== whs) return false;
+    if (search) return it.itemCode.toLowerCase().includes(search) || it.itemName.toLowerCase().includes(search);
+    return true;
+  });
+
+  const listEl   = document.getElementById('list');
+  const secLabel = document.getElementById('secLabel');
+
+  if (pending.length === 0 && done.length > 0) {
+    secLabel.style.display = 'none';
+    listEl.innerHTML = `
+      <div class="all-done">
+        <div class="all-done-icon">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+        </div>
+        <h2>All done!</h2>
+        <p>Every item in the list now has a registered barcode.</p>
+      </div>`;
+    renderDone();
+    return;
+  }
+
+  secLabel.style.display = '';
+
+  if (visible.length === 0) {
+    listEl.innerHTML = `
+      <div class="empty">
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        <p>${search || whs !== 'all' ? 'No items match your filter.' : 'No missing barcodes found — all good!'}</p>
+      </div>`;
+    renderDone();
+    return;
+  }
+
+  listEl.innerHTML = visible.map(it => renderCard(it)).join('');
+
+  listEl.querySelectorAll('.card').forEach(card => {
+    const id = card.dataset.id;
+    card.querySelector('.card-hd').addEventListener('click', () => toggle(id));
+  });
+
+  listEl.querySelectorAll('.bcd-input').forEach(inp => {
+    inp.addEventListener('click', e => e.stopPropagation());
+    inp.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); submit(inp.dataset.id, inp.dataset.uom); }
+    });
+  });
+
+  listEl.querySelectorAll('.clear-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const inp = document.getElementById('inp-' + btn.dataset.id);
+      if (inp) { inp.value = ''; inp.focus(); }
+      setFb(btn.dataset.id, '');
+    });
+  });
+
+  listEl.querySelectorAll('.sub-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      submit(btn.dataset.id, btn.dataset.uom);
+    });
+  });
+
+  if (expanded) {
+    const inp = document.getElementById('inp-' + expanded);
+    if (inp) setTimeout(() => {
+      inp.focus();
+      inp.closest('.card').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }, 80);
+  }
+
+  renderDone();
+}
+
+function renderCard(it) {
+  const isOpen  = expanded === it.itemCode;
+  const uom     = it.whsCode === 'MANWHSE' ? '4-PU' : 'Unit';
+  const hint    = it.whsCode === 'MANWHSE' ? 'Carton / box' : 'Individual bottle';
+  const chipCls = it.whsCode === 'COCWHSE' ? 'coc' : 'man';
+  const chipLbl = it.whsCode === 'COCWHSE' ? 'COC' : 'MAN';
+
+  return `
+  <div class="card${isOpen?' open':''}" data-id="${it.itemCode}">
+    <div class="card-hd">
+      <div class="status-dot"></div>
+      <div class="meta">
+        <div class="icode">${it.itemCode}</div>
+        <div class="iname">${it.itemName}</div>
+      </div>
+      <span class="chip ${chipCls}">${chipLbl}</span>
+      <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+    </div>
+    <div class="card-body">
+      <div>
+        <div class="field-label">Barcode value</div>
+        <div class="bcd-wrap">
+          <input class="bcd-input" id="inp-${it.itemCode}"
+            data-id="${it.itemCode}" data-uom="${uom}"
+            type="text" inputmode="text"
+            placeholder="Scan or type barcode…"
+            autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+          <button class="clear-btn" data-id="${it.itemCode}" type="button" aria-label="Clear">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="uom-row">
+        <span class="uom-tag-label">UoM:</span>
+        <span class="uom-tag">${uom}</span>
+        <span class="uom-hint">${hint}</span>
+      </div>
+      <div class="fb" id="fb-${it.itemCode}"></div>
+      <button class="sub-btn" data-id="${it.itemCode}" data-uom="${uom}" type="button">
+        Register Barcode
+      </button>
+    </div>
+  </div>`;
+}
+
+function renderDone() {
+  const wrap = document.getElementById('doneWrap');
+  if (done.length === 0) { wrap.innerHTML = ''; return; }
+
+  wrap.innerHTML = `
+    <div class="done-wrap">
+      <button class="done-toggle" onclick="toggleDone()">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+        ${done.length} registered this session
+        <svg class="done-chev${doneOpen?'':' shut'}" id="doneChev" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+      <div class="done-list" id="doneList" style="display:${doneOpen?'flex':'none'}">
+        ${done.map(d => `
+          <div class="done-card">
+            <div class="done-check">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="3.5"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
+            <div>
+              <div class="done-code">${d.itemCode} — ${d.itemName.length > 34 ? d.itemName.slice(0,34)+'…' : d.itemName}</div>
+              <div class="done-bcd">${d.barcodeValue} &middot; ${d.uomCode}</div>
+            </div>
+          </div>`).join('')}
+      </div>
+    </div>`;
+}
+
+// ── INTERACTIONS ─────────────────────────────────────────────────
+function toggle(id) {
+  expanded = expanded === id ? null : id;
+  render();
+}
+
+function toggleDone() {
+  doneOpen = !doneOpen;
+  const list = document.getElementById('doneList');
+  const chev = document.getElementById('doneChev');
+  if (list) list.style.display = doneOpen ? 'flex' : 'none';
+  if (chev) chev.classList.toggle('shut', !doneOpen);
+}
+
+function setFb(id, msg, type='') {
+  const el = document.getElementById('fb-' + id);
+  if (!el) return;
+  el.className = 'fb' + (type ? ' ' + type : '');
+  el.textContent = msg;
+}
+
+async function submit(id, uomCode) {
+  const inp = document.getElementById('inp-' + id);
+  const btn = document.querySelector(`.sub-btn[data-id="${id}"]`);
+  if (!inp || !btn) return;
+
+  const val = inp.value.trim();
+  if (!val) {
+    setFb(id, 'Scan the product first — barcode value is required.', 'err');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Registering…';
+  setFb(id, '');
+
+  try {
+    const result = await postBarcode(id, val, uomCode);
+
+    const item = pending.find(i => i.itemCode === id);
+    if (item) {
+      pending = pending.filter(i => i.itemCode !== id);
+      done.unshift({ ...item, barcodeValue: val, uomCode });
+    }
+
+    expanded = null;
+    render();
+  } catch(e) {
+    setFb(id, e.message || 'Write failed — check SAP connection and try again.', 'err');
+    btn.disabled = false;
+    btn.textContent = 'Register Barcode';
+  }
+}
+</script>
+</body>
+</html>

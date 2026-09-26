@@ -7,21 +7,27 @@ public class LiquiMolyTransferDryRunResult
     public bool   CanApply  { get; init; }
     public string? Error    { get; init; }
 
+    public int?    BaseRequestDocEntry { get; init; }
+    public string? BaseRequestDocNum   { get; init; }
+
     public List<TransferLinePreflightRow> Lines { get; init; } = new();
     public Dictionary<string, int> Totals       { get; init; } = new();
 }
 
 public class TransferLinePreflightRow
 {
-    public string  SourceItemCode { get; init; } = string.Empty;
-    public string? ArticleNumber  { get; init; }
-    public string? SourceItemName { get; init; }
-    public string? TargetItemCode { get; init; }
-    public string? TargetItemName { get; init; }
-    public decimal RequestedQty   { get; init; }
-    public decimal AvailableQty   { get; init; }
-    public string  Outcome        { get; init; } = string.Empty;
-    public string? Message        { get; init; }
+    public int?    LineNum            { get; init; }
+    public int?    BaseRequestLineNum { get; init; }
+    public string  SourceItemCode     { get; init; } = string.Empty;
+    public string? ArticleNumber      { get; init; }
+    public string? SourceItemName     { get; init; }
+    public string? TargetItemCode     { get; init; }
+    public string? TargetItemName     { get; init; }
+    public decimal RequestedQty       { get; init; }
+    public decimal? OpenQtyOnRequest  { get; init; }
+    public decimal AvailableQty       { get; init; }
+    public string  Outcome            { get; init; } = string.Empty;
+    public string? Message            { get; init; }
 }
 
 // ── Apply ────────────────────────────────────────────────
@@ -29,10 +35,19 @@ public class TransferLinePreflightRow
 public class LiquiMolyTransferApplyResult
 {
     public string  TransferRef           { get; init; } = string.Empty;
+    public string? ClientReference       { get; init; }
     public string  Status                { get; init; } = string.Empty;
     public string  ExecutionMode         { get; init; } = "TRANSFER";
 
-    // TRANSFER flow (GI → GR)
+    // Base-request link
+    public int?    BaseRequestDocEntry       { get; init; }
+    public string? BaseRequestDocNum         { get; init; }
+
+    // Same-company OWTR flow
+    public int?    InventoryTransferDocEntry { get; init; }
+    public string? InventoryTransferDocNum   { get; init; }
+
+    // Cross-company flow (GI → GR)
     public int?    GoodsIssueDocEntry    { get; init; }
     public string? GoodsIssueDocNum      { get; init; }
     public int?    GoodsReceiptDocEntry  { get; init; }
