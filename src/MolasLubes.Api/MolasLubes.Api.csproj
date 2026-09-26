@@ -25,6 +25,7 @@
   <ItemGroup>
     <ProjectReference Include="..\MolasLubes.Application\MolasLubes.Application.csproj" />
     <ProjectReference Include="..\MolasLubes.Infrastructure\MolasLubes.Infrastructure.csproj" />
+    <ProjectReference Include="..\MolasLubes.Persistence\MolasLubes.Persistence.csproj" />
   </ItemGroup>
 
 </Project>

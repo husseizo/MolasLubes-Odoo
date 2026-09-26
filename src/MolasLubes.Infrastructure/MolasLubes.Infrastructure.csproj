@@ -15,6 +15,7 @@
   <ItemGroup>
     <ProjectReference Include="..\MolasLubes.Application\MolasLubes.Application.csproj" />
     <ProjectReference Include="..\MolasLubes.Domain\MolasLubes.Domain.csproj" />
+    <ProjectReference Include="..\MolasLubes.Persistence\MolasLubes.Persistence.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -42,7 +43,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Folder Include="Persistence\Migrations\Cache\" />
     <Folder Include="Persistence\Migrations\Neon\" />
     <Folder Include="Persistence\Migrations\Live2021Cache\" />
     <Folder Include="Persistence\Migrations\AutoHub\" />
