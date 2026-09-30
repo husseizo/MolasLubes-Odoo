@@ -43,10 +43,9 @@ public class LiquiMolyProductScraperService
         new(@"\b\d{1,2}W[-–]\d{2,3}\b|\bSAE\s+\d+\b",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    // Matches a 4–5 digit Liqui Moly article number embedded in an image URL path,
-    // e.g. "/6452_" or "_9030." — used to detect sibling-SKU contamination.
-    private static readonly Regex ArticleNumberInUrlPattern =
-        new(@"(?:^|[/_])(\d{4,5})[_.]", RegexOptions.Compiled);
+    // Matches the SKU number in a class like "variantswitch-sku-6452 downloads container …"
+    private static readonly Regex VariantSkuClassPattern =
+        new(@"\bvariantswitch-sku-(\d{4,5})\b", RegexOptions.Compiled);
 
     // Safety limit on paginated category pages to prevent runaway fetching
     private const int MaxCategoryPages = 50;
@@ -460,7 +459,7 @@ public class LiquiMolyProductScraperService
         var (desc, application) = ExtractDescriptionAndApplication(doc);
         var images      = ExtractAllImages(doc, requestedSku);
         var (primaryImage, imageSourceSku, imageFallbackUsed, imageFallbackReason) =
-            SelectPrimaryImage(images, requestedSku);
+            SelectPrimaryImage(doc, requestedSku);
         var (cat, sub)  = ExtractCategories(doc);
         var (specificationItems, approvals, recommendations) = ExtractApprovalSpecificationData(doc);
         var overviewProperties = ExtractOverviewProperties(doc);
@@ -761,38 +760,154 @@ public class LiquiMolyProductScraperService
     }
 
     /// <summary>
-    /// Selects the primary image from a ranked list with strict SKU ownership rules:
+    /// Selects the primary image using a strict three-step ownership contract:
     /// <list type="number">
-    ///   <item>URL explicitly names <paramref name="requestedSku"/> → confirmed match, no fallback.</item>
-    ///   <item>URL contains no identifiable article number → neutral image, no fallback.</item>
-    ///   <item>All remaining images → fallback; sibling SKU is recorded when detectable.</item>
+    ///   <item><b>Confirmed</b> — tier 1/2 (DOM node is scoped to <paramref name="requestedSku"/>)
+    ///         or URL explicitly names the SKU in tiers 3–5 → no fallback.</item>
+    ///   <item><b>Approved family fallback</b> — the 15 kg packaging variant found on the same
+    ///         page; its tier-1/2 gallery or a URL-confirmed image is used → FallbackUsed=true.</item>
+    ///   <item><b>Unresolved</b> — null URL, FallbackUsed=true, descriptive reason.</item>
     /// </list>
-    /// <paramref name="rankedImages"/> must already be ordered by descending score.
+    /// Foreign/sibling images that do not qualify under step 1 or 2 are never accepted.
     /// </summary>
     private static (string? Url, string? SourceArticleNumber, bool FallbackUsed, string? FallbackReason)
-        SelectPrimaryImage(List<string> rankedImages, string requestedSku)
+        SelectPrimaryImage(HtmlDocument doc, string requestedSku)
     {
-        // Step 1: URL explicitly contains the requested SKU.
-        var skuMatch = rankedImages.FirstOrDefault(u => UrlMatchesSku(u, requestedSku));
-        if (skuMatch is not null)
-            return (skuMatch, requestedSku, false, null);
+        // Step 1: Confirmed — tier-1/2 (DOM-scoped to SKU) OR URL explicitly names the SKU.
+        var confirmed = GetConfirmedSkuImages(doc, requestedSku);
+        if (confirmed.Count > 0)
+            return (confirmed[0], requestedSku, false, null);
 
-        // Step 2: URL contains no identifiable 4–5 digit article number (neutral image).
-        var neutral = rankedImages.FirstOrDefault(
-            u => !TryExtractSiblingArticleNumber(u, requestedSku, out _));
-        if (neutral is not null)
-            return (neutral, requestedSku, false, null);
+        // Step 2: Approved family fallback — 15 kg variant on the same product page.
+        var fb = TryGetFamilyFallbackImage(doc, requestedSku);
+        if (fb is not null)
+            return (fb.Value.Url, fb.Value.Sku, true,
+                $"No own image for {requestedSku}; using approved 15 kg family variant {fb.Value.Sku}.");
 
-        // Step 3: All images contain a sibling article number — record the fallback explicitly.
-        var fallback = rankedImages.FirstOrDefault();
-        if (fallback is null)
-            return (null, null, false, null);
+        // Step 3: No approved image available.
+        return (null, null, true,
+            "No SKU-specific or approved 15 kg family fallback image available.");
+    }
 
-        TryExtractSiblingArticleNumber(fallback, requestedSku, out var siblingNo);
-        var reason = siblingNo is not null
-            ? $"No SKU-confirmed image for {requestedSku}; best available image belongs to sibling SKU {siblingNo}."
-            : $"No SKU-confirmed image for {requestedSku}; using highest-scored page image.";
-        return (fallback, siblingNo, true, reason);
+    /// <summary>
+    /// Returns images that are confirmed to belong to <paramref name="requestedSku"/>:
+    /// everything from tier 1/2 (DOM selectors scoped to the SKU), plus any image from
+    /// tiers 3–5 whose URL explicitly embeds the SKU number.
+    /// Neutral-URL images from tiers 3–5 (page-wide containers) are excluded.
+    /// </summary>
+    private static List<string> GetConfirmedSkuImages(HtmlDocument doc, string requestedSku)
+    {
+        var ranked = new List<(string Url, int Score)>();
+        var seen   = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // Tier 1: SKU-specific gallery — all images here belong to the requested SKU.
+        AddRankedImageUrls(ranked, seen,
+            doc.DocumentNode.SelectNodes(
+                $"//div[@id='gallery-preview-{requestedSku}']//div[contains(@class,'product-gallery-preview-media')]//img"),
+            requestedSku, baseScore: 300);
+
+        // Tier 2: SKU-specific variantswitch block — same guarantee.
+        AddRankedImageUrls(ranked, seen,
+            doc.DocumentNode.SelectNodes(
+                $"//div[contains(@class,'variantswitch-sku-{requestedSku}')]//img"),
+            requestedSku, baseScore: 220);
+
+        // Tiers 3–5: page-wide containers; only accept images whose URL explicitly names the SKU.
+        var wideSeen   = new HashSet<string>(seen, StringComparer.OrdinalIgnoreCase);
+        var wideRanked = new List<(string Url, int Score)>();
+        AddRankedImageUrls(wideRanked, wideSeen,
+            doc.DocumentNode.SelectNodes("//div[contains(@class,'product-gallery-preview-media')]//img"),
+            requestedSku, baseScore: 120);
+        AddRankedImageUrls(wideRanked, wideSeen,
+            doc.DocumentNode.SelectNodes("//div[starts-with(@id,'gallery-image-')]//img"),
+            requestedSku, baseScore: 80);
+        AddRankedAnchorUrls(wideRanked, wideSeen,
+            doc.DocumentNode.SelectNodes("//a[contains(@href,'pim.liqui-moly.de/ws/media/article-image/')]"),
+            requestedSku, baseScore: 40);
+
+        foreach (var (url, score) in wideRanked)
+            if (UrlMatchesSku(url, requestedSku) && seen.Add(url))
+                ranked.Add((url, score));
+
+        return ranked
+            .OrderByDescending(x => x.Score)
+            .ThenBy(x => x.Url, StringComparer.OrdinalIgnoreCase)
+            .Select(x => x.Url)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Looks for a 15 kg packaging variant on the same product page and returns
+    /// its confirmed image (tier 1/2 gallery or URL-explicit match).
+    /// Returns null when no 15 kg variant exists on the page or it has no confirmed image.
+    /// </summary>
+    private static (string Url, string Sku)?
+        TryGetFamilyFallbackImage(HtmlDocument doc, string requestedSku)
+    {
+        var variants  = ExtractVariantSkusWithSizes(doc);
+        var familySku = FindPreferredFamilySku(variants, requestedSku);
+        if (familySku is null) return null;
+
+        var images = GetConfirmedSkuImages(doc, familySku);
+        return images.Count > 0 ? (images[0], familySku) : null;
+    }
+
+    /// Returns all `variantswitch-sku-{sku}` elements found on the page as a map of
+    /// SKU → first detected packaging size (e.g. "15 kg", "5 l").
+    private static Dictionary<string, string> ExtractVariantSkusWithSizes(HtmlDocument doc)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var nodes  = doc.DocumentNode.SelectNodes("//div[contains(@class,'variantswitch-sku-')]");
+        if (nodes is null) return result;
+
+        foreach (var node in nodes)
+        {
+            var cls = node.GetAttributeValue("class", "");
+            var m   = VariantSkuClassPattern.Match(cls);
+            if (!m.Success) continue;
+            var sku = m.Groups[1].Value;
+            if (result.ContainsKey(sku)) continue;
+
+            var sizeM = SizePattern.Match(node.InnerText);
+            if (sizeM.Success)
+                result[sku] = sizeM.Groups[1].Value.Trim();
+        }
+        return result;
+    }
+
+    /// Returns the first variant SKU (excluding <paramref name="requestedSku"/>) whose
+    /// packaging size is 15 kg or 15 L — the canonical approved family fallback size.
+    private static string? FindPreferredFamilySku(
+        Dictionary<string, string> variants, string requestedSku)
+    {
+        foreach (var (sku, size) in variants)
+        {
+            if (string.Equals(sku, requestedSku, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (Is15KgOrLiterSize(size))
+                return sku;
+        }
+        return null;
+    }
+
+    /// Returns true when <paramref name="size"/> represents exactly 15 kg or 15 L
+    /// (not 150 ml, not 1.5 L — only the 15-unit bulk container).
+    private static bool Is15KgOrLiterSize(string size)
+    {
+        var m = SizePattern.Match(size);
+        if (!m.Success) return false;
+        var raw  = m.Groups[1].Value;
+        var numM = Regex.Match(raw, @"^(\d+(?:[.,]\d+)?)");
+        if (!numM.Success) return false;
+        if (!decimal.TryParse(
+                numM.Groups[1].Value.Replace(',', '.'),
+                System.Globalization.NumberStyles.Number,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var qty) || qty != 15m)
+            return false;
+        return raw.EndsWith("kg", StringComparison.OrdinalIgnoreCase)
+            || (raw.EndsWith("l", StringComparison.OrdinalIgnoreCase)
+                && !raw.EndsWith("ml", StringComparison.OrdinalIgnoreCase));
     }
 
     /// Returns true when <paramref name="url"/> explicitly names <paramref name="sku"/>
@@ -802,24 +917,6 @@ public class LiquiMolyProductScraperService
         url.Contains($"{sku}_",  StringComparison.OrdinalIgnoreCase) ||
         url.Contains($"/{sku}.", StringComparison.OrdinalIgnoreCase) ||
         url.Contains($"{sku}.",  StringComparison.OrdinalIgnoreCase);
-
-    /// Returns true (and sets <paramref name="siblingNo"/>) when <paramref name="url"/>
-    /// contains a 4–5 digit article number that is NOT <paramref name="requestedSku"/>.
-    private static bool TryExtractSiblingArticleNumber(
-        string url, string requestedSku, out string? siblingNo)
-    {
-        siblingNo = null;
-        foreach (Match m in ArticleNumberInUrlPattern.Matches(url))
-        {
-            var candidate = m.Groups[1].Value;
-            if (!string.Equals(candidate, requestedSku, StringComparison.OrdinalIgnoreCase))
-            {
-                siblingNo = candidate;
-                return true;
-            }
-        }
-        return false;
-    }
 
     /// Parses an HTML srcset attribute and returns the URL with the highest
     /// pixel-density descriptor (e.g. "2x"), giving the largest available image.
