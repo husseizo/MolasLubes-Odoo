@@ -764,11 +764,12 @@ public class LiquiMolyProductScraperService
     /// <list type="number">
     ///   <item><b>Confirmed</b> — tier 1/2 (DOM node is scoped to <paramref name="requestedSku"/>)
     ///         or URL explicitly names the SKU in tiers 3–5 → no fallback.</item>
-    ///   <item><b>Approved family fallback</b> — the 15 kg packaging variant found on the same
-    ///         page; its tier-1/2 gallery or a URL-confirmed image is used → FallbackUsed=true.</item>
+    ///   <item><b>Same-family fallback</b> — the first sibling variant on the same product page
+    ///         that has a confirmed image, in page order → FallbackUsed=true.</item>
     ///   <item><b>Unresolved</b> — null URL, FallbackUsed=true, descriptive reason.</item>
     /// </list>
     /// Foreign/sibling images that do not qualify under step 1 or 2 are never accepted.
+    /// No packaging-size constraint is applied; any valid same-family sibling is eligible.
     /// </summary>
     private static (string? Url, string? SourceArticleNumber, bool FallbackUsed, string? FallbackReason)
         SelectPrimaryImage(HtmlDocument doc, string requestedSku)
@@ -778,15 +779,15 @@ public class LiquiMolyProductScraperService
         if (confirmed.Count > 0)
             return (confirmed[0], requestedSku, false, null);
 
-        // Step 2: Approved family fallback — 15 kg variant on the same product page.
+        // Step 2: Same-family fallback — first sibling (page order) with a confirmed image.
         var fb = TryGetFamilyFallbackImage(doc, requestedSku);
         if (fb is not null)
             return (fb.Value.Url, fb.Value.Sku, true,
-                $"No own image for {requestedSku}; using approved 15 kg family variant {fb.Value.Sku}.");
+                $"No own image for {requestedSku}; using same-family variant {fb.Value.Sku}.");
 
         // Step 3: No approved image available.
         return (null, null, true,
-            "No SKU-specific or approved 15 kg family fallback image available.");
+            "No SKU-specific or approved same-family fallback image available.");
     }
 
     /// <summary>
@@ -836,27 +837,28 @@ public class LiquiMolyProductScraperService
             .ToList();
     }
 
-    /// <summary>
-    /// Looks for a 15 kg packaging variant on the same product page and returns
-    /// its confirmed image (tier 1/2 gallery or URL-explicit match).
-    /// Returns null when no 15 kg variant exists on the page or it has no confirmed image.
-    /// </summary>
+    /// Returns the URL and SKU of the first sibling variant on the same product page
+    /// that has a confirmed image, in the order variants appear on the page.
+    /// Returns null when no sibling has a confirmed image.
+    /// No packaging-size constraint is applied.
     private static (string Url, string Sku)?
         TryGetFamilyFallbackImage(HtmlDocument doc, string requestedSku)
     {
-        var variants  = ExtractVariantSkusWithSizes(doc);
-        var familySku = FindPreferredFamilySku(variants, requestedSku);
-        if (familySku is null) return null;
-
-        var images = GetConfirmedSkuImages(doc, familySku);
-        return images.Count > 0 ? (images[0], familySku) : null;
+        foreach (var familySku in ExtractFamilySiblingSkus(doc, requestedSku))
+        {
+            var images = GetConfirmedSkuImages(doc, familySku);
+            if (images.Count > 0)
+                return (images[0], familySku);
+        }
+        return null;
     }
 
-    /// Returns all `variantswitch-sku-{sku}` elements found on the page as a map of
-    /// SKU → first detected packaging size (e.g. "15 kg", "5 l").
-    private static Dictionary<string, string> ExtractVariantSkusWithSizes(HtmlDocument doc)
+    /// Returns sibling SKUs from variantswitch-sku-* divs on the page,
+    /// in page order, excluding <paramref name="requestedSku"/>.
+    private static List<string> ExtractFamilySiblingSkus(HtmlDocument doc, string requestedSku)
     {
-        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var result = new List<string>();
+        var seen   = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var nodes  = doc.DocumentNode.SelectNodes("//div[contains(@class,'variantswitch-sku-')]");
         if (nodes is null) return result;
 
@@ -866,48 +868,11 @@ public class LiquiMolyProductScraperService
             var m   = VariantSkuClassPattern.Match(cls);
             if (!m.Success) continue;
             var sku = m.Groups[1].Value;
-            if (result.ContainsKey(sku)) continue;
-
-            var sizeM = SizePattern.Match(node.InnerText);
-            if (sizeM.Success)
-                result[sku] = sizeM.Groups[1].Value.Trim();
+            if (string.Equals(sku, requestedSku, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!seen.Add(sku)) continue;
+            result.Add(sku);
         }
         return result;
-    }
-
-    /// Returns the first variant SKU (excluding <paramref name="requestedSku"/>) whose
-    /// packaging size is 15 kg or 15 L — the canonical approved family fallback size.
-    private static string? FindPreferredFamilySku(
-        Dictionary<string, string> variants, string requestedSku)
-    {
-        foreach (var (sku, size) in variants)
-        {
-            if (string.Equals(sku, requestedSku, StringComparison.OrdinalIgnoreCase))
-                continue;
-            if (Is15KgOrLiterSize(size))
-                return sku;
-        }
-        return null;
-    }
-
-    /// Returns true when <paramref name="size"/> represents exactly 15 kg or 15 L
-    /// (not 150 ml, not 1.5 L — only the 15-unit bulk container).
-    private static bool Is15KgOrLiterSize(string size)
-    {
-        var m = SizePattern.Match(size);
-        if (!m.Success) return false;
-        var raw  = m.Groups[1].Value;
-        var numM = Regex.Match(raw, @"^(\d+(?:[.,]\d+)?)");
-        if (!numM.Success) return false;
-        if (!decimal.TryParse(
-                numM.Groups[1].Value.Replace(',', '.'),
-                System.Globalization.NumberStyles.Number,
-                System.Globalization.CultureInfo.InvariantCulture,
-                out var qty) || qty != 15m)
-            return false;
-        return raw.EndsWith("kg", StringComparison.OrdinalIgnoreCase)
-            || (raw.EndsWith("l", StringComparison.OrdinalIgnoreCase)
-                && !raw.EndsWith("ml", StringComparison.OrdinalIgnoreCase));
     }
 
     /// Returns true when <paramref name="url"/> explicitly names <paramref name="sku"/>
