@@ -43,6 +43,11 @@ public class LiquiMolyProductScraperService
         new(@"\b\d{1,2}W[-–]\d{2,3}\b|\bSAE\s+\d+\b",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    // Matches a 4–5 digit Liqui Moly article number embedded in an image URL path,
+    // e.g. "/6452_" or "_9030." — used to detect sibling-SKU contamination.
+    private static readonly Regex ArticleNumberInUrlPattern =
+        new(@"(?:^|[/_])(\d{4,5})[_.]", RegexOptions.Compiled);
+
     // Safety limit on paginated category pages to prevent runaway fetching
     private const int MaxCategoryPages = 50;
 
@@ -454,6 +459,8 @@ public class LiquiMolyProductScraperService
         var name        = ExtractName(doc);
         var (desc, application) = ExtractDescriptionAndApplication(doc);
         var images      = ExtractAllImages(doc, requestedSku);
+        var (primaryImage, imageSourceSku, imageFallbackUsed, imageFallbackReason) =
+            SelectPrimaryImage(images, requestedSku);
         var (cat, sub)  = ExtractCategories(doc);
         var (specificationItems, approvals, recommendations) = ExtractApprovalSpecificationData(doc);
         var overviewProperties = ExtractOverviewProperties(doc);
@@ -498,8 +505,11 @@ public class LiquiMolyProductScraperService
             Name                  = name ?? requestedSku,
             Description           = desc,
             ProductUrl            = productUrlWithHash,
-            ImageUrl              = images.FirstOrDefault(),
-            AllImageUrls          = images,
+            ImageUrl                  = primaryImage,
+            AllImageUrls              = images,
+            ImageSourceArticleNumber  = imageSourceSku,
+            ImageFallbackUsed         = imageFallbackUsed,
+            ImageFallbackReason       = imageFallbackReason,
             PackagingSize         = currentSize,
             AllPackagingSizes     = allPackagingSizes,
             Liter                 = ParseLiters(currentSize),
@@ -748,6 +758,67 @@ public class LiquiMolyProductScraperService
             score -= 20;
 
         return score;
+    }
+
+    /// <summary>
+    /// Selects the primary image from a ranked list with strict SKU ownership rules:
+    /// <list type="number">
+    ///   <item>URL explicitly names <paramref name="requestedSku"/> → confirmed match, no fallback.</item>
+    ///   <item>URL contains no identifiable article number → neutral image, no fallback.</item>
+    ///   <item>All remaining images → fallback; sibling SKU is recorded when detectable.</item>
+    /// </list>
+    /// <paramref name="rankedImages"/> must already be ordered by descending score.
+    /// </summary>
+    private static (string? Url, string? SourceArticleNumber, bool FallbackUsed, string? FallbackReason)
+        SelectPrimaryImage(List<string> rankedImages, string requestedSku)
+    {
+        // Step 1: URL explicitly contains the requested SKU.
+        var skuMatch = rankedImages.FirstOrDefault(u => UrlMatchesSku(u, requestedSku));
+        if (skuMatch is not null)
+            return (skuMatch, requestedSku, false, null);
+
+        // Step 2: URL contains no identifiable 4–5 digit article number (neutral image).
+        var neutral = rankedImages.FirstOrDefault(
+            u => !TryExtractSiblingArticleNumber(u, requestedSku, out _));
+        if (neutral is not null)
+            return (neutral, requestedSku, false, null);
+
+        // Step 3: All images contain a sibling article number — record the fallback explicitly.
+        var fallback = rankedImages.FirstOrDefault();
+        if (fallback is null)
+            return (null, null, false, null);
+
+        TryExtractSiblingArticleNumber(fallback, requestedSku, out var siblingNo);
+        var reason = siblingNo is not null
+            ? $"No SKU-confirmed image for {requestedSku}; best available image belongs to sibling SKU {siblingNo}."
+            : $"No SKU-confirmed image for {requestedSku}; using highest-scored page image.";
+        return (fallback, siblingNo, true, reason);
+    }
+
+    /// Returns true when <paramref name="url"/> explicitly names <paramref name="sku"/>
+    /// using the patterns Liqui Moly embeds in image URLs (e.g. /6452_ or 6452.).
+    private static bool UrlMatchesSku(string url, string sku) =>
+        url.Contains($"/{sku}_", StringComparison.OrdinalIgnoreCase) ||
+        url.Contains($"{sku}_",  StringComparison.OrdinalIgnoreCase) ||
+        url.Contains($"/{sku}.", StringComparison.OrdinalIgnoreCase) ||
+        url.Contains($"{sku}.",  StringComparison.OrdinalIgnoreCase);
+
+    /// Returns true (and sets <paramref name="siblingNo"/>) when <paramref name="url"/>
+    /// contains a 4–5 digit article number that is NOT <paramref name="requestedSku"/>.
+    private static bool TryExtractSiblingArticleNumber(
+        string url, string requestedSku, out string? siblingNo)
+    {
+        siblingNo = null;
+        foreach (Match m in ArticleNumberInUrlPattern.Matches(url))
+        {
+            var candidate = m.Groups[1].Value;
+            if (!string.Equals(candidate, requestedSku, StringComparison.OrdinalIgnoreCase))
+            {
+                siblingNo = candidate;
+                return true;
+            }
+        }
+        return false;
     }
 
     /// Parses an HTML srcset attribute and returns the URL with the highest

@@ -400,6 +400,8 @@ public class MolasCacheDbContext : DbContext
             entity.Property(x => x.AllPackagingSizes);          // JSON array of strings
             entity.Property(x => x.ImageUrl).HasMaxLength(500);
             entity.Property(x => x.AllImageUrls);               // JSON array of strings
+            entity.Property(x => x.ImageSourceArticleNumber).HasMaxLength(50);
+            entity.Property(x => x.ImageFallbackReason).HasMaxLength(500);
             entity.Property(x => x.PrimaryBarcode).HasMaxLength(50);
             entity.Property(x => x.PrimaryBarcodeUomCode).HasMaxLength(20);
             entity.Property(x => x.PrimaryBarcodeUomName).HasMaxLength(100);

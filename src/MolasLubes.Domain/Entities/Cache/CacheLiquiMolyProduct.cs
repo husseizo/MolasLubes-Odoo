@@ -37,6 +37,19 @@ public class CacheLiquiMolyProduct
     /// <summary>All product images as a JSON array (gallery from the detail page).</summary>
     public string? AllImageUrls { get; set; }             // JSON-serialised List<string>
 
+    /// <summary>
+    /// Article number whose image was selected as the primary.
+    /// Equals <see cref="ArticleNumber"/> when confirmed; equals the sibling SKU for explicit
+    /// cross-variant fallbacks; null when no image was found.
+    /// </summary>
+    public string? ImageSourceArticleNumber { get; set; }
+
+    /// <summary>True when <see cref="ImageUrl"/> was selected through a fallback rather than a direct SKU match.</summary>
+    public bool ImageFallbackUsed { get; set; }
+
+    /// <summary>Human-readable explanation set when <see cref="ImageFallbackUsed"/> is true.</summary>
+    public string? ImageFallbackReason { get; set; }
+
     // =============================
     // BARCODES / SAP UOM
     // =============================

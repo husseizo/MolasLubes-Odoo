@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using MolasLubes.Infrastructure.Persistence;
 
@@ -11,9 +12,11 @@ using MolasLubes.Infrastructure.Persistence;
 namespace MolasLubes.Infrastructure.Migrations
 {
     [DbContext(typeof(MolasCacheDbContext))]
-    partial class MolasCacheDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260930224758_AddImageSourceMetadataToLiquiMolyProducts")]
+    partial class AddImageSourceMetadataToLiquiMolyProducts
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

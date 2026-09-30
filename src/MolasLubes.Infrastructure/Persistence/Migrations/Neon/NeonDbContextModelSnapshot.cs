@@ -453,6 +453,17 @@ namespace MolasLubes.Infrastructure.Persistence.Migrations.Neon
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)");
 
+                    b.Property<string>("ImageSourceArticleNumber")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<bool>("ImageFallbackUsed")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("ImageFallbackReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
                     b.Property<bool>("IsActive")
                         .HasColumnType("boolean");
 

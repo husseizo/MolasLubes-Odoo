@@ -116,7 +116,10 @@ public class LiquiMolyCacheSyncService
         entity.SpecGrade             = dto.SpecGrade;
         entity.PackagingSize         = dto.PackagingSize;
         entity.Liter                 = dto.Liter;
-        entity.ImageUrl              = dto.ImageUrl;
+        entity.ImageUrl                  = dto.ImageUrl;
+        entity.ImageSourceArticleNumber  = dto.ImageSourceArticleNumber;
+        entity.ImageFallbackUsed         = dto.ImageFallbackUsed;
+        entity.ImageFallbackReason       = dto.ImageFallbackReason;
         entity.ProductUrl            = dto.ProductUrl;
         entity.IsActive              = true;
         entity.ScrapedAt             = now;

@@ -33,6 +33,20 @@ public class LiquiMolyProductDto
     /// <summary>All product image URLs scraped from the product detail page gallery.</summary>
     public List<string> AllImageUrls { get; set; } = new();
 
+    /// <summary>
+    /// Article number whose image was ultimately selected as the primary.
+    /// Equals <see cref="ArticleNumber"/> when the selected image is confirmed to
+    /// belong to this SKU; equals the sibling SKU when an explicit cross-variant
+    /// fallback was used; null when no image was found.
+    /// </summary>
+    public string? ImageSourceArticleNumber { get; set; }
+
+    /// <summary>True when <see cref="ImageUrl"/> came from a fallback path rather than a direct SKU match.</summary>
+    public bool ImageFallbackUsed { get; set; }
+
+    /// <summary>Human-readable explanation when <see cref="ImageFallbackUsed"/> is true.</summary>
+    public string? ImageFallbackReason { get; set; }
+
     // —— Barcode / SAP UoM snapshot ———————————————————————————————————————————————
     /// <summary>Primary SAP barcode selected for this article.</summary>
     public string? PrimaryBarcode { get; set; }
